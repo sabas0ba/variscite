@@ -1,0 +1,20 @@
+/// Common definitions for the RV32IMA_Zicsr core.
+package RvPkg {
+    const RESET_VECTOR: logic<32> = 32'h8000_0000;
+
+    /// misa: RV32 (MXL=1), extensions I, M, A
+    const MISA_VALUE: logic<32> = 32'h4000_1101;
+
+    enum AluOp: logic<4> {
+        op_add,
+        op_sub,
+        op_sll,
+        op_slt,
+        op_sltu,
+        op_xor,
+        op_srl,
+        op_sra,
+        op_or,
+        op_and,
+    }
+}

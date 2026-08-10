@@ -1,0 +1,7 @@
+/target/
+/sim/
+/logs/
+/third_party/
+*.fst
+*.bin
+coverage.dat
