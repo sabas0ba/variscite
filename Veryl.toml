@@ -5,5 +5,5 @@ version = "0.1.0"
 [build]
 clock_type = "posedge"
 reset_type = "sync_high"
-sources = ["src"]
+sources = ["src", "fpga"]
 target = {type = "directory", path = "target"}

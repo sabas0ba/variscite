@@ -1,0 +1,47 @@
+/// Byte-enabled single-port memory, written to infer block RAM on both the
+/// Xilinx and the Gowin flows.
+///
+/// Read is synchronous: the word addressed in one cycle appears on o_rdata in
+/// the next. FpgaSoc's bus wrapper is built around that one-cycle latency.
+///
+/// i_addr is a byte address; anything above the array wraps, so a stray access
+/// aliases instead of reading an undriven word.
+///
+/// INIT names a hex file for $readmemh, which is how the firmware image gets
+/// into the bitstream. An empty INIT leaves the array uninitialised.
+module Ram #(
+    param WORDS: u32    = 16384, // 64 KiB
+    param INIT : string = ""   ,
+) (
+    i_clk: input clock,
+
+    i_en   : input  logic    ,
+    i_addr : input  logic<32>,
+    i_wstrb: input  logic<4> ,
+    i_wdata: input  logic<32>,
+    o_rdata: output logic<32>,
+) {
+
+    const AW: u32 = $clog2(WORDS);
+
+    var mem: logic<32> [WORDS];
+
+    let widx: logic<AW> = i_addr[AW + 1:2];
+
+    initial {
+        if INIT != "" {
+            $readmemh(INIT, mem);
+        }
+    }
+
+    always_ff {
+        if i_en {
+            for i in 0..4 {
+                if i_wstrb[i] {
+                    mem[widx][8 * i+:8] = i_wdata[8 * i+:8];
+                }
+            }
+            o_rdata = mem[widx];
+        }
+    }
+}

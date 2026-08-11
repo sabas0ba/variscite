@@ -70,6 +70,14 @@ cov-check / cosim)。
   レジスタレベルの検査は `tests/clint_plic_test.S` と `src/tests.veryl` の
   組込テストに、それぞれ追加する。窓の外へ素通しされることは
   `test_soc_decode` に倣って検査する
+- FPGA 例 (`fpga/`) はコアを変更せずに載せている。`src/uart.veryl` `src/ram.veryl`
+  `src/fpga_soc.veryl` はシミュレーション用テストベンチが C++ で持っていた周辺を
+  RTL 化したもので、変更したら `make fpga-sim` を通すこと。これは実機に触らずに
+  UART のボーレート生成・RAM・ブートスタブまで検査する唯一の手段である
+- FPGA 用 RTL は `make tb` のカバレッジ対象 (`$(RTL)`) に入れていない。入れると
+  カバレッジ予算が変わるので、追加する場合は `scripts/cov_check.sh` も併せて直す
+- 生成 SV は yosys 標準フロントエンドでは読めない (Veryl が関数引数に
+  `input var logic` を出すため)。合成は `yosys -m slang` + `read_slang` を使う
 - モジュールパラメータを上書きするテストベンチは `src/tests.veryl` に置かない。
   `veryl test` の多重トップ下では上書きが効かず、黙って既定値で通ってしまう。
   `tb/tb_plic_multi.sv` と `make plic-multi-test` のように単独ビルドする

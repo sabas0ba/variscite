@@ -89,12 +89,61 @@ jobs:
       - name: Spike cosimulation
         run: make cosim
 
+      # Board-independent check of the FPGA platform: the RTL UART, RAM and
+      # boot stub, exercised by the demo firmware over a decoded serial line.
+      - name: FPGA platform
+        run: make fpga-sim
+
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: logs
           path: logs/
+          retention-days: 14
+
+  # Synthesis and place-and-route for the Tang Primer 20K port. Tens of
+  # minutes of tool runtime, so it is not a per-push check; make fpga-sim
+  # covers the RTL itself on every change.
+  fpga-bitstream:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends device-tree-compiler
+
+      - name: Cache toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/toolchain
+            /home/runner/src/spike
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/setup_toolchain.sh') }}
+
+      - name: Install toolchain
+        run: |
+          mkdir -p "$BINDIR"
+          scripts/setup_toolchain.sh
+          echo "$BINDIR" >> "$GITHUB_PATH"
+          echo "$PREFIX/oss-cad-suite/bin" >> "$GITHUB_PATH"
+
+      - name: Tang Primer 20K bitstream
+        run: make fpga-tang
+
+      - name: Upload bitstream
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: tang-primer-20k
+          path: |
+            sim/fpga/tang/soc.fs
+            sim/fpga/tang/*.log
           retention-days: 14
 
   # The kernel build plus an ~8e8 cycle boot is far longer than the checks

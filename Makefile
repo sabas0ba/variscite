@@ -8,9 +8,11 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
                 target/plic.sv target/soc.sv
 
 .PHONY: all lint veryl-build veryl-test plic-multi-test tb tb-fast isa-build \
-        run-isa cov-test coverage cov-check cosim linux-build linux-boot clean
+        run-isa cov-test coverage cov-check cosim linux-build linux-boot \
+        fpga-fw fpga-sim fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
-all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check cosim
+all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
+     cosim fpga-sim
 
 lint:
 	veryl fmt --check
@@ -87,6 +89,42 @@ coverage:
 	mkdir -p logs/cov/annotated
 	verilator_coverage --annotate logs/cov/annotated --annotate-min 1 \
 	    logs/cov/*.dat 2>&1 | tee logs/cov/summary.txt
+
+# --- FPGA ports ----------------------------------------------------------
+# The board tops name sim/fpga/firmware.hex as RAM_INIT, and $$readmemh
+# resolves it against the working directory, so these run from the repo root.
+
+FPGA_RTL := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
+            target/plic.sv target/soc.sv target/uart.sv target/ram.sv \
+            target/power_on_reset.sv target/fpga_soc.sv
+
+fpga-fw:
+	scripts/build_fw.sh
+
+# Board-independent check of the FPGA platform: the firmware runs on FpgaSoc
+# and the console is decoded off the serial line, so a broken UART, RAM or
+# boot stub fails here rather than on the bench. The clock and divisor are
+# scaled down so a simulated second is reachable.
+fpga-sim: veryl-build fpga-fw
+	mkdir -p sim
+	verilator --cc --exe --build -O2 --top-module rv32ima_FpgaSoc \
+	    -GCLK_HZ=1000000 -GUART_DIV=2 -GRAM_INIT='"sim/fpga/firmware.hex"' \
+	    -Mdir sim/obj_fpga -o tb_fpga \
+	    $(FPGA_RTL) tb/tb_fpga.cpp
+	sim/obj_fpga/tb_fpga +cycles=4000000 +bitcycles=32 +send="Hi!" \
+	    +expect="[tick] 2"
+
+fpga-tang:
+	scripts/build_fpga.sh tang
+
+fpga-tang-prog:
+	scripts/build_fpga.sh tang --prog
+
+fpga-arty:
+	scripts/build_fpga.sh arty
+
+fpga-arty-prog:
+	scripts/build_fpga.sh arty --prog
 
 linux-build:
 	linux/build_linux.sh

@@ -1,0 +1,66 @@
+/// Sipeed Tang Primer 20K (Gowin GW2A-LV18PG256C8/I7).
+///
+/// Only core-board pins are used - the 27 MHz crystal and the serial pair that
+/// reaches the USB bridge - so the port works whichever ext-board is fitted.
+/// Reset comes from an internal power-on counter rather than a button, because
+/// the buttons live on the ext-board.
+///
+/// The core closes timing at about 19 MHz on this part (the M extension's
+/// single-cycle divide is the critical path), so the SoC runs at half the
+/// crystal rather than from it directly.
+///
+/// Build with `make fpga-tang`, program with `make fpga-tang-prog`.
+module TangPrimer20k (
+    i_clk: input 'pin clock, // H11, 27 MHz
+
+    i_uart_rx: input  'cpu logic, // T13
+    o_uart_tx: output 'cpu logic, // M11
+) {
+
+    const CLK_DIV_LOG2: u32 = 1;
+    const CLK_HZ      : u32 = 27_000_000 / (1 << CLK_DIV_LOG2); // 13.5 MHz
+
+    /// 13.5 MHz / (16 * 22) = 38352 baud, 0.12% off 38400. 115200 is not
+    /// reachable from 13.5 MHz: the nearest divisor is 4.6% out, which 8N1
+    /// framing does not absorb.
+    const UART_DIV: u32 = 22;
+
+    var div: 'pin logic<CLK_DIV_LOG2>;
+
+    always_ff (i_clk) {
+        div = div + 1;
+    }
+
+    var soc_clk: 'cpu clock;
+
+    // Deriving one clock from another is a crossing by construction. It is
+    // safe here because everything downstream, reset included, lives wholly in
+    // the divided domain.
+    unsafe (cdc) {
+        assign soc_clk = div[CLK_DIV_LOG2 - 1];
+    }
+
+    var por_rst: 'cpu logic;
+
+    inst u_por: PowerOnReset (
+        i_clk: soc_clk,
+        o_rst: por_rst,
+    );
+
+    let rst: 'cpu reset = por_rst as reset;
+
+    inst u_soc: FpgaSoc #(
+        CLK_HZ   : CLK_HZ                 ,
+        RAM_WORDS: 8192                   , // 32 KiB
+        RAM_INIT : "sim/fpga/firmware.hex",
+        UART_DIV : UART_DIV               ,
+    ) (
+        i_clk: soc_clk,
+        i_rst: rst    ,
+
+        i_uart_rx: i_uart_rx,
+        o_uart_tx: o_uart_tx,
+
+        o_retire: _,
+    );
+}

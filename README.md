@@ -283,6 +283,100 @@ toggle の残余 (約 2100/7750 点) は次の構造的要因によるもので�
   bit30:22 が常時 0
 - 命令フォーマット由来の定数: imm_u 下位 12bit 等
 
+## FPGA ポーティング例
+
+`fpga/` に 2 枚のボードへの移植例を置く。合成・配置配線・ビットストリーム生成は
+すべてオープンツールで行い、ベンダ IDE は使わない。
+
+| ボード | FPGA | SoC クロック | ボーレート | フロー |
+|---|---|---|---|---|
+| Sipeed Tang Primer 20K | Gowin GW2A-LV18PG256C8/I7 | 13.5 MHz (27 MHz ÷2) | 38400 8N1 | yosys + nextpnr-himbaechel + gowin_pack |
+| Digilent Arty A7-35 | Xilinx XC7A35T | 25 MHz (100 MHz ÷4) | 57600 8N1 | yosys + nextpnr-xilinx (openXC7) |
+
+### 構成
+
+シミュレーション用テストベンチ (`tb/tb_core.cpp`) が C++ で提供していた ROM / RAM /
+UART を RTL 化し、`FpgaSoc` にまとめてある。ボード側に残るのはピンとクロックだけで
+ある。
+
+```
+src/uart.veryl        16550 互換 UART (8N1、16 byte 受信 FIFO、divisor latch)
+src/ram.veryl         byte enable 付き単一ポート RAM ($readmemh で初期化)
+src/power_on_reset.veryl  コンフィグ後 256 クロックのリセット
+src/fpga_soc.veryl    Soc + ブートスタブ + RAM + UART + mtime tick 生成
+fpga/firmware/        ベアメタルのデモ (UART / CLINT タイマ / PLIC 外部割り込み)
+fpga/arty_a7/         トップと XDC
+fpga/tang_primer_20k/ トップと CST
+```
+
+メモリマップはシミュレーション側と同一で、CLINT (`0x1100_0000`) と PLIC
+(`0x0c00_0000`) は `Soc` が内部で応答し、`FpgaSoc` はブートスタブ (`0x0000_1000`)、
+UART (`0x1000_0000`)、RAM (`0x8000_0000`) を足す。
+
+### 使い方
+
+```bash
+make fpga-sim         # ボード非依存の検証 (下記)
+make fpga-tang        # -> sim/fpga/tang/soc.fs
+make fpga-tang-prog   # 上記 + openFPGALoader で SRAM 書き込み
+make fpga-arty        # -> sim/fpga/arty/soc.bit
+make fpga-arty-prog
+```
+
+Tang Primer 20K は `scripts/setup_toolchain.sh` が入れる oss-cad-suite だけで完結
+する。Arty A7 は配置配線に nextpnr-xilinx が要るが oss-cad-suite に含まれないため、
+[openXC7](https://github.com/openXC7) を導入し `NEXTPNR_XILINX_CHIPDB` と
+`PRJXRAY_DB` を指定する (指定が無い場合、合成まで実行して案内を出して止まる)。
+
+### クロックが分周してある理由
+
+このコアの M 拡張は除算を単一サイクルの組合せ回路で行うため、そこがクリティカル
+パスになる。Gowin GW2A-18C 上での実測は **19.0 MHz** で、ボードの 27 MHz 水晶では
+タイミングが閉じない。したがって Tang は ÷2 の 13.5 MHz で動かす。Arty も同じ理由で
+÷4 の 25 MHz にしてあるが、Artix-7 での実測値は取れていないため保守的な値である
+(スラックに余裕があれば `CLK_DIV_LOG2` を 1 に下げて 50 MHz にできる)。
+
+ボーレートは 16550 の divisor latch をそのまま使い、UART の基準クロックを SoC の
+クロックとしている。上表の値はいずれも誤差 0.5% 未満に収まる分周比を選んだもので、
+13.5 MHz からは 115200 が 4.6% 差でしか作れないため Tang だけ 38400 にしてある。
+
+### 検証状況
+
+- `make fpga-sim` — **実施**。`FpgaSoc` を Verilator で回し、UART の送信線から
+  コンソールを復号する。設計内部を覗かずボードと同じ 2 本の線だけを見るので、
+  ボーレート生成が壊れれば文字化けとして現れる。ファームウェアのバナー、CLINT の
+  タイマ割り込み、PLIC 経由の UART 受信割り込み (打鍵のエコー) までを確認する
+- Tang Primer 20K — 合成・配置配線・ビットストリーム生成まで**実施**。下記の
+  使用率とタイミングはその実測値
+- Arty A7-35 — yosys 合成まで**実施**。配置配線以降は openXC7 が必要で、
+  本リポジトリの検証環境には導入できていない
+- **どちらのボードでも実機動作は未確認である**。ピン配置は Digilent の
+  Arty-A7-35-Master.xdc と LiteX の Tang Primer 20K プラットフォーム定義から
+  取っており、目視照合しかしていない
+
+### 使用率
+
+Tang Primer 20K (nextpnr-himbaechel 実測):
+
+| 資源 | 使用 | 全体 | |
+|---|---|---|---|
+| LUT4 | 17065 | 20736 | 82% |
+| DFF | 2626 | 15552 | 16% |
+| BSRAM | 16 | 46 | 34% |
+| MULT36X36 | 3 | 12 | 25% |
+
+Arty A7-35 (yosys 合成後の見積り): LUT 15644 / 20800、RAMB36 16 / 50、
+DSP48E1 10 / 90。
+
+### FPGA 例の制限
+
+- 外部 DRAM は繋いでいないため RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
+  Linux は載らず、ベアメタル専用である
+- LUT 使用率が Tang で 82% と高い。除算器を多サイクル化すれば大幅に下がるが、
+  それはコアの変更になるためこの例では触れていない
+- Tang 側はコアボードのピンのみを使う。ext-board のボタンや LED は使わないため、
+  どの dock でも動く。リセットは電源投入時のカウンタで生成する
+
 ## 既知の制限
 
 - S-mode と MMU は実装しない (NOMMU 構成のみ)

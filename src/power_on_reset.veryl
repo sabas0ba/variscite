@@ -1,0 +1,38 @@
+/// Holds reset asserted for the first 2**CYCLES_LOG2 clocks after
+/// configuration.
+///
+/// The boards use this instead of a reset button: on the Tang Primer the
+/// buttons are on the ext-board, and depending on one would tie the port to a
+/// particular dock.
+///
+/// A reset really is needed rather than just relying on power-up state, since
+/// the core has to start with pc at the reset vector rather than zero.
+///
+/// This is the usual FPGA idiom: the counter has no reset of its own and
+/// instead starts from the flip-flops' configuration state, which is zero by
+/// default on both Gowin and Xilinx parts. It is therefore only valid on an
+/// FPGA - in simulation the counter would start unknown, so the simulation
+/// testbenches drive FpgaSoc's reset directly instead of instantiating this.
+///
+/// o_rst is plain logic; the board top casts it to the reset type.
+module PowerOnReset #(
+    param CYCLES_LOG2: u32 = 8,
+) (
+    i_clk: input  clock,
+    o_rst: output logic,
+) {
+
+    var count: logic<CYCLES_LOG2>;
+    var done : logic             ;
+
+    always_ff (i_clk) {
+        if !done {
+            count = count + 1;
+            if count == '1 {
+                done = 1'b1;
+            }
+        }
+    }
+
+    assign o_rst = ~done;
+}

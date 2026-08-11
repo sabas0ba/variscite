@@ -1,0 +1,204 @@
+/// The SoC plus the memories and the UART, i.e. everything a board needs
+/// except pins and clocking.
+///
+/// Soc already answers the CLINT and PLIC windows itself; what reaches its
+/// external port is served here:
+///
+/// | window                        | device                              |
+/// |-------------------------------|-------------------------------------|
+/// | `0x0000_1000 .. 0x0000_1fff`  | boot stub (jumps to the RAM base)    |
+/// | `0x1000_0000 .. 0x1000_00ff`  | 16550 UART                           |
+/// | `0x8000_0000 + RAM_WORDS * 4` | RAM, preloaded with RAM_INIT         |
+///
+/// Bus timing: every access takes two cycles. The request is presented in the
+/// first, which is when writes and read side effects take effect, and answered
+/// in the second, by which time the RAM's registered read data has arrived.
+module FpgaSoc #(
+    param CLK_HZ   : u32    = 27_000_000,
+    param RAM_WORDS: u32    = 16384     , // 64 KiB
+    param RAM_INIT : string = ""        ,
+    /// 16550 divisor before software programs one: CLK_HZ / (16 * baud).
+    param UART_DIV: u32 = 15,
+) (
+    i_clk: input clock,
+    i_rst: input reset,
+
+    i_uart_rx: input  logic,
+    o_uart_tx: output logic,
+
+    /// Pulses once per retired instruction; boards drive an activity LED.
+    o_retire: output logic,
+) {
+
+    /// mtime runs at 1 MHz, matching `timebase-frequency` in the device tree.
+    /// Rounded to nearest, so a clock that is not a whole number of MHz gives
+    /// the closest achievable timebase rather than the worst one.
+    const TICK_DIV: u32 = (CLK_HZ + 500_000) / 1_000_000;
+    // A divider of one means mtime advances every cycle; keep the counter
+    // at least one bit wide so the width stays legal.
+    const TICK_W: u32 = if TICK_DIV <= 1 ? 1 : $clog2(TICK_DIV);
+
+    var mem_valid: logic    ;
+    var mem_addr : logic<32>;
+    var mem_wstrb: logic<4> ;
+    var mem_wdata: logic<32>;
+    var mem_rdata: logic<32>;
+    var mem_ready: logic    ;
+
+    var uart_irq: logic;
+
+    // ------------------------------------------------------------------
+    // mtime tick
+    // ------------------------------------------------------------------
+    const TICK_LAST: logic<TICK_W> = (TICK_DIV - 1) as TICK_W;
+
+    var tick_cnt: logic<TICK_W>;
+    var tick    : logic        ;
+
+    always_ff {
+        if_reset {
+            tick_cnt = '0;
+            tick     = 1'b0;
+        } else {
+            if tick_cnt == TICK_LAST {
+                tick_cnt = '0;
+                tick     = 1'b1;
+            } else {
+                tick_cnt = tick_cnt + 1;
+                tick     = 1'b0;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Address decode
+    // ------------------------------------------------------------------
+    let rom_hit : logic = mem_addr[31:12] == 20'h00001;
+    let uart_hit: logic = mem_addr[31:8] == 24'h100000;
+    let ram_hit : logic = mem_addr[31:28] == 4'h8;
+
+    // The access is presented for one cycle and answered in the next, so
+    // writes and read side effects happen exactly once.
+    let first: logic = mem_valid && !mem_ready;
+
+    always_ff {
+        if_reset {
+            mem_ready = 1'b0;
+        } else {
+            mem_ready = first;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Boot stub: a0 = hartid, a1 = 0 (no device tree), jump to the RAM base.
+    // ------------------------------------------------------------------
+    var rom_rdata: logic<32>;
+
+    always_comb {
+        case mem_addr[3:2] {
+            2'd0   : rom_rdata = 32'h0000_0513; // addi a0, x0, 0
+            2'd1   : rom_rdata = 32'h0000_0593; // addi a1, x0, 0
+            2'd2   : rom_rdata = 32'h8000_02b7; // lui  t0, 0x80000
+            default: rom_rdata = 32'h0002_8067; // jalr x0, 0(t0)
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Devices
+    // ------------------------------------------------------------------
+    var ram_rdata : logic<32>;
+    var uart_rdata: logic<32>;
+
+    inst u_ram: Ram #(
+        WORDS: RAM_WORDS,
+        INIT : RAM_INIT ,
+    ) (
+        i_clk: i_clk,
+
+        i_en   : first && ram_hit,
+        i_addr : mem_addr        ,
+        i_wstrb: mem_wstrb       ,
+        i_wdata: mem_wdata       ,
+        o_rdata: ram_rdata       ,
+    );
+
+    inst u_uart: Uart #(
+        RESET_DIV: UART_DIV,
+    ) (
+        i_clk: i_clk,
+        i_rst: i_rst,
+
+        i_sel  : first && uart_hit,
+        i_addr : mem_addr[4:2]    ,
+        i_wstrb: mem_wstrb        ,
+        i_wdata: mem_wdata        ,
+        o_rdata: uart_rdata       ,
+
+        i_rx: i_uart_rx,
+        o_tx: o_uart_tx,
+
+        o_irq: uart_irq,
+    );
+
+    // The UART and the stub answer combinationally, so their data is held for
+    // the cycle in which the core samples it. The RAM's own output register
+    // already does that.
+    var held_rdata: logic<32>;
+
+    always_ff {
+        if_reset {
+            held_rdata = 32'h0;
+        } else {
+            if first {
+                if uart_hit {
+                    held_rdata = uart_rdata;
+                } else if rom_hit {
+                    held_rdata = rom_rdata;
+                } else {
+                    // Nothing is mapped here; read as zero rather than
+                    // aliasing whichever device decoded last.
+                    held_rdata = 32'h0;
+                }
+            }
+        }
+    }
+
+    var ram_answer: logic;
+
+    always_ff {
+        if_reset {
+            ram_answer = 1'b0;
+        } else {
+            ram_answer = first && ram_hit;
+        }
+    }
+
+    always_comb {
+        if ram_answer {
+            mem_rdata = ram_rdata;
+        } else {
+            mem_rdata = held_rdata;
+        }
+    }
+
+    inst u_soc: Soc (
+        i_clk: i_clk,
+        i_rst: i_rst,
+
+        o_mem_valid: mem_valid,
+        o_mem_addr : mem_addr ,
+        o_mem_wstrb: mem_wstrb,
+        o_mem_wdata: mem_wdata,
+        i_mem_rdata: mem_rdata,
+        i_mem_ready: mem_ready,
+
+        i_mtime_tick: tick    ,
+        i_irq_src   : uart_irq,
+
+        o_retire      : o_retire,
+        o_retire_pc   : _       ,
+        o_retire_instr: _       ,
+        o_trap        : _       ,
+        o_trap_cause  : _       ,
+    );
+}

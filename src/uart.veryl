@@ -1,0 +1,278 @@
+/// 16550-compatible UART, 8N1, as much of the register file as the Linux 8250
+/// driver and ordinary bare-metal code actually touch.
+///
+/// Registers are at `base + 4 * n` (reg-shift = 2, reg-io-width = 4), matching
+/// the testbench model this replaces and `linux/rv32ima_veryl.dts`:
+///
+/// | n | read            | write            |
+/// |---|-----------------|------------------|
+/// | 0 | RBR / DLL       | THR / DLL        |
+/// | 1 | IER / DLM       | IER / DLM        |
+/// | 2 | IIR             | FCR (ignored)    |
+/// | 3 | LCR             | LCR              |
+/// | 4 | MCR             | MCR              |
+/// | 5 | LSR             | -                |
+/// | 6 | MSR (wired on)  | -                |
+/// | 7 | SCR             | SCR              |
+///
+/// Baud: the divisor latch is used as a real 16550 does, against a reference
+/// clock equal to this module's clock, so the bit period is `16 * divisor`
+/// clock cycles and the device tree's `clock-frequency` is the system clock.
+/// RESET_DIV is the divisor in effect before software programs one, so the
+/// console works from the first instruction.
+///
+/// Bus protocol: i_sel marks the single cycle in which the access takes
+/// effect, so the read side effect on RBR and the write to THR each happen
+/// once. o_rdata is combinational and must be sampled in that cycle.
+module Uart #(
+    param RESET_DIV: u32 = 1,
+) (
+    i_clk: input clock,
+    i_rst: input reset,
+
+    i_sel  : input  logic    ,
+    i_addr : input  logic<3> , // register index
+    i_wstrb: input  logic<4> ,
+    i_wdata: input  logic<32>,
+    o_rdata: output logic<32>,
+
+    i_rx: input  logic,
+    o_tx: output logic,
+
+    o_irq: output logic,
+) {
+
+    const DIV_RST   : logic<16> = RESET_DIV as 16;
+    const FIFO_DEPTH: u32       = 16;
+    /// One bit wider than the index, so a full FIFO is distinguishable from
+    /// an empty one.
+    const FIFO_PW: u32 = $clog2(FIFO_DEPTH) + 1;
+
+    var ier: logic<8> ;
+    var lcr: logic<8> ;
+    var mcr: logic<8> ;
+    var scr: logic<8> ;
+    var div: logic<16>;
+
+    let dlab: logic    = lcr[7];
+    let we  : logic    = i_sel && i_wstrb != 4'h0;
+    let re  : logic    = i_sel && i_wstrb == 4'h0;
+    let wb  : logic<8> = i_wdata[7:0];
+
+    // A divisor of zero is meaningless; treat it as one, as real parts do.
+    let div_eff: logic<16> = if div == 16'h0 ? 16'h1 : div;
+
+    // ------------------------------------------------------------------
+    // Baud generator: one tick per 1/16 bit, shared by both directions.
+    // ------------------------------------------------------------------
+    var os_cnt : logic<16>;
+    let os_tick: logic     = os_cnt == 16'h0;
+
+    always_ff {
+        if_reset {
+            os_cnt = 16'h0;
+        } else {
+            if os_tick {
+                os_cnt = div_eff - 16'h1;
+            } else {
+                os_cnt = os_cnt - 16'h1;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Transmit
+    // ------------------------------------------------------------------
+    var tx_sr  : logic<10>; // start bit, 8 data bits, stop bit
+    var tx_bits: logic<4> ;
+    var tx_ph  : logic<4> ;
+
+    let tx_busy: logic = tx_bits != 4'h0;
+
+    assign o_tx = if tx_busy ? tx_sr[0] : 1'b1;
+
+    let thr_we: logic = we && i_addr == 3'd0 && !dlab;
+
+    always_ff {
+        if_reset {
+            tx_sr   = 10'h3ff;
+            tx_bits = 4'h0;
+            tx_ph   = 4'h0;
+        } else {
+            if thr_we && !tx_busy {
+                tx_sr   = {1'b1, wb, 1'b0};
+                tx_bits = 4'd10;
+                tx_ph   = 4'h0;
+            } else if tx_busy && os_tick {
+                if tx_ph == 4'd15 {
+                    tx_ph   = 4'h0;
+                    tx_sr   = {1'b1, tx_sr[9:1]};
+                    tx_bits = tx_bits - 4'h1;
+                } else {
+                    tx_ph = tx_ph + 4'h1;
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Receive: 16x oversampling, sampled in the middle of each bit.
+    // ------------------------------------------------------------------
+    var rx_sync: logic<2>;
+    var rx_sr  : logic<8>;
+    var rx_bits: logic<4>;
+    var rx_ph  : logic<4>;
+
+    let rx_in  : logic = rx_sync[1];
+    let rx_busy: logic = rx_bits != 4'h0;
+
+    // 16 byte receive FIFO, as the IIR's "FIFOs enabled" report implies. A
+    // single holding register would drop characters whenever the handler takes
+    // longer than a character time, which pasting into the console does.
+    var fifo: logic<8>       [FIFO_DEPTH];
+    var wptr: logic<FIFO_PW>             ;
+    var rptr: logic<FIFO_PW>             ;
+
+    let rx_empty: logic    = wptr == rptr;
+    let rx_full : logic    = wptr[FIFO_PW - 2:0] == rptr[FIFO_PW - 2:0] && wptr[FIFO_PW - 1] != rptr[FIFO_PW - 1];
+    let rx_dr   : logic    = !rx_empty;
+    let rx_hold : logic<8> = fifo[rptr[FIFO_PW - 2:0]];
+
+    let rbr_re: logic = re && i_addr == 3'd0 && !dlab;
+
+    always_ff {
+        if_reset {
+            rx_sync = 2'b11;
+            rx_sr   = 8'h0;
+            rx_bits = 4'h0;
+            rx_ph   = 4'h0;
+            wptr    = '0;
+            rptr    = '0;
+            for i in 0..FIFO_DEPTH {
+                fifo[i] = 8'h0;
+            }
+        } else {
+            rx_sync = {rx_sync[0], i_rx};
+
+            if rbr_re && !rx_empty {
+                rptr = rptr + 1;
+            }
+
+            // rx_bits counts the frame down: 10 is the start bit, 9..2 are the
+            // data bits least significant first, 1 is the stop bit. Every bit
+            // is sampled at phase 8, its midpoint.
+            if os_tick {
+                if !rx_busy {
+                    if !rx_in {
+                        rx_bits = 4'd10;
+                        rx_ph   = 4'd0;
+                    }
+                } else {
+                    if rx_ph == 4'd8 {
+                        if rx_bits == 4'd10 {
+                            // The line came back up: that edge was noise, not
+                            // the start of a frame.
+                            if rx_in {
+                                rx_bits = 4'd0;
+                            }
+                        } else if rx_bits == 4'd1 {
+                            // Stop bit. A framing error, or a full FIFO, drops
+                            // the character.
+                            if rx_in && !rx_full {
+                                fifo[wptr[FIFO_PW - 2:0]] = rx_sr;
+                                wptr                      = wptr + 1;
+                            }
+                        } else {
+                            rx_sr = {rx_in, rx_sr[7:1]};
+                        }
+                    }
+                    if rx_ph == 4'd15 {
+                        rx_ph   = 4'h0;
+                        rx_bits = rx_bits - 4'h1;
+                    } else {
+                        rx_ph = rx_ph + 4'h1;
+                    }
+                }
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Register file
+    // ------------------------------------------------------------------
+    // There is no separate holding register, so "transmitter empty" and
+    // "holding register empty" are both just the shifter being idle. These bits
+    // must reflect tx_busy: software polls bit 5 before writing THR, and a
+    // write while the shifter is running is dropped.
+    let lsr: logic<8> = {1'b0, !tx_busy, !tx_busy, 4'h0, rx_dr};
+
+    var iir: logic<8>;
+
+    always_comb {
+        if ier[0] && rx_dr {
+            iir = 8'hc4; // received data available
+        } else if ier[1] && !tx_busy {
+            iir = 8'hc2; // transmit holding register empty
+        } else {
+            iir = 8'hc1; // none pending
+        }
+    }
+
+    assign o_irq = iir[0] == 1'b0;
+
+    always_comb {
+        case i_addr {
+            3'd0: {
+                if dlab {
+                    o_rdata = {24'h0, div[7:0]};
+                } else {
+                    o_rdata = {24'h0, rx_hold};
+                }
+            }
+            3'd1: {
+                if dlab {
+                    o_rdata = {24'h0, div[15:8]};
+                } else {
+                    o_rdata = {24'h0, ier};
+                }
+            }
+            3'd2   : o_rdata = {24'h0, iir};
+            3'd3   : o_rdata = {24'h0, lcr};
+            3'd4   : o_rdata = {24'h0, mcr};
+            3'd5   : o_rdata = {24'h0, lsr};
+            3'd6   : o_rdata = 32'h0000_00b0; // CTS / DSR / DCD asserted
+            default: o_rdata = {24'h0, scr};
+        }
+    }
+
+    always_ff {
+        if_reset {
+            ier = 8'h0;
+            lcr = 8'h0;
+            mcr = 8'h0;
+            scr = 8'h0;
+            div = DIV_RST;
+        } else {
+            if we {
+                case i_addr {
+                    3'd0: {
+                        if dlab {
+                            div[7:0] = wb;
+                        }
+                    }
+                    3'd1: {
+                        if dlab {
+                            div[15:8] = wb;
+                        } else {
+                            ier = wb & 8'h0f;
+                        }
+                    }
+                    3'd3   : lcr = wb;
+                    3'd4   : mcr = wb;
+                    3'd7   : scr = wb;
+                    default: {} // FCR is accepted and dropped; LSR/MSR read-only
+                }
+            }
+        }
+    }
+}
