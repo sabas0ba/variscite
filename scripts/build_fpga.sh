@@ -49,12 +49,23 @@ need() {
     command -v "$1" >/dev/null || { echo "error: $1 not found in PATH${2:+ ($2)}" >&2; exit 2; }
 }
 
-# yosys cannot parse the generated SystemVerilog with its own frontend: Veryl
-# emits `input var logic` in function arguments, which needs the slang plugin.
-synth() { # <top> <extra-source> <synth-command> <out.json> <logfile>
+# Two frontends, on purpose:
+#
+#   - the Veryl output needs the slang plugin, because Veryl emits
+#     `input var logic` in function arguments and yosys's own parser rejects it;
+#   - the hand-written board files go through yosys's parser, because slang
+#     elaborates strictly and does not know vendor primitives such as rPLL.
+#
+# synth_gowin keeps abc9. -noabc9 is not an alternative: it maps the same
+# design to 17208 cells instead of 11192, and the placer then cannot find a
+# legal placement on a part this full.
+synth() { # <slang-top> <slang-extra> <verilog-files> <synth-command> <logfile>
+    local read_v=""
+    [[ -n "$3" ]] && read_v="read_verilog -sv $3"
     yosys -m slang -p "
         read_slang --top $1 ${RTL[*]} $2
-        $3
+        $read_v
+        $4
     " > "$5" 2>&1 || { tail -30 "$5" >&2; exit 1; }
 }
 
@@ -70,9 +81,10 @@ tang)
     need gowin_pack
 
     echo "==> synthesis"
-    synth rv32ima_TangPrimer20k target/tang_primer_20k/top.sv \
-        "synth_gowin -top rv32ima_TangPrimer20k -json $out/soc.json" \
-        "$out/soc.json" "$out/yosys.log"
+    synth rv32ima_TangSoc target/tang_primer_20k/tang_soc.sv \
+        "fpga/tang_primer_20k/pll.sv fpga/tang_primer_20k/top.sv" \
+        "synth_gowin -top TangPrimer20k -json $out/soc.json" \
+        "$out/yosys.log"
 
     echo "==> place and route"
     nextpnr-himbaechel \
@@ -81,7 +93,7 @@ tang)
         --vopt cst=fpga/tang_primer_20k/tang_primer_20k.cst \
         --json "$out/soc.json" \
         --write "$out/soc_pnr.json" \
-        --freq 13.5 > "$out/nextpnr.log" 2>&1 \
+        --freq 15 > "$out/nextpnr.log" 2>&1 \
         || { tail -30 "$out/nextpnr.log" >&2; exit 1; }
     grep -E "Max frequency|Device utilisation" -A22 "$out/nextpnr.log" | head -30 || true
 
@@ -104,9 +116,9 @@ arty)
     need yosys
 
     echo "==> synthesis"
-    synth rv32ima_ArtyA7 target/arty_a7/top.sv \
+    synth rv32ima_ArtyA7 target/arty_a7/top.sv "" \
         "synth_xilinx -family xc7 -top rv32ima_ArtyA7 -json $out/soc.json" \
-        "$out/soc.json" "$out/yosys.log"
+        "$out/yosys.log"
     grep -A28 "Printing statistics" "$out/yosys.log" | tail -30 || true
 
     part="${ARTY_PART:-xc7a35tcsg324-1}"

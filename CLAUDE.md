@@ -76,6 +76,9 @@ cov-check / cosim)。
   UART のボーレート生成・RAM・ブートスタブまで検査する唯一の手段である
 - FPGA 用 RTL は `make tb` のカバレッジ対象 (`$(RTL)`) に入れていない。入れると
   カバレッジ予算が変わるので、追加する場合は `scripts/cov_check.sh` も併せて直す
+- Tang Primer 20K は面積が足りず、19 MHz 以下で動かす構成が配置できない。除算器を
+  多サイクル化するとクリティカルパスと面積の両方が解決する見込みで、そのときは
+  クロックをトップレベル直結に戻せるため PLL も不要になる (README.md の該当節)
 - 生成 SV は yosys 標準フロントエンドでは読めない (Veryl が関数引数に
   `input var logic` を出すため)。合成は `yosys -m slang` + `read_slang` を使う
 - モジュールパラメータを上書きするテストベンチは `src/tests.veryl` に置かない。
