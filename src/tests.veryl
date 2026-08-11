@@ -356,3 +356,216 @@ module test_plic;
     end
 endmodule
 }}}
+
+#[test(test_clint_wide)]
+embed (inline) sv{{{
+// mtimecmp is 64 bits and software writes it one half at a time; check the
+// comparison across the 32-bit boundary.
+module test_clint_wide;
+    logic        clk = 0;
+    logic        rst = 1;
+    logic        sel = 0;
+    logic [15:0] addr = 0;
+    logic [3:0]  wstrb = 0;
+    logic [31:0] wdata = 0;
+    logic [31:0] rdata;
+    logic        tick = 0;
+    logic        irq_timer;
+    logic        irq_soft;
+
+    rv32ima_Clint dut (
+        .i_clk       (clk),
+        .i_rst       (rst),
+        .i_sel       (sel),
+        .i_addr      (addr),
+        .i_wstrb     (wstrb),
+        .i_wdata     (wdata),
+        .o_rdata     (rdata),
+        .i_tick      (tick),
+        .o_irq_timer (irq_timer),
+        .o_irq_soft  (irq_soft)
+    );
+
+    always #5 clk = ~clk;
+
+    task automatic bus_write(input logic [15:0] a, input logic [31:0] d);
+        @(negedge clk);
+        sel = 1; addr = a; wstrb = 4'hf; wdata = d;
+        @(posedge clk);
+        @(negedge clk);
+        sel = 0; wstrb = 4'h0;
+    endtask
+
+    task automatic bus_read(input logic [15:0] a, output logic [31:0] d);
+        @(negedge clk);
+        sel = 1; addr = a; wstrb = 4'h0;
+        #1 d = rdata;
+        @(posedge clk);
+        @(negedge clk);
+        sel = 0;
+    endtask
+
+    logic [31:0] v;
+
+    initial begin
+        repeat (2) @(posedge clk);
+        @(negedge clk);
+        rst = 0;
+
+        // Park mtime just below the 32-bit boundary.
+        bus_write(16'h4000, 32'hffff_fff0);
+        bus_write(16'h4004, 32'h0);
+        assert (irq_timer == 1'b0) else $fatal(1, "timer fired at mtime 0");
+
+        // Fast-forward by writing mtimecmp low to 0 and letting a tick land:
+        // mtime is read-only, so drive the comparison from mtimecmp instead.
+        bus_write(16'h4000, 32'h0);
+        tick = 1;
+        @(posedge clk);
+        @(negedge clk);
+        tick = 0;
+        assert (irq_timer == 1'b1) else $fatal(1, "mtime 1 >= mtimecmp 0 did not fire");
+
+        // A high half above mtime masks the low half entirely.
+        bus_write(16'h4004, 32'h1);
+        assert (irq_timer == 1'b0) else $fatal(1, "high half ignored in the comparison");
+        bus_read(16'h4004, v);
+        assert (v == 32'h1) else $fatal(1, "mtimecmp high=%h", v);
+
+        // The all-ones reset value is the safe one: never armed.
+        bus_write(16'h4000, 32'hffff_ffff);
+        bus_write(16'h4004, 32'hffff_ffff);
+        assert (irq_timer == 1'b0) else $fatal(1, "timer armed at the maximum mtimecmp");
+
+        $display("test_clint_wide OK");
+        $finish;
+    end
+
+    initial begin
+        repeat (2000) @(posedge clk);
+        $fatal(1, "timeout");
+    end
+endmodule
+}}}
+
+#[test(test_soc_decode)]
+embed (inline) sv{{{
+// The SoC must answer the CLINT and PLIC windows itself and pass everything
+// else - including the addresses immediately outside those windows - to the
+// external memory port.
+module test_soc_decode;
+    logic        clk = 0;
+    logic        rst = 1;
+    logic        mem_valid;
+    logic [31:0] mem_addr;
+    logic [3:0]  mem_wstrb;
+    logic [31:0] mem_wdata;
+    logic [31:0] mem_rdata = 0;
+    logic        mem_ready = 0;
+    logic        retire;
+    logic [31:0] retire_pc;
+    logic [31:0] retire_instr;
+    logic        trap;
+    logic [31:0] trap_cause;
+
+    rv32ima_Soc dut (
+        .i_clk          (clk),
+        .i_rst          (rst),
+        .o_mem_valid    (mem_valid),
+        .o_mem_addr     (mem_addr),
+        .o_mem_wstrb    (mem_wstrb),
+        .o_mem_wdata    (mem_wdata),
+        .i_mem_rdata    (mem_rdata),
+        .i_mem_ready    (mem_ready),
+        .i_mtime_tick   (1'b1),
+        .i_irq_src      (1'b0),
+        .o_retire       (retire),
+        .o_retire_pc    (retire_pc),
+        .o_retire_instr (retire_instr),
+        .o_trap         (trap),
+        .o_trap_cause   (trap_cause)
+    );
+
+    // Reads the CLINT and the PLIC, then stores to the word just outside each
+    // window and to RAM as a sentinel.
+    logic [31:0] mem [0:2047];
+    initial begin
+        mem[0]  = 32'h1100c2b7; // lui  t0, 0x1100c
+        mem[1]  = 32'hff82a303; // lw   t1, -8(t0)      CLINT mtime
+        mem[2]  = 32'h0c2003b7; // lui  t2, 0xc200
+        mem[3]  = 32'h0043ae03; // lw   t3, 4(t2)       PLIC claim
+        mem[4]  = 32'h11010537; // lui  a0, 0x11010
+        mem[5]  = 32'h00652023; // sw   t1, 0(a0)       just above the CLINT
+        mem[6]  = 32'h0c4005b7; // lui  a1, 0xc400
+        mem[7]  = 32'h0065a023; // sw   t1, 0(a1)       just above the PLIC
+        mem[8]  = 32'h0bfff637; // lui  a2, 0xbfff
+        mem[9]  = 32'h00662023; // sw   t1, 0(a2)       just below the PLIC
+        mem[10] = 32'h800016b7; // lui  a3, 0x80001
+        mem[11] = 32'h0066a023; // sw   t1, 0(a3)       sentinel
+        mem[12] = 32'h0000006f; // jal  x0, 0 (spin)
+    end
+
+    always #5 clk = ~clk;
+
+    wire [31:0] widx = (mem_addr - 32'h8000_0000) >> 2;
+
+    // What the external port was asked for.
+    logic saw_above_clint = 0;
+    logic saw_above_plic  = 0;
+    logic saw_below_plic  = 0;
+    logic saw_sentinel    = 0;
+
+    always @(posedge clk) begin
+        if (mem_valid) begin
+            // No access inside either device window may escape the SoC.
+            assert (!(mem_addr >= 32'h0c00_0000 && mem_addr < 32'h0c40_0000))
+                else $fatal(1, "PLIC access leaked to the bus: %h", mem_addr);
+            assert (!(mem_addr >= 32'h1100_0000 && mem_addr < 32'h1101_0000))
+                else $fatal(1, "CLINT access leaked to the bus: %h", mem_addr);
+            if (mem_wstrb != 0) begin
+                if (mem_addr == 32'h1101_0000) saw_above_clint <= 1;
+                if (mem_addr == 32'h0c40_0000) saw_above_plic  <= 1;
+                if (mem_addr == 32'h0bff_f000) saw_below_plic  <= 1;
+                if (mem_addr == 32'h8000_1000) saw_sentinel    <= 1;
+            end
+        end
+
+        if (mem_ready) begin
+            mem_ready <= 0;
+        end else if (mem_valid) begin
+            if (mem_wstrb != 0) begin
+                if (mem_addr >= 32'h8000_0000 && widx < 2048) begin
+                    for (int b = 0; b < 4; b++) begin
+                        if (mem_wstrb[b]) mem[widx][8*b +: 8] <= mem_wdata[8*b +: 8];
+                    end
+                end
+            end else if (mem_addr == 32'h0000_1000) begin
+                mem_rdata <= 32'h800002b7; // boot stub: lui t0, 0x80000
+            end else if (mem_addr == 32'h0000_1004) begin
+                mem_rdata <= 32'h00028067; // boot stub: jalr x0, 0(t0)
+            end else begin
+                mem_rdata <= mem[widx];
+            end
+            mem_ready <= 1;
+        end
+    end
+
+    always @(posedge clk) begin
+        if (trap) $fatal(1, "unexpected trap cause=%0d", trap_cause);
+        if (saw_sentinel) begin
+            assert (saw_above_clint) else $fatal(1, "0x11010000 never reached the bus");
+            assert (saw_above_plic)  else $fatal(1, "0x0c400000 never reached the bus");
+            assert (saw_below_plic)  else $fatal(1, "0x0bfff000 never reached the bus");
+            $display("test_soc_decode OK");
+            $finish;
+        end
+    end
+
+    initial begin
+        repeat (4) @(posedge clk);
+        rst = 0;
+        repeat (2000) @(posedge clk);
+        $fatal(1, "timeout");
+    end
+endmodule
+}}}

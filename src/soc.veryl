@@ -11,9 +11,7 @@
 ///
 /// Both devices answer combinationally in the cycle the core presents the
 /// request, matching the core's protocol (valid held until ready).
-module Soc #(
-    param SRC_COUNT: u32 = 1, // PLIC sources, numbered 1..SRC_COUNT
-) (
+module Soc (
     i_clk: input clock,
     i_rst: input reset,
 
@@ -27,7 +25,7 @@ module Soc #(
     /// One-cycle pulse per mtime increment (the platform's real-time reference).
     i_mtime_tick: input logic,
     /// Level-triggered PLIC source lines; bit i is source i+1.
-    i_irq_src: input logic<SRC_COUNT>,
+    i_irq_src: input logic<RvPkg::PLIC_SRC_COUNT>,
 
     o_retire      : output logic    ,
     o_retire_pc   : output logic<32>,
@@ -120,7 +118,7 @@ module Soc #(
     );
 
     inst u_plic: Plic #(
-        SRC_COUNT: SRC_COUNT,
+        SRC_COUNT: RvPkg::PLIC_SRC_COUNT,
     ) (
         i_clk: i_clk,
         i_rst: i_rst,

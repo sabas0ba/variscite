@@ -7,6 +7,10 @@
 #
 #   PREFIX=/opt scripts/setup_toolchain.sh          # toolchain only
 #   WITH_SOURCES=1 scripts/setup_toolchain.sh       # also clone riscv-tests and Linux
+#   WITH_TESTS=1 scripts/setup_toolchain.sh         # ... riscv-tests only (CI)
+#
+# Each tool is skipped when it is already installed under PREFIX, so re-running
+# this over a restored cache costs nothing and downloads nothing.
 #
 # Versions here must stay in step with the table in README.md.
 set -euo pipefail
@@ -16,6 +20,9 @@ BINDIR="${BINDIR:-/usr/local/bin}"
 SRCDIR="${SRCDIR:-$HOME/src}"
 JOBS="${JOBS:-$(nproc)}"
 WITH_SOURCES="${WITH_SOURCES:-0}"
+# WITH_SOURCES implies both; either can be requested on its own.
+WITH_TESTS="${WITH_TESTS:-$WITH_SOURCES}"
+WITH_LINUX="${WITH_LINUX:-$WITH_SOURCES}"
 
 VERYL_VER=v0.20.3
 VERYL_SHA=8e4f36919dcb676afa037867dd80e98172e2d19487825423f1fdedd1e87e9ab7
@@ -51,24 +58,30 @@ fetch() { # <url> <file> <sha256>
 }
 
 # --- Veryl ---------------------------------------------------------------
-fetch "https://github.com/veryl-lang/veryl/releases/download/$VERYL_VER/veryl-x86_64-linux.zip" \
-    veryl.zip "$VERYL_SHA"
-mkdir -p "$PREFIX/veryl"
-unzip -qo "$dl/veryl.zip" -d "$PREFIX/veryl"
+if [[ ! -x "$PREFIX/veryl/veryl" ]]; then
+    fetch "https://github.com/veryl-lang/veryl/releases/download/$VERYL_VER/veryl-x86_64-linux.zip" \
+        veryl.zip "$VERYL_SHA"
+    mkdir -p "$PREFIX/veryl"
+    unzip -qo "$dl/veryl.zip" -d "$PREFIX/veryl"
+fi
 for b in "$PREFIX"/veryl/*; do ln -sf "$b" "$BINDIR/"; done
 
 # --- Verilator (from oss-cad-suite) --------------------------------------
-fetch "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/$OSSCAD_VER/$OSSCAD_FILE" \
-    "$OSSCAD_FILE" "$OSSCAD_SHA"
-[[ -d "$PREFIX/oss-cad-suite" ]] || tar xzf "$dl/$OSSCAD_FILE" -C "$PREFIX"
+if [[ ! -d "$PREFIX/oss-cad-suite" ]]; then
+    fetch "https://github.com/YosysHQ/oss-cad-suite-build/releases/download/$OSSCAD_VER/$OSSCAD_FILE" \
+        "$OSSCAD_FILE" "$OSSCAD_SHA"
+    tar xzf "$dl/$OSSCAD_FILE" -C "$PREFIX"
+fi
 for t in verilator verilator_coverage verilator_bin verilator_bin_dbg; do
     [[ -e "$PREFIX/oss-cad-suite/bin/$t" ]] && ln -sf "$PREFIX/oss-cad-suite/bin/$t" "$BINDIR/"
 done
 
 # --- RISC-V bare-metal GCC ----------------------------------------------
-fetch "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/$XPACK_VER/$XPACK_FILE" \
-    "$XPACK_FILE" "$XPACK_SHA"
-[[ -d "$PREFIX/xpack-riscv-none-elf-gcc-15.2.0-1" ]] || tar xzf "$dl/$XPACK_FILE" -C "$PREFIX"
+if [[ ! -d "$PREFIX/xpack-riscv-none-elf-gcc-15.2.0-1" ]]; then
+    fetch "https://github.com/xpack-dev-tools/riscv-none-elf-gcc-xpack/releases/download/$XPACK_VER/$XPACK_FILE" \
+        "$XPACK_FILE" "$XPACK_SHA"
+    tar xzf "$dl/$XPACK_FILE" -C "$PREFIX"
+fi
 ln -sf "$PREFIX"/xpack-riscv-none-elf-gcc-15.2.0-1/bin/riscv-none-elf-* "$BINDIR/"
 
 # --- flex (needed by the kernel build) -----------------------------------
@@ -105,7 +118,7 @@ fi
 ln -sf "$SRCDIR/spike/build/spike" "$BINDIR/"
 
 # --- sources (opt-in) ----------------------------------------------------
-if [[ "$WITH_SOURCES" == "1" ]]; then
+if [[ "$WITH_TESTS" == "1" ]]; then
     root="$(cd "$(dirname "$0")/.." && pwd)"
     if [[ ! -d "$root/third_party/riscv-tests" ]]; then
         git clone --recurse-submodules https://github.com/riscv-software-src/riscv-tests \
@@ -113,10 +126,10 @@ if [[ "$WITH_SOURCES" == "1" ]]; then
     fi
     git -C "$root/third_party/riscv-tests" checkout --quiet "$RISCV_TESTS_COMMIT"
     git -C "$root/third_party/riscv-tests" submodule update --init --recursive
+fi
 
-    if [[ ! -d "$SRCDIR/linux" ]]; then
-        git clone --depth 1 --branch "$LINUX_TAG" https://github.com/torvalds/linux "$SRCDIR/linux"
-    fi
+if [[ "$WITH_LINUX" == "1" ]] && [[ ! -d "$SRCDIR/linux" ]]; then
+    git clone --depth 1 --branch "$LINUX_TAG" https://github.com/torvalds/linux "$SRCDIR/linux"
 fi
 
 echo

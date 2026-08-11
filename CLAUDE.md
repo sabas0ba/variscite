@@ -38,16 +38,20 @@ Veryl / Verilator (oss-cad-suite) / xPack riscv-none-elf-gcc / flex / Spike、
 弱めない。
 
 ```bash
-make lint && make veryl-test && make tb && make run-isa && make cov-test \
-  && make coverage && make cosim
+make all
 ```
+
+これは CI (`.github/workflows/ci.yml` の `verify` ジョブ) と同じ内容である
+(lint / veryl-test / plic-multi-test / tb / isa-build / run-isa / cov-test /
+cov-check / cosim)。
 
 - `make run-isa` は 76 本全 PASS が合格条件 (logs/isa/summary.txt)
 - `make cosim` は 77 件全一致が合格条件 (logs/cosim/summary.txt)。除外を増やす
   場合は仕様上の根拠を README.md に明記する。トレース照合は `make run-isa` と
   `make cov-test` の出力を使うため、先にそれらを実行しておくこと
-- カバレッジは line で新たな未到達を作らないこと。除外は README.md の除外理由に
-  追記し根拠を明記する
+- カバレッジは `make cov-check` が予算 (line 4 / branch 2 / expr 13) で判定する。
+  新たな未到達を作らないこと。どうしても到達不能な場合は README.md の除外理由に
+  根拠を追記し、同じコミットで `scripts/cov_check.sh` の予算を上げる
 - 特権・割り込み・メモリ順序に関わる変更は `make linux-boot` まで通す。Linux は
   riscv-tests が検出しない実装漏れ (U-mode 復帰、タイマ tick、UART の DLAB、
   ユーザランドの PIC 化など) を露出させるため、リグレッションとしての価値が高い
@@ -64,7 +68,12 @@ make lint && make veryl-test && make tb && make run-isa && make cov-test \
 - 新しいデバイスを RTL に足す場合、アドレス窓の分岐は `src/soc.veryl` の
   `*_hit` / `*_sel` に、ゲスト側の見え方は `linux/rv32ima_veryl.dts` に、
   レジスタレベルの検査は `tests/clint_plic_test.S` と `src/tests.veryl` の
-  組込テストに、それぞれ追加する
+  組込テストに、それぞれ追加する。窓の外へ素通しされることは
+  `test_soc_decode` に倣って検査する
+- モジュールパラメータを上書きするテストベンチは `src/tests.veryl` に置かない。
+  `veryl test` の多重トップ下では上書きが効かず、黙って既定値で通ってしまう。
+  `tb/tb_plic_multi.sv` と `make plic-multi-test` のように単独ビルドする
+  (理由は README.md の該当節)
 - 例外の意味論 (ミスアライン分岐は分岐命令側で trap、データミスアラインは HW 処理、
   AMO 系は trap) は riscv-tests (ma_fetch / ma_data / ma_addr) の要求に基づく。
   変更時は該当テストの意図を先に確認する

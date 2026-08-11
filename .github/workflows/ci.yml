@@ -1,0 +1,133 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly, so the long Linux boot regression still runs regularly.
+    - cron: '0 3 * * 1'
+
+# The toolchain is pinned and large (oss-cad-suite, xPack GCC, a Spike build),
+# so it is installed under $HOME and cached. scripts/setup_toolchain.sh skips
+# anything already present, which makes a cache hit close to free.
+env:
+  PREFIX: /home/runner/toolchain
+  BINDIR: /home/runner/.local/bin
+  SRCDIR: /home/runner/src
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # dtc is what Spike's configure looks for; taking the distribution
+      # package keeps the setup script from having to build it.
+      - name: Install host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends device-tree-compiler
+
+      - name: Cache toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/toolchain
+            /home/runner/src/spike
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/setup_toolchain.sh') }}
+
+      - name: Cache riscv-tests
+        uses: actions/cache@v4
+        with:
+          path: third_party/riscv-tests
+          key: riscv-tests-${{ hashFiles('scripts/setup_toolchain.sh') }}
+
+      - name: Install toolchain
+        run: |
+          mkdir -p "$BINDIR"
+          WITH_TESTS=1 scripts/setup_toolchain.sh
+          echo "$BINDIR" >> "$GITHUB_PATH"
+
+      # Downloaded archives are only needed to install; dropping them keeps the
+      # cache entry to the installed trees.
+      - name: Trim download cache
+        run: rm -rf "$PREFIX/dl"
+
+      - name: Lint
+        run: make lint
+
+      - name: Unit tests
+        run: |
+          make veryl-test
+          make plic-multi-test
+
+      - name: Build the simulator
+        run: make tb
+
+      - name: riscv-tests
+        run: |
+          make isa-build
+          make run-isa
+
+      - name: Directed tests
+        run: make cov-test
+
+      - name: Coverage
+        run: make cov-check
+
+      - name: Spike cosimulation
+        run: make cosim
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: logs
+          path: logs/
+          retention-days: 14
+
+  # The kernel build plus an ~8e8 cycle boot is far longer than the checks
+  # above, so it runs on a schedule and on demand rather than per push.
+  linux-boot:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends device-tree-compiler flex bison bc
+
+      - name: Cache toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            /home/runner/toolchain
+            /home/runner/src/spike
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/setup_toolchain.sh') }}
+
+      - name: Install toolchain and kernel sources
+        run: |
+          mkdir -p "$BINDIR"
+          WITH_LINUX=1 scripts/setup_toolchain.sh
+          echo "$BINDIR" >> "$GITHUB_PATH"
+
+      - name: Build Linux
+        run: LINUX_SRC="$SRCDIR/linux" make linux-build
+
+      - name: Boot Linux
+        run: make linux-boot
+
+      - name: Upload console log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-console
+          path: logs/linux/
+          retention-days: 14

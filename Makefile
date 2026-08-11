@@ -7,10 +7,10 @@ TESTS        := $(shell scripts/list_tests.sh)
 RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
                 target/plic.sv target/soc.sv
 
-.PHONY: all lint veryl-build veryl-test tb tb-fast isa-build run-isa cov-test \
-        coverage cosim linux-build linux-boot clean
+.PHONY: all lint veryl-build veryl-test plic-multi-test tb tb-fast isa-build \
+        run-isa cov-test coverage cov-check cosim linux-build linux-boot clean
 
-all: lint tb isa-build run-isa coverage
+all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check cosim
 
 lint:
 	veryl fmt --check
@@ -22,6 +22,16 @@ veryl-build:
 veryl-test:
 	mkdir -p logs
 	veryl test 2>&1 | tee logs/veryl_test.log
+
+# Built standalone with an explicit top: see the header of tb/tb_plic_multi.sv
+# for why this one cannot go through `veryl test`.
+plic-multi-test: veryl-build
+	mkdir -p sim
+	verilator --binary --timing -Wno-fatal \
+	    --top-module tb_plic_multi \
+	    -Mdir sim/obj_plic_multi -o plic_multi \
+	    target/rv_pkg.sv target/plic.sv tb/tb_plic_multi.sv
+	sim/obj_plic_multi/plic_multi
 
 tb: veryl-build
 	mkdir -p sim
@@ -66,6 +76,9 @@ cov-test:
 	    scripts/run_isa.sh sim/$$t.elf $$extra || { cat logs/isa/$$t.out; exit 1; }; \
 	    cat logs/isa/$$t.out; \
 	done
+
+cov-check: coverage
+	scripts/cov_check.sh
 
 cosim:
 	scripts/run_cosim.sh

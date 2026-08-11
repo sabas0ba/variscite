@@ -36,7 +36,8 @@ src/plic.veryl     PLIC (1 コンテキスト、レベルトリガ SRC_COUNT ソ
 src/soc.veryl      最上位。コアの単一メモリポートを分岐し、CLINT / PLIC 窓への
                    アクセスを SoC 内で完結させ、残りを外部ポートへ通す
 src/tests.veryl    veryl test 用組込テスト (test_alu, test_core_smoke,
-                   test_clint, test_plic)
+                   test_clint, test_clint_wide, test_plic, test_soc_decode)
+tb/tb_plic_multi.sv 複数ソース構成の PLIC テストベンチ (make plic-multi-test)
 tb/tb_core.cpp     Verilator テストベンチ。ブート ROM / RAM / 16550A UART /
                    SYSCON、HTIF tohost 判定、トレース、VCD、カバレッジ
 tests/*.S          directed テスト (カバレッジ補完、割り込み、U-mode、PMP、
@@ -90,14 +91,17 @@ SHA256 を検証している。
 ## ビルドと検証
 
 ```bash
+make all         # 下記のうち Linux 以外を全て実行する (CI と同じ内容)
 make lint        # veryl fmt --check && veryl check
-make veryl-test  # veryl 組込テスト (test_alu, test_core_smoke)
+make veryl-test  # veryl 組込テスト (6 本)
+make plic-multi-test # 複数ソース PLIC テストベンチ (単独ビルド)
 make tb          # veryl build + Verilator ビルド (--coverage --trace)
 make tb-fast     # 計装なしの高速モデル (Linux ブート用)
 make isa-build   # riscv-tests (rv32ui/um/ua/mi の -p 76 本) をビルド
 make run-isa     # 全 ISA テスト実行 -> logs/isa/summary.txt
 make cov-test    # directed テスト (tests/*.S)
 make coverage    # カバレッジ集計 -> logs/cov/summary.txt, logs/cov/annotated/
+make cov-check   # カバレッジが規定の予算内かを判定 (超過で失敗)
 make cosim       # Spike とのトレース照合 -> logs/cosim/summary.txt
 make linux-build # Linux カーネル / ユーザランド / DTB のビルド
 make linux-boot  # Linux 起動 (バッチ入力で mandel/donut/poweroff)
@@ -126,6 +130,40 @@ scripts/run_isa.sh rv32mi-p-csr +trace=w.vcd  # VCD 波形出力
 scripts/run_linux.sh                          # 端末から対話的に Linux を起動
 scripts/cosim.py <elf> <dut-trace> --spike-log <path>   # 単体のトレース照合
 ```
+
+## CI
+
+`.github/workflows/ci.yml` が push と pull request で `verify` ジョブを回す。
+内容は `make all` と同じ (lint / veryl-test / plic-multi-test / tb / isa-build /
+run-isa / cov-test / cov-check / cosim) で、`logs/` を artifact として残す。
+
+ツールチェーンは `$HOME/toolchain` に入れて cache する。
+`scripts/setup_toolchain.sh` は導入済みのものを飛ばすため、cache がヒットすれば
+再取得もビルドも起きない。cache キーはスクリプト自身のハッシュなので、固定
+バージョンを変えれば自動で作り直される。
+
+Linux ブートはカーネルビルドと 8e8 サイクル級の実行で桁違いに長いため、`verify`
+とは分け、週次スケジュールと `workflow_dispatch` でのみ回す `linux-boot` ジョブに
+してある。
+
+### カバレッジの予算
+
+`scripts/cov_check.sh` は未到達点の数を metric ごとの予算と比較し、超過したら
+失敗する。予算は README のこの下の「カバレッジ基準と除外理由」で構造的到達不能と
+説明している点の数と一致させてある。新しく未到達を作った場合は、テストで到達させる
+か、到達不能である根拠を README に追記した上で同じコミットで予算を上げること。
+
+## veryl test と Verilator の多重トップ
+
+`veryl test` は設計一式をテストベンチと一緒に Verilator へ渡すため、どこからも
+インスタンス化されていない設計モジュールが追加のトップになる。トップが複数ある
+状態では `rv32ima_Plic` の特殊化が 1 回しか行われず、`SRC_COUNT` を上書きした
+テストベンチが黙ってプラットフォームの値 (1) で動いてしまう。
+
+このため複数ソース構成のテストだけは `src/tests.veryl` に置かず、
+`tb/tb_plic_multi.sv` として `--top-module` を明示し必要なファイルだけを渡して
+単独でビルドする (`make plic-multi-test`)。上書きが効いていることは、
+4 ソース構成でしか成立しない enable マスク `0x1e` の検査で担保している。
 
 ## Spike コシミュレーション
 
@@ -204,7 +242,8 @@ run ごとに変わるためである。
 - riscv-tests: rv32ui 42 / rv32um 8 / rv32ua 10 / rv32mi 16 の全 76 本 PASS
 - directed テスト 5 本 PASS (coverage_boost / irq_test / umode_test / pmp_test /
   clint_plic_test)
-- veryl test: 4 本 PASS (組込 SV テストベンチ)
+- veryl test: 6 本 PASS (組込 SV テストベンチ)。加えて複数ソース PLIC の
+  テストベンチ 1 本 (`make plic-multi-test`)
 - Spike コシミュレーション: 77 件で命令列完全一致、4 件 SKIP (breakpoint と
   プラットフォーム依存の directed テスト 3 本)
 - Linux v6.12 (rv32 NOMMU): ユーザ空間到達、シェル、別プロセスでの

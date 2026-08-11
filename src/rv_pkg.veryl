@@ -7,6 +7,9 @@ package RvPkg {
     /// misa: RV32 (MXL=1), extensions A, I, M, U
     const MISA_VALUE: logic<32> = 32'h4010_1101;
 
+    /// PLIC interrupt sources this platform wires up (the UART is source 1).
+    const PLIC_SRC_COUNT: u32 = 1;
+
     /// Privilege levels implemented by this core (M and U only).
     const PRIV_U: logic = 1'b0;
     const PRIV_M: logic = 1'b1;
