@@ -1,18 +1,20 @@
-// Verilator testbench for rv32ima_Core.
+// Verilator testbench for rv32ima_Soc.
+//
+// The CLINT and the PLIC live in the RTL (src/clint.veryl, src/plic.veryl) and
+// never appear on the SoC's memory port; this model provides the rest of the
+// platform.
 //
 // Memory map:
 //   0x0000_1000 .. 0x0000_ffff  boot ROM (stub: a0=0, a1=0x2000, jump to RAM)
 //   0x0000_2000                 DTB (loaded from +dtb=..., inside ROM window)
-//   0x0c00_0000 .. 0x0c3f_ffff  PLIC (one source: UART = 1, one context)
+//   0x0c00_0000 .. 0x0c3f_ffff  PLIC        (in the RTL)
 //   0x1000_0000 .. 0x1000_001f  16550A UART (reg-shift 2, reg-io-width 4)
-//   0x1100_0000                 CLINT msip (bit0 -> machine software irq)
-//   0x1100_4000 / 0x1100_4004   CLINT mtimecmp lo/hi
-//   0x1100_bff8 / 0x1100_bffc   CLINT mtime lo/hi (read only)
+//   0x1100_0000 .. 0x1100_ffff  CLINT       (in the RTL)
 //   0x1110_0000                 SYSCON (write 0x5555: poweroff, 0x7777: reboot)
 //   0x8000_0000 ..              RAM (+ramsize_mb, default 4)
 //
-// Machine timer interrupt: i_irq_timer = (mtime >= mtimecmp).
-// mtime increments once per +mtimediv cycles (default 1).
+// The UART's interrupt line is the PLIC's source 1. mtime advances one count
+// per +mtimediv core cycles, driven through the SoC's i_mtime_tick input.
 //
 // Plusargs:
 //   +bin=<path>       flat binary loaded at 0x80000000 (riscv-tests mode)
@@ -49,27 +51,14 @@
 #include <verilated_vcd_c.h>
 #endif
 
-#include "Vrv32ima_Core.h"
+#include "Vrv32ima_Soc.h"
 
 namespace {
 
 constexpr uint32_t kRomBase = 0x00001000u;
 constexpr uint32_t kRomSize = 0x0000f000u; // 60 KiB
 constexpr uint32_t kDtbAddr = 0x00002000u;
-constexpr uint32_t kPlicBase = 0x0c000000u;
-constexpr uint32_t kPlicSize = 0x00400000u;
-constexpr uint32_t kPlicPrio = 0x0c000000u;   // + 4 * source
-constexpr uint32_t kPlicPend = 0x0c001000u;
-constexpr uint32_t kPlicEnab = 0x0c002000u;   // context 0
-constexpr uint32_t kPlicThres = 0x0c200000u;  // context 0
-constexpr uint32_t kPlicClaim = 0x0c200004u;  // context 0
-constexpr uint32_t kUartIrq = 1u;             // PLIC source number of the UART
 constexpr uint32_t kUartBase = 0x10000000u;
-constexpr uint32_t kClintMsip = 0x11000000u;
-constexpr uint32_t kClintCmpLo = 0x11004000u;
-constexpr uint32_t kClintCmpHi = 0x11004004u;
-constexpr uint32_t kClintTimeLo = 0x1100bff8u;
-constexpr uint32_t kClintTimeHi = 0x1100bffcu;
 constexpr uint32_t kSyscon = 0x11100000u;
 constexpr uint32_t kMemBase = 0x80000000u;
 
@@ -155,7 +144,7 @@ int main(int argc, char** argv) {
     fcntl(STDIN_FILENO, F_SETFL, fcntl(STDIN_FILENO, F_GETFL, 0) | O_NONBLOCK);
     std::deque<uint8_t> rx_fifo;
 
-    Vrv32ima_Core* top = new Vrv32ima_Core;
+    Vrv32ima_Soc* top = new Vrv32ima_Soc;
 #if VM_TRACE
     VerilatedVcdC* tfp = nullptr;
     if (!trace_path.empty()) {
@@ -178,17 +167,11 @@ int main(int argc, char** argv) {
         t++;
     };
 
-    // CLINT state
-    uint64_t mtime = 0;
-    uint64_t mtimecmp = ~0ull;
-    uint32_t msip = 0;
-
     top->i_rst = 1;
     top->i_mem_ready = 0;
     top->i_mem_rdata = 0;
-    top->i_irq_timer = 0;
-    top->i_irq_soft = 0;
-    top->i_irq_ext = 0;
+    top->i_mtime_tick = 0;
+    top->i_irq_src = 0;
     for (int i = 0; i < 4; i++) {
         tick_edges(0);
         tick_edges(1);
@@ -211,12 +194,6 @@ int main(int argc, char** argv) {
     uint8_t u_dll = 1, u_dlm = 0;
     const bool uart_dbg = !plusarg_str("uartdbg").empty();
 
-    // Simplified PLIC: a single context (hart 0, M-mode) and a single
-    // level-triggered source (the UART). A claimed source stops contributing
-    // to the pending set until the handler writes the completion.
-    uint32_t plic_prio = 0, plic_enable = 0, plic_threshold = 0;
-    bool plic_claimed = false;
-
     auto uart_iir = [&]() -> uint32_t {
         uint32_t code;
         if ((u_ier & 0x01u) && !rx_fifo.empty()) {
@@ -229,27 +206,11 @@ int main(int argc, char** argv) {
         return 0xc0u | code; // FIFOs enabled
     };
 
-    // The UART drives its interrupt line whenever IIR reports a cause.
+    // The UART drives its interrupt line whenever IIR reports a cause; it is
+    // the PLIC's source 1.
     auto uart_pending = [&]() -> bool { return (uart_iir() & 0x01u) == 0u; };
-    auto plic_pending = [&]() -> bool {
-        return uart_pending() && (plic_enable >> kUartIrq) & 1u && plic_prio > plic_threshold;
-    };
 
     auto mmio_read = [&](uint32_t addr) -> uint32_t {
-        if (addr >= kPlicBase && addr < kPlicBase + kPlicSize) {
-            if (addr == kPlicPrio + 4 * kUartIrq) return plic_prio;
-            if (addr == kPlicPend) return plic_pending() ? (1u << kUartIrq) : 0u;
-            if (addr == kPlicEnab) return plic_enable;
-            if (addr == kPlicThres) return plic_threshold;
-            if (addr == kPlicClaim) {
-                if (plic_pending() && !plic_claimed) {
-                    plic_claimed = true;
-                    return kUartIrq;
-                }
-                return 0; // nothing to claim
-            }
-            return 0;
-        }
         if (addr >= kUartBase && addr < kUartBase + 0x20) {
             const uint32_t idx = (addr - kUartBase) >> 2;
             uint32_t v = 0;
@@ -273,23 +234,11 @@ int main(int argc, char** argv) {
             if (uart_dbg) std::fprintf(stderr, "[uart] R idx=%u -> %02x\n", idx, v);
             return v;
         }
-        if (addr == kClintMsip) return msip;
-        if (addr == kClintCmpLo) return static_cast<uint32_t>(mtimecmp);
-        if (addr == kClintCmpHi) return static_cast<uint32_t>(mtimecmp >> 32);
-        if (addr == kClintTimeLo) return static_cast<uint32_t>(mtime);
-        if (addr == kClintTimeHi) return static_cast<uint32_t>(mtime >> 32);
         return 0;
     };
 
     auto mmio_write = [&](uint32_t addr, uint32_t val, uint32_t wstrb) {
         (void)wstrb;
-        if (addr >= kPlicBase && addr < kPlicBase + kPlicSize) {
-            if (addr == kPlicPrio + 4 * kUartIrq) plic_prio = val;
-            else if (addr == kPlicEnab) plic_enable = val;
-            else if (addr == kPlicThres) plic_threshold = val;
-            else if (addr == kPlicClaim) plic_claimed = false; // completion
-            return;
-        }
         if (addr >= kUartBase && addr < kUartBase + 0x20) {
             const uint32_t idx = (addr - kUartBase) >> 2;
             const uint8_t v = static_cast<uint8_t>(val & 0xffu);
@@ -318,18 +267,6 @@ int main(int argc, char** argv) {
             case 6: break;            // LSR / MSR are read-only
             default: u_scr = v; break;
             }
-            return;
-        }
-        if (addr == kClintMsip) {
-            msip = val & 1u;
-            return;
-        }
-        if (addr == kClintCmpLo) {
-            mtimecmp = (mtimecmp & 0xffffffff00000000ull) | val;
-            return;
-        }
-        if (addr == kClintCmpHi) {
-            mtimecmp = (mtimecmp & 0xffffffffull) | (static_cast<uint64_t>(val) << 32);
             return;
         }
         if (addr == kSyscon) {
@@ -406,11 +343,10 @@ int main(int argc, char** argv) {
         top->i_mem_ready = mem_ready_r ? 1 : 0;
         top->i_mem_rdata = mem_rdata_r;
 
-        // CLINT timer / interrupts.
-        if (mtimediv <= 1 || (cycles % mtimediv) == 0) mtime++;
-        top->i_irq_timer = (mtime >= mtimecmp) ? 1 : 0;
-        top->i_irq_soft = msip & 1u;
-        top->i_irq_ext = (plic_pending() && !plic_claimed) ? 1 : 0;
+        // Real-time reference for the CLINT's mtime, and the UART's line into
+        // the PLIC.
+        top->i_mtime_tick = (mtimediv <= 1 || (cycles % mtimediv) == 0) ? 1 : 0;
+        top->i_irq_src = uart_pending() ? 1 : 0;
 
         // Poll stdin for UART RX occasionally.
         if ((cycles & 0xfff) == 0) {
@@ -435,9 +371,8 @@ int main(int argc, char** argv) {
                          top->o_retire_pc, top->o_trap_cause);
         }
         if (progress != 0 && (cycles % progress) == 0) {
-            std::fprintf(stderr, "[tb] cycles=%llu retired=%llu mtime=%llu\n",
-                         (unsigned long long)cycles, (unsigned long long)retired,
-                         (unsigned long long)mtime);
+            std::fprintf(stderr, "[tb] cycles=%llu retired=%llu\n",
+                         (unsigned long long)cycles, (unsigned long long)retired);
         }
     }
 

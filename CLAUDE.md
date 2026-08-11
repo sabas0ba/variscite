@@ -57,6 +57,14 @@ make lint && make veryl-test && make tb && make run-isa && make cov-test \
 - 一時ファイル・ログは git ignore 済みの `logs/` `sim/` に置く
 - 生成 SV (`target/`) は成果物ではない。手編集しない
 - コミットは Conventional Commits
+- Verilator の最上位は `rv32ima_Soc` (`src/soc.veryl`)。CLINT と PLIC は RTL 側に
+  あり、コアのメモリポートには現れない。テストベンチが供給するのは ROM / RAM /
+  UART / SYSCON と、`i_mtime_tick` (mtime の歩進) および `i_irq_src` (UART の線) の
+  2 本の入力だけである
+- 新しいデバイスを RTL に足す場合、アドレス窓の分岐は `src/soc.veryl` の
+  `*_hit` / `*_sel` に、ゲスト側の見え方は `linux/rv32ima_veryl.dts` に、
+  レジスタレベルの検査は `tests/clint_plic_test.S` と `src/tests.veryl` の
+  組込テストに、それぞれ追加する
 - 例外の意味論 (ミスアライン分岐は分岐命令側で trap、データミスアラインは HW 処理、
   AMO 系は trap) は riscv-tests (ma_fetch / ma_data / ma_addr) の要求に基づく。
   変更時は該当テストの意図を先に確認する

@@ -140,3 +140,219 @@ module test_core_smoke;
     end
 endmodule
 }}}
+
+#[test(test_clint)]
+embed (inline) sv{{{
+module test_clint;
+    logic        clk = 0;
+    logic        rst = 1;
+    logic        sel = 0;
+    logic [15:0] addr = 0;
+    logic [3:0]  wstrb = 0;
+    logic [31:0] wdata = 0;
+    logic [31:0] rdata;
+    logic        tick = 0;
+    logic        irq_timer;
+    logic        irq_soft;
+
+    rv32ima_Clint dut (
+        .i_clk       (clk),
+        .i_rst       (rst),
+        .i_sel       (sel),
+        .i_addr      (addr),
+        .i_wstrb     (wstrb),
+        .i_wdata     (wdata),
+        .o_rdata     (rdata),
+        .i_tick      (tick),
+        .o_irq_timer (irq_timer),
+        .o_irq_soft  (irq_soft)
+    );
+
+    always #5 clk = ~clk;
+
+    // One bus access: sel for a single cycle, as the SoC drives it.
+    task automatic bus_write(input logic [15:0] a, input logic [31:0] d);
+        @(negedge clk);
+        sel = 1; addr = a; wstrb = 4'hf; wdata = d;
+        @(posedge clk);
+        @(negedge clk);
+        sel = 0; wstrb = 4'h0;
+    endtask
+
+    task automatic bus_read(input logic [15:0] a, output logic [31:0] d);
+        @(negedge clk);
+        sel = 1; addr = a; wstrb = 4'h0;
+        #1 d = rdata;
+        @(posedge clk);
+        @(negedge clk);
+        sel = 0;
+    endtask
+
+    logic [31:0] v;
+
+    initial begin
+        repeat (2) @(posedge clk);
+        @(negedge clk);
+        rst = 0;
+
+        // mtimecmp resets to all-ones, so no timer interrupt is pending.
+        assert (irq_timer == 1'b0) else $fatal(1, "spurious timer irq");
+        assert (irq_soft == 1'b0) else $fatal(1, "spurious soft irq");
+
+        // msip is one bit wide and drives the software interrupt.
+        bus_write(16'h0000, 32'hffff_ffff);
+        bus_read(16'h0000, v);
+        assert (v == 32'h1) else $fatal(1, "msip=%h", v);
+        assert (irq_soft == 1'b1) else $fatal(1, "soft irq not raised");
+        bus_write(16'h0000, 32'h0);
+        assert (irq_soft == 1'b0) else $fatal(1, "soft irq not cleared");
+
+        // mtime only advances on a tick.
+        bus_read(16'hbff8, v);
+        assert (v == 32'h0) else $fatal(1, "mtime moved without a tick: %h", v);
+        tick = 1;
+        repeat (10) @(posedge clk);
+        @(negedge clk);
+        tick = 0;
+        bus_read(16'hbff8, v);
+        assert (v == 32'd10) else $fatal(1, "mtime=%0d, expected 10", v);
+
+        // mtime is read-only.
+        bus_write(16'hbff8, 32'h0);
+        bus_read(16'hbff8, v);
+        assert (v == 32'd10) else $fatal(1, "mtime was writable: %0d", v);
+
+        // The timer fires once mtime reaches mtimecmp.
+        bus_write(16'h4004, 32'h0);
+        bus_write(16'h4000, 32'd12);
+        bus_read(16'h4000, v);
+        assert (v == 32'd12) else $fatal(1, "mtimecmp=%0d", v);
+        assert (irq_timer == 1'b0) else $fatal(1, "timer irq too early");
+        tick = 1;
+        repeat (2) @(posedge clk);
+        @(negedge clk);
+        tick = 0;
+        assert (irq_timer == 1'b1) else $fatal(1, "timer irq did not fire");
+
+        $display("test_clint OK");
+        $finish;
+    end
+
+    initial begin
+        repeat (2000) @(posedge clk);
+        $fatal(1, "timeout");
+    end
+endmodule
+}}}
+
+#[test(test_plic)]
+embed (inline) sv{{{
+module test_plic;
+    logic        clk = 0;
+    logic        rst = 1;
+    logic        sel = 0;
+    logic [21:0] addr = 0;
+    logic [3:0]  wstrb = 0;
+    logic [31:0] wdata = 0;
+    logic [31:0] rdata;
+    logic        src = 0;
+    logic        irq;
+
+    rv32ima_Plic dut (
+        .i_clk   (clk),
+        .i_rst   (rst),
+        .i_sel   (sel),
+        .i_addr  (addr),
+        .i_wstrb (wstrb),
+        .i_wdata (wdata),
+        .o_rdata (rdata),
+        .i_src   (src),
+        .o_irq   (irq)
+    );
+
+    always #5 clk = ~clk;
+
+    task automatic bus_write(input logic [21:0] a, input logic [31:0] d);
+        @(negedge clk);
+        sel = 1; addr = a; wstrb = 4'hf; wdata = d;
+        @(posedge clk);
+        @(negedge clk);
+        sel = 0; wstrb = 4'h0;
+    endtask
+
+    task automatic bus_read(input logic [21:0] a, output logic [31:0] d);
+        @(negedge clk);
+        sel = 1; addr = a; wstrb = 4'h0;
+        #1 d = rdata;
+        @(posedge clk);
+        @(negedge clk);
+        sel = 0;
+    endtask
+
+    logic [31:0] v;
+
+    initial begin
+        repeat (2) @(posedge clk);
+        @(negedge clk);
+        rst = 0;
+
+        // An asserted line alone does not interrupt: it must be enabled and
+        // above the threshold.
+        src = 1;
+        assert (irq == 1'b0) else $fatal(1, "irq without enable");
+        bus_read(22'h001000, v);
+        assert (v == 32'h2) else $fatal(1, "pending=%h", v);
+
+        bus_write(22'h002000, 32'hffff_ffff);
+        bus_read(22'h002000, v);
+        assert (v == 32'h2) else $fatal(1, "enable=%h, only source 1 exists", v);
+        assert (irq == 1'b0) else $fatal(1, "irq at priority 0");
+
+        // Priority and threshold are three bits wide.
+        bus_write(22'h000004, 32'hffff_ffff);
+        bus_read(22'h000004, v);
+        assert (v == 32'h7) else $fatal(1, "priority=%h", v);
+        bus_write(22'h200000, 32'hffff_ffff);
+        bus_read(22'h200000, v);
+        assert (v == 32'h7) else $fatal(1, "threshold=%h", v);
+
+        // The threshold is exclusive: priority 7 does not pass a threshold 7.
+        assert (irq == 1'b0) else $fatal(1, "irq at priority == threshold");
+        bus_read(22'h200004, v);
+        assert (v == 32'h0) else $fatal(1, "claimed %0d below threshold", v);
+
+        bus_write(22'h200000, 32'h0);
+        assert (irq == 1'b1) else $fatal(1, "irq not raised");
+
+        // The claim hands the source to the handler; the gateway then holds it
+        // back until the completion.
+        bus_read(22'h200004, v);
+        assert (v == 32'h1) else $fatal(1, "claim=%0d", v);
+        assert (irq == 1'b0) else $fatal(1, "irq still asserted after claim");
+        bus_read(22'h001000, v);
+        assert (v == 32'h0) else $fatal(1, "pending=%h while claimed", v);
+        bus_read(22'h200004, v);
+        assert (v == 32'h0) else $fatal(1, "claimed twice");
+
+        // A completion naming a source this context has not enabled is ignored.
+        bus_write(22'h200004, 32'd5);
+        assert (irq == 1'b0) else $fatal(1, "bogus completion released the claim");
+
+        bus_write(22'h200004, 32'd1);
+        assert (irq == 1'b1) else $fatal(1, "completion did not re-arm the source");
+
+        // Dropping the device line drops the interrupt.
+        src = 0;
+        #1;
+        assert (irq == 1'b0) else $fatal(1, "irq without a source line");
+
+        $display("test_plic OK");
+        $finish;
+    end
+
+    initial begin
+        repeat (2000) @(posedge clk);
+        $fatal(1, "timeout");
+    end
+endmodule
+}}}

@@ -9,12 +9,12 @@
 # debug triggers; this core reports none (tselect reads back non-zero), so the
 # test legitimately takes a different path on each model.
 #
-# coverage_boost and irq_test are excluded too: the first probes
-# implementation-defined WARL masks and executes wfi (which Spike waits in
-# forever with no interrupt source), the second drives this platform's CLINT
-# and PLIC.
+# coverage_boost, irq_test and clint_plic_test are excluded too: the first
+# probes implementation-defined WARL masks and executes wfi (which Spike waits
+# in forever with no interrupt source), the other two drive this platform's
+# CLINT and PLIC.
 set -uo pipefail
-EXCLUDE="rv32mi-p-breakpoint coverage_boost irq_test"
+EXCLUDE="rv32mi-p-breakpoint coverage_boost irq_test clint_plic_test"
 root="$(cd "$(dirname "$0")/.." && pwd)"
 mkdir -p "$root/logs/cosim"
 summary="$root/logs/cosim/summary.txt"
@@ -22,7 +22,7 @@ summary="$root/logs/cosim/summary.txt"
 
 tests=()
 while read -r t; do tests+=("third_party/riscv-tests/isa/$t"); done < <("$root/scripts/list_tests.sh")
-for t in umode_test pmp_test; do
+for t in umode_test pmp_test clint_plic_test; do
     [[ -f "$root/sim/$t.elf" ]] && tests+=("sim/$t.elf")
 done
 

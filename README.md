@@ -1,8 +1,9 @@
 # rv32ima_veryl
 
-Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) の実装と検証環境。
-riscv-tests の全件通過、Spike とのコシミュレーション一致、Verilator シミュレーション
-上での Linux 起動とユーザアプリケーションの実行までを含む。
+Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り込みコントローラ
+(CLINT / PLIC) を含む SoC の実装と検証環境。riscv-tests の全件通過、Spike との
+コシミュレーション一致、Verilator シミュレーション上での Linux 起動とユーザ
+アプリケーションの実行までを含む。
 
 ## 構成
 
@@ -15,6 +16,12 @@ riscv-tests の全件通過、Spike とのコシミュレーション一致、Ve
   当該 cfg と address の書き込みを凍結)。非マッチ時は M-mode 許可 / U-mode 拒否
 - 割り込み: machine timer / software / external (PLIC 経由)。mie/mip、mstatus.MIE、
   mtvec の direct / vectored 両モード、M-mode 未満では MIE に依らず受理
+- CLINT: msip と mtime / mtimecmp (64bit)。mtime は SoC の `i_mtime_tick` で歩進する
+  ため、コアクロックではなくプラットフォームの実時間基準で数える
+- PLIC: 1 コンテキスト (hart 0 の M-mode)、レベルトリガのソース 1..SRC_COUNT。
+  priority / pending / enable / threshold / claim / complete を実装。claim から
+  completion までゲートウェイがソースを保留するため、線を上げ続けるデバイスでも
+  ハンドラ 1 回につき 1 度だけ割り込む
 - 例外: 不正命令、ecall (M/U で cause 11/8)、ebreak、フェッチミスアライン、
   命令/ロード/ストアのアクセスフォルト (cause 1/5/7)
 - データアクセスのミスアラインはハードウェアで処理 (2 サイクルに分割)。分割された
@@ -24,29 +31,42 @@ riscv-tests の全件通過、Spike とのコシミュレーション一致、Ve
 src/rv_pkg.veryl   共通定義 (リセットベクタ、misa、特権レベル、AluOp)
 src/alu.veryl      ALU
 src/core.veryl     コア本体 (FSM、CSR、特権、PMP、例外/割り込み、LR/SC)
-src/tests.veryl    veryl test 用組込テスト (test_alu, test_core_smoke)
-tb/tb_core.cpp     Verilator テストベンチ。ブート ROM / RAM / PLIC / CLINT /
-                   16550A UART / SYSCON、HTIF tohost 判定、トレース、VCD、カバレッジ
-tests/*.S          directed テスト (カバレッジ補完、割り込み、U-mode、PMP)
+src/clint.veryl    CLINT (msip、mtime / mtimecmp)
+src/plic.veryl     PLIC (1 コンテキスト、レベルトリガ SRC_COUNT ソース)
+src/soc.veryl      最上位。コアの単一メモリポートを分岐し、CLINT / PLIC 窓への
+                   アクセスを SoC 内で完結させ、残りを外部ポートへ通す
+src/tests.veryl    veryl test 用組込テスト (test_alu, test_core_smoke,
+                   test_clint, test_plic)
+tb/tb_core.cpp     Verilator テストベンチ。ブート ROM / RAM / 16550A UART /
+                   SYSCON、HTIF tohost 判定、トレース、VCD、カバレッジ
+tests/*.S          directed テスト (カバレッジ補完、割り込み、U-mode、PMP、
+                   CLINT / PLIC レジスタ)
 linux/             Linux ブート一式 (DTS、ビルドスクリプト)
 linux/user/        freestanding ユーザランド (シェル、donut、mandelbrot)
 scripts/           テスト実行・コシミュレーション・Linux 起動スクリプト
 third_party/riscv-tests  (git 管理外) リビジョン固定で取得
 ```
 
-## メモリマップ (テストベンチ)
+## メモリマップ
 
-| アドレス | 内容 |
-|---|---|
-| `0x0000_1000` | ブート ROM。a0=hartid, a1=DTB を設定し RAM へジャンプ |
-| `0x0000_2000` | DTB |
-| `0x0c00_0000` | PLIC (1 ソース = UART、1 コンテキスト) |
-| `0x1000_0000` | 16550A UART (reg-shift=2, reg-io-width=4) |
-| `0x1100_0000` | CLINT msip |
-| `0x1100_4000` | CLINT mtimecmp |
-| `0x1100_bff8` | CLINT mtime (read only) |
-| `0x1110_0000` | SYSCON (0x5555 = poweroff, 0x7777 = reboot) |
-| `0x8000_0000` | RAM (`+ramsize_mb`、既定 4MiB) |
+CLINT と PLIC は RTL (`src/soc.veryl` が内部で応答) にあり、コアのメモリポートには
+現れない。残りはテストベンチが提供する。
+
+| アドレス | 内容 | 実装 |
+|---|---|---|
+| `0x0000_1000` | ブート ROM。a0=hartid, a1=DTB を設定し RAM へジャンプ | tb |
+| `0x0000_2000` | DTB | tb |
+| `0x0c00_0000` | PLIC (4MiB 窓。1 ソース = UART、1 コンテキスト) | RTL |
+| `0x1000_0000` | 16550A UART (reg-shift=2, reg-io-width=4) | tb |
+| `0x1100_0000` | CLINT (64KiB 窓。msip / mtimecmp / mtime) | RTL |
+| `0x1110_0000` | SYSCON (0x5555 = poweroff, 0x7777 = reboot) | tb |
+| `0x8000_0000` | RAM (`+ramsize_mb`、既定 4MiB) | tb |
+
+PLIC のレジスタ配置は PLIC 仕様どおり (`0x000000 + 4*id` priority、`0x001000`
+pending、`0x002000` enable、`0x200000` threshold、`0x200004` claim/complete)。
+priority と threshold は 3bit の WARL (`PRIO_BITS`)、enable は実装済みソースの
+ビットのみ書ける。CLINT は `0x0000` msip、`0x4000/0x4004` mtimecmp、
+`0xbff8/0xbffc` mtime (read only)。
 
 ## ツールチェーン
 
@@ -127,7 +147,9 @@ Spike 側だけがトラップして全ミスアラインテストで差分が�
   実装しない (tselect が非ゼロを返す)。両者とも仕様上正しく、経路が分岐する
 - `coverage_boost` — 実装定義の WARL マスクを検査し、かつ wfi を実行する
   (割り込み源の無い Spike は wfi で停止しない)
-- `irq_test` — 本プラットフォーム固有の CLINT / PLIC を直接操作する
+- `irq_test`、`clint_plic_test` — 本プラットフォーム固有の CLINT / PLIC を直接操作
+  する。Spike は別のプラットフォームをモデル化しており、これらのアドレスに同じ
+  デバイスは無い
 
 ## Linux ブートとユーザアプリケーション
 
@@ -152,9 +174,13 @@ mul/mulh の明示記述、除算は 32bit に収める形で、libgcc も libm 
 
 | 項目 | 値 |
 |---|---|
-| ブート〜ユーザ空間到達 | 約 7.6e7 サイクル |
-| mandelbrot + donut + poweroff まで | 7.6e8 サイクル / 2.9e8 命令 |
+| ブート〜ユーザ空間到達 | 約 6.5e7 サイクル |
+| mandelbrot + donut + poweroff まで | 8.2e8 サイクル / 3.2e8 命令 |
 | 実行速度 | 約 6 Mcycles/s (約 2.3 MIPS) |
+
+`make linux-boot` の総サイクル数は run ごとに数 % ぶれる。バッチ入力が実時間の
+sleep で与えられるため、シェルが次のコマンドを待って回すアイドルループの長さが
+run ごとに変わるためである。
 
 ### mtimediv について
 
@@ -176,19 +202,22 @@ mul/mulh の明示記述、除算は 32bit に収める形で、libgcc も libm 
 ## 検証結果
 
 - riscv-tests: rv32ui 42 / rv32um 8 / rv32ua 10 / rv32mi 16 の全 76 本 PASS
-- directed テスト 4 本 PASS (coverage_boost / irq_test / umode_test / pmp_test)
-- veryl test: 2 本 PASS (組込 SV テストベンチ)
-- Spike コシミュレーション: 77 件で命令列完全一致、1 件 SKIP (breakpoint)
+- directed テスト 5 本 PASS (coverage_boost / irq_test / umode_test / pmp_test /
+  clint_plic_test)
+- veryl test: 4 本 PASS (組込 SV テストベンチ)
+- Spike コシミュレーション: 77 件で命令列完全一致、4 件 SKIP (breakpoint と
+  プラットフォーム依存の directed テスト 3 本)
 - Linux v6.12 (rv32 NOMMU): ユーザ空間到達、シェル、別プロセスでの
-  mandelbrot / donut 実行、syscon 経由の poweroff まで確認
-- カバレッジ (riscv-tests 76 本 + directed 4 本の合算):
-  line 98.3% (226/230)、branch 98.3% (118/120)、expr 94.2% (196/208)、
-  toggle 80.3% (4589/5718)
+  mandelbrot / donut 実行、syscon 経由の poweroff まで確認。タイマ tick と UART の
+  外部割り込みはいずれも RTL の CLINT / PLIC 経由である
+- カバレッジ (riscv-tests 76 本 + directed 5 本の合算):
+  line 98.6% (280/284)、branch 98.6% (142/144)、expr 94.7% (230/243)、
+  toggle 73.4% (5685/7750)
 
 ### カバレッジ基準と除外理由
 
-line/branch の未到達 4 箇所は構造的到達不能であり、これを除くと到達可能行は全て
-実行済みである。
+line の未到達 4 箇所 (branch は 2 箇所) は構造的到達不能であり、これを除くと到達可能
+行は全て実行済みである。
 
 1. `alu_op` の case default: funct3 は 3bit 全 8 値を列挙済み。網羅性要件のための
    防御的 default。
@@ -199,11 +228,18 @@ line/branch の未到達 4 箇所は構造的到達不能であり、これを�
 4. `always_ff` の state case default: 到達可能な状態は 5 値のみ。3bit エンコードの
    残余に対する防御的回復。
 
-toggle の残余 (約 1100/5718 点) は次の構造的要因によるもので、機能の未検証を
+expr の未到達には上記に加え、PLIC の claim 選択 `eligible[i+1] && prio[i] > claim_best`
+で「eligible だが優先度が現最良を超えない」組合せが 1 点残る。`SRC_COUNT = 1` では
+ループが 1 回しか回らず `claim_best` は常に 0、eligible は `prio > threshold >= 0` を
+含意するため、この組合せは構造的に生じない。複数ソース構成では到達する。
+
+toggle の残余 (約 2100/7750 点) は次の構造的要因によるもので、機能の未検証を
 示さない。
 
 - WARL で 0 固定のビット: mie (0x888 以外)、mcounteren (下位 3bit 以外)、
-  pmpcfg の予約ビット、mstatus の予約ビット、csr_uimm 上位 27bit、cause の上位ビット
+  pmpcfg の予約ビット、mstatus の予約ビット、csr_uimm 上位 27bit、cause の上位ビット、
+  PLIC の priority / threshold の上位 29bit (`PRIO_BITS = 3`)、pending / enable /
+  claimed のうち実装済みソース以外のビット、CLINT の mtime / mtimecmp 上位ワード
 - メモリマップ由来の定数: テストベンチの RAM 配置により pc / メモリアドレス系の
   bit30:22 が常時 0
 - 命令フォーマット由来の定数: imm_u 下位 12bit 等
@@ -212,7 +248,10 @@ toggle の残余 (約 1100/5718 点) は次の構造的要因によるもので�
 
 - S-mode と MMU は実装しない (NOMMU 構成のみ)
 - Sdtrig (デバッグトリガ) は実装しない。tselect は非ゼロを返し「トリガ無し」を示す
-- PLIC は 1 ソース / 1 コンテキストの簡略実装 (テストベンチ側)
+- PLIC は 1 コンテキスト固定。ソース数は `SRC_COUNT` で変えられるが、レジスタは
+  32bit 1 ワード分なので最大 31 ソース。既定は本プラットフォームの 1 (UART)
+- CLINT は 1 hart 固定。mtime の歩進はプラットフォームが `i_mtime_tick` で与える
+- UART と SYSCON はテストベンチ (C++) 側のままである
 
 ## ライセンス
 
