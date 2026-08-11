@@ -1,0 +1,162 @@
+/// Platform-level interrupt controller: one context (hart 0, M-mode) and
+/// SRC_COUNT level-triggered sources, numbered 1..SRC_COUNT (source 0 does not
+/// exist, per the PLIC specification).
+///
+/// Register map, relative to the PLIC base:
+///
+/// | offset               | register                       |
+/// |----------------------|--------------------------------|
+/// | `0x000000 + 4 * id`  | priority of source `id`        |
+/// | `0x001000`           | pending bits (read only)       |
+/// | `0x002000`           | enable bits, context 0         |
+/// | `0x200000`           | priority threshold, context 0  |
+/// | `0x200004`           | claim (read) / complete (write)|
+///
+/// Gateway behaviour is the one the specification defines for level-triggered
+/// sources: a source stops contributing to the pending set from the claim that
+/// takes it until the matching completion, so a device that holds its line
+/// asserted interrupts once per handler run rather than continuously.
+///
+/// Bus protocol: as for Clint, i_sel marks the single cycle in which the access
+/// completes. The claim register's read side effect therefore fires on exactly
+/// one clock edge.
+module Plic #(
+    param SRC_COUNT: u32 = 1, // interrupt sources, numbered 1..SRC_COUNT
+    param PRIO_BITS: u32 = 3, // width of the priority and threshold registers
+) (
+    i_clk: input clock,
+    i_rst: input reset,
+
+    i_sel  : input  logic    ,
+    i_addr : input  logic<22>,
+    i_wstrb: input  logic<4> ,
+    i_wdata: input  logic<32>,
+    o_rdata: output logic<32>,
+
+    i_src: input logic<SRC_COUNT>, // level-triggered device lines
+
+    o_irq: output logic,
+) {
+
+    const OFF_PENDING: logic<22> = 22'h001000;
+    const OFF_ENABLE : logic<22> = 22'h002000;
+    const OFF_THRES  : logic<22> = 22'h200000;
+    const OFF_CLAIM  : logic<22> = 22'h200004;
+
+    /// Bits 1..SRC_COUNT: the source numbers this instance implements.
+    const SRC_MASK: logic<32> = ((32'h1 << (SRC_COUNT + 1)) - 32'h1) & ~32'h1;
+    /// Priority and threshold are WARL: bits above PRIO_BITS read as zero.
+    const PRIO_MASK: logic<32> = (32'h1 << PRIO_BITS) - 32'h1;
+
+    var prio     : logic<32> [SRC_COUNT];
+    var threshold: logic<32>            ;
+    var enable   : logic<32>            ;
+    var claimed  : logic<32>            ;
+
+    let is_prio : logic     = i_addr <: OFF_PENDING;
+    let prio_idx: logic<32> = {22'h0, i_addr[11:2]};
+    let we      : logic     = i_sel && i_wstrb != 4'h0;
+    let claim_rd: logic     = i_sel && i_wstrb == 4'h0 && i_addr == OFF_CLAIM;
+
+    // A source is pending while its line is asserted and no claim of it is
+    // outstanding; it is eligible to interrupt when it is also enabled and
+    // strictly above the context's threshold.
+    var pending : logic<32>;
+    var eligible: logic<32>;
+
+    always_comb {
+        pending  = 32'h0;
+        eligible = 32'h0;
+        for i in 0..SRC_COUNT {
+            pending[i + 1]  = i_src[i] && !claimed[i + 1];
+            eligible[i + 1] = pending[i + 1] && enable[i + 1] && prio[i] >: threshold;
+        }
+    }
+
+    assign o_irq = eligible != 32'h0;
+
+    // Claim returns the eligible source of highest priority, ties going to the
+    // lowest source number, or 0 when nothing is eligible.
+    var claim_id  : logic<32>;
+    var claim_best: logic<32>;
+
+    always_comb {
+        claim_id   = 32'h0;
+        claim_best = 32'h0;
+        for i in 0..SRC_COUNT {
+            if eligible[i + 1] && prio[i] >: claim_best {
+                claim_best = prio[i];
+                claim_id   = i + 1;
+            }
+        }
+    }
+
+    var prio_rd: logic<32>;
+
+    always_comb {
+        prio_rd = 32'h0;
+        for i in 0..SRC_COUNT {
+            if prio_idx == i + 1 {
+                prio_rd = prio[i];
+            }
+        }
+    }
+
+    always_comb {
+        if is_prio {
+            o_rdata = prio_rd;
+        } else if i_addr == OFF_PENDING {
+            o_rdata = pending;
+        } else if i_addr == OFF_ENABLE {
+            o_rdata = enable;
+        } else if i_addr == OFF_THRES {
+            o_rdata = threshold;
+        } else if i_addr == OFF_CLAIM {
+            o_rdata = claim_id;
+        } else {
+            o_rdata = 32'h0;
+        }
+    }
+
+    always_ff {
+        if_reset {
+            for i in 0..SRC_COUNT {
+                prio[i] = 32'h0;
+            }
+            threshold = 32'h0;
+            enable    = 32'h0;
+            claimed   = 32'h0;
+        } else {
+            if claim_rd {
+                // The claim transfers the source to the handler; the gateway
+                // holds it back until the completion arrives.
+                for i in 0..SRC_COUNT {
+                    if claim_id == i + 1 {
+                        claimed[i + 1] = 1'b1;
+                    }
+                }
+            }
+            if we {
+                if is_prio {
+                    for i in 0..SRC_COUNT {
+                        if prio_idx == i + 1 {
+                            prio[i] = i_wdata & PRIO_MASK;
+                        }
+                    }
+                } else if i_addr == OFF_ENABLE {
+                    enable = i_wdata & SRC_MASK;
+                } else if i_addr == OFF_THRES {
+                    threshold = i_wdata & PRIO_MASK;
+                } else if i_addr == OFF_CLAIM {
+                    // Completion. A completion for a source this context has
+                    // not enabled is silently discarded, per the spec.
+                    for i in 0..SRC_COUNT {
+                        if i_wdata == i + 1 && enable[i + 1] {
+                            claimed[i + 1] = 1'b0;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

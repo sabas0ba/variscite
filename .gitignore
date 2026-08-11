@@ -1,0 +1,11 @@
+/target/
+/sim/
+/logs/
+/third_party/
+/dependencies/
+/.build/
+*.f
+*.fst
+*.vcd
+*.bin
+coverage.dat

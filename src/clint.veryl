@@ -1,0 +1,86 @@
+/// Core-local interruptor: machine software interrupt (msip) and the machine
+/// timer (mtime / mtimecmp), for a single hart.
+///
+/// Register map, relative to the CLINT base:
+///
+/// | offset   | register     |
+/// |----------|--------------|
+/// | `0x0000` | msip         |
+/// | `0x4000` | mtimecmp low |
+/// | `0x4004` | mtimecmp high|
+/// | `0xbff8` | mtime low    |
+/// | `0xbffc` | mtime high   |
+///
+/// mtime advances by one on every cycle where i_tick is high, so the counter
+/// runs off the platform's real-time reference rather than the core clock.
+///
+/// Bus protocol: i_sel marks a cycle in which the core's held memory request
+/// selects this device. The access completes in that cycle (the SoC returns
+/// ready combinationally), so a write must be committed on the clock edge that
+/// ends it and o_rdata must be valid combinationally.
+module Clint (
+    i_clk: input clock,
+    i_rst: input reset,
+
+    i_sel  : input  logic    ,
+    i_addr : input  logic<16>,
+    i_wstrb: input  logic<4> ,
+    i_wdata: input  logic<32>,
+    o_rdata: output logic<32>,
+
+    i_tick: input logic,
+
+    o_irq_timer: output logic,
+    o_irq_soft : output logic,
+) {
+
+    const OFF_MSIP   : logic<16> = 16'h0000;
+    const OFF_CMP_LO : logic<16> = 16'h4000;
+    const OFF_CMP_HI : logic<16> = 16'h4004;
+    const OFF_TIME_LO: logic<16> = 16'hbff8;
+    const OFF_TIME_HI: logic<16> = 16'hbffc;
+
+    var mtime   : logic<64>;
+    var mtimecmp: logic<64>;
+    var msip    : logic    ;
+
+    let we: logic = i_sel && i_wstrb != 4'h0;
+
+    // mtimecmp is 64-bit but written one half at a time, so software has to
+    // pass through a moment where the two halves do not belong together. The
+    // usual sequence writes the low half to all-ones first, which cannot be
+    // less than mtime and so cannot raise a spurious interrupt.
+    assign o_irq_timer = mtime >= mtimecmp;
+    assign o_irq_soft  = msip;
+
+    always_comb {
+        case i_addr {
+            OFF_MSIP   : o_rdata = {31'h0, msip};
+            OFF_CMP_LO : o_rdata = mtimecmp[31:0];
+            OFF_CMP_HI : o_rdata = mtimecmp[63:32];
+            OFF_TIME_LO: o_rdata = mtime[31:0];
+            OFF_TIME_HI: o_rdata = mtime[63:32];
+            default    : o_rdata = 32'h0;
+        }
+    }
+
+    always_ff {
+        if_reset {
+            mtime    = 64'h0;
+            mtimecmp = 64'hffff_ffff_ffff_ffff;
+            msip     = 1'b0;
+        } else {
+            if i_tick {
+                mtime = mtime + 64'h1;
+            }
+            if we {
+                case i_addr {
+                    OFF_MSIP  : msip            = i_wdata[0];
+                    OFF_CMP_LO: mtimecmp[31:0]  = i_wdata;
+                    OFF_CMP_HI: mtimecmp[63:32] = i_wdata;
+                    default   : {} // mtime is read-only on this platform
+                }
+            }
+        }
+    }
+}

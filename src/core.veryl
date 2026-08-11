@@ -1,0 +1,1121 @@
+/// RV32IMA_Zicsr machine-mode core (multi-cycle, single memory port).
+///
+/// Memory protocol: o_mem_valid is held until i_mem_ready. wstrb == 0 means
+/// read; on ready the read data is sampled from i_mem_rdata.
+module Core (
+    i_clk: input clock,
+    i_rst: input reset,
+
+    o_mem_valid: output logic    ,
+    o_mem_addr : output logic<32>,
+    o_mem_wstrb: output logic<4> ,
+    o_mem_wdata: output logic<32>,
+    i_mem_rdata: input  logic<32>,
+    i_mem_ready: input  logic    ,
+
+    i_irq_timer: input logic,
+    i_irq_soft : input logic,
+    i_irq_ext  : input logic,
+
+    o_retire      : output logic    ,
+    o_retire_pc   : output logic<32>,
+    o_retire_instr: output logic<32>,
+    o_trap        : output logic    ,
+    o_trap_cause  : output logic<32>,
+) {
+
+    enum State: logic<3> {
+        fetch,
+        execute,
+        mem_access,
+        mem_access2,
+        amo_write,
+    }
+
+    // ------------------------------------------------------------------
+    // Architectural state
+    // ------------------------------------------------------------------
+    var state: State         ;
+    var pc   : logic<32>     ;
+    var instr: logic<32>     ;
+    var rf   : logic<32> [32];
+
+    // Privilege state (1 = M, 0 = U; see RvPkg::PRIV_*)
+    var priv: logic;
+
+    // CSR state
+    var csr_mie_bit : logic         ;
+    var csr_mpie_bit: logic         ;
+    var csr_mpp     : logic         ;
+    var csr_mcnten  : logic<32>     ;
+    var csr_mie     : logic<32>     ;
+    var csr_mtvec   : logic<32>     ;
+    var csr_minhibit: logic<32>     ;
+    var csr_mscratch: logic<32>     ;
+    var csr_mepc    : logic<32>     ;
+    var csr_mcause  : logic<32>     ;
+    var csr_mtval   : logic<32>     ;
+    var csr_pmpcfg  : logic<32> [4] ;
+    var csr_pmpaddr : logic<32> [16];
+    var csr_mcycle  : logic<64>     ;
+    var csr_minstret: logic<64>     ;
+
+    // LR/SC reservation
+    var lr_valid: logic    ;
+    var lr_addr : logic<32>;
+
+    // Latched memory operation
+    var q_rd     : logic<5> ;
+    var q_funct3 : logic<3> ;
+    var q_addr   : logic<32>;
+    var q_off    : logic<2> ;
+    var q_wdata  : logic<32>;
+    var q_wstrb  : logic<4> ;
+    var q_wdata2 : logic<32>;
+    var q_wstrb2 : logic<4> ;
+    var q_need2  : logic    ;
+    var q_lo     : logic<32>;
+    var q_is_load: logic    ;
+    var q_is_amo : logic    ;
+    var q_amo_op : logic<5> ;
+    var q_rs2val : logic<32>;
+
+    // ------------------------------------------------------------------
+    // Decode
+    // ------------------------------------------------------------------
+    let opcode: logic<7> = instr[6:0];
+    let rd    : logic<5> = instr[11:7];
+    let funct3: logic<3> = instr[14:12];
+    let rs1   : logic<5> = instr[19:15];
+    let rs2   : logic<5> = instr[24:20];
+    let funct7: logic<7> = instr[31:25];
+    let funct5: logic<5> = instr[31:27];
+
+    let rs1_val: logic<32> = rf[rs1];
+    let rs2_val: logic<32> = rf[rs2];
+
+    let imm_i: logic<32> = {instr[31] repeat 20, instr[31:20]};
+    let imm_s: logic<32> = {instr[31] repeat 20, instr[31:25], instr[11:7]};
+    let imm_b: logic<32> = {instr[31] repeat 19, instr[31], instr[7], instr[30:25], instr[11:8], 1'b0};
+    let imm_u: logic<32> = {instr[31:12], 12'h0};
+    let imm_j: logic<32> = {instr[31] repeat 11, instr[31], instr[19:12], instr[20], instr[30:21], 1'b0};
+
+    let amo_legal: logic = funct5 == 5'b00000 || funct5 == 5'b00001 || funct5 == 5'b00010 || funct5 == 5'b00011
+        || funct5 == 5'b00100 || funct5 == 5'b01000 || funct5 == 5'b01100 || funct5 == 5'b10000 || funct5 == 5'b10100
+        || funct5 == 5'b11000 || funct5 == 5'b11100;
+
+    // ------------------------------------------------------------------
+    // ALU
+    // ------------------------------------------------------------------
+    var alu_op: RvPkg::AluOp    ;
+    var alu_a : logic       <32>;
+    var alu_b : logic       <32>;
+    var alu_y : logic       <32>;
+
+    inst u_alu: Alu (
+        i_op: alu_op,
+        i_a : alu_a ,
+        i_b : alu_b ,
+        o_y : alu_y ,
+    );
+
+    always_comb {
+        alu_a = rs1_val;
+        if opcode == 7'b0110011 {
+            alu_b = rs2_val;
+        } else {
+            alu_b = imm_i;
+        }
+        alu_op = RvPkg::AluOp::op_add;
+        case funct3 {
+            3'b000: {
+                if opcode == 7'b0110011 && funct7[5] {
+                    alu_op = RvPkg::AluOp::op_sub;
+                }
+            }
+            3'b001: alu_op = RvPkg::AluOp::op_sll;
+            3'b010: alu_op = RvPkg::AluOp::op_slt;
+            3'b011: alu_op = RvPkg::AluOp::op_sltu;
+            3'b100: alu_op = RvPkg::AluOp::op_xor;
+            3'b101: {
+                if funct7[5] {
+                    alu_op = RvPkg::AluOp::op_sra;
+                } else {
+                    alu_op = RvPkg::AluOp::op_srl;
+                }
+            }
+            3'b110 : alu_op = RvPkg::AluOp::op_or;
+            3'b111 : alu_op = RvPkg::AluOp::op_and;
+            default: {}
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // M extension (single-cycle combinational)
+    // ------------------------------------------------------------------
+    var md_au  : logic<64>;
+    var md_bu  : logic<64>;
+    var md_prod: logic<64>;
+    var md_divq: logic<32>;
+    var md_divr: logic<32>;
+    var md_res : logic<32>;
+
+    always_comb {
+        if (funct3 == 3'b001 || funct3 == 3'b010) && rs1_val[31] {
+            md_au = {32'hffff_ffff, rs1_val};
+        } else {
+            md_au = {32'h0, rs1_val};
+        }
+        if funct3 == 3'b001 && rs2_val[31] {
+            md_bu = {32'hffff_ffff, rs2_val};
+        } else {
+            md_bu = {32'h0, rs2_val};
+        }
+        md_prod = md_au * md_bu;
+
+        if rs2_val == 32'h0 {
+            md_divq = 32'hffff_ffff;
+            md_divr = rs1_val;
+        } else if funct3[0] == 1'b0 && rs1_val == 32'h8000_0000 && rs2_val == 32'hffff_ffff {
+            // signed overflow: DIV/REM of INT_MIN by -1
+            md_divq = 32'h8000_0000;
+            md_divr = 32'h0;
+        } else if funct3[0] == 1'b0 {
+            md_divq = $signed(rs1_val) / $signed(rs2_val);
+            md_divr = $signed(rs1_val) % $signed(rs2_val);
+        } else {
+            md_divq = rs1_val / rs2_val;
+            md_divr = rs1_val % rs2_val;
+        }
+
+        case funct3 {
+            3'b000 : md_res = md_prod[31:0];
+            3'b001 : md_res = md_prod[63:32];
+            3'b010 : md_res = md_prod[63:32];
+            3'b011 : md_res = md_prod[63:32];
+            3'b100 : md_res = md_divq;
+            3'b101 : md_res = md_divq;
+            3'b110 : md_res = md_divr;
+            3'b111 : md_res = md_divr;
+            default: md_res = 32'h0;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Physical memory protection
+    //
+    // pmp_entry returns {matched, locked, x, w, r} of the lowest-numbered
+    // entry that covers `addr`. Entry priority is by index, so later matches
+    // are ignored. All accesses of this core are naturally contained in one
+    // 4-byte word (misaligned accesses are split), and every PMP boundary is
+    // 4-byte aligned, so checking the word address is exact.
+    // ------------------------------------------------------------------
+    function pmp_entry (
+        addr: input logic<32>,
+    ) -> logic<5> {
+        var awd  : logic<30>;
+        var pa   : logic<30>;
+        var lo   : logic<30>;
+        var mask : logic<30>;
+        var cfg  : logic<8> ;
+        var hit  : logic    ;
+        var found: logic    ;
+        var res  : logic<5> ;
+
+        awd   = addr[31:2];
+        found = 1'b0;
+        res   = 5'h0;
+
+        for i in 0..16 {
+            cfg = csr_pmpcfg[i / 4][8 * (i % 4)+:8];
+            pa  = csr_pmpaddr[i][29:0];
+            if i == 0 {
+                lo = 30'h0;
+            } else {
+                lo = csr_pmpaddr[i - 1][29:0];
+            }
+            hit  = 1'b0;
+            mask = 30'h0;
+            case cfg[4:3] {
+                2'b01: hit = awd >= lo && awd <: pa; // TOR
+                2'b10: hit = awd == pa; // NA4
+                2'b11: {
+                    mask = pa ^ (pa + 30'h1); // NAPOT
+                    hit  = (awd & ~mask) == (pa & ~mask);
+                }
+                default: hit = 1'b0; // OFF
+            }
+            if hit && !found {
+                found = 1'b1;
+                res   = {1'b1, cfg[7], cfg[2:0]};
+            }
+        }
+        return res;
+    }
+
+    /// pmpcfg byte of entry `idx`.
+    function pmp_cfg_of (
+        idx: input logic<4>,
+    ) -> logic<8> {
+        var res: logic<8>;
+        res = 8'h0;
+        for i in 0..16 {
+            if {28'h0, idx} == i {
+                res = csr_pmpcfg[i / 4][8 * (i % 4)+:8];
+            }
+        }
+        return res;
+    }
+
+    /// Address of the data access this instruction would perform. Kept
+    /// separate from the execute block so the PMP lookup does not form a
+    /// combinational loop through it.
+    var dacc_addr: logic<32>;
+
+    always_comb {
+        case opcode {
+            7'b0100011: dacc_addr = rs1_val + imm_s; // STORE
+            7'b0101111: dacc_addr = rs1_val; // AMO / LR / SC
+            default   : dacc_addr = rs1_val + imm_i; // LOAD and everything else
+        }
+    }
+
+    let dacc_lo: logic<32> = {dacc_addr[31:2], 2'b00};
+    let dacc_hi: logic<32> = dacc_lo + 32'h4;
+
+    let pmp_pc: logic<5> = pmp_entry(pc);
+    let pmp_d1: logic<5> = pmp_entry(dacc_lo);
+    let pmp_d2: logic<5> = pmp_entry(dacc_hi);
+
+    /// An unlocked entry constrains U-mode only; when nothing matches, M-mode
+    /// is allowed and U-mode is denied.
+    function pmp_allow (
+        ent : input logic<5>,
+        need: input logic<3>,
+        cur : input logic   ,
+    ) -> logic {
+        var res: logic;
+        if !ent[4] {
+            res = cur == RvPkg::PRIV_M;
+        } else if cur == RvPkg::PRIV_M && !ent[3] {
+            res = 1'b1;
+        } else {
+            res = (ent[2:0] & need) == need;
+        }
+        return res;
+    }
+
+    let pmp_fetch_ok: logic = pmp_allow(pmp_pc, 3'b100, priv);
+    let pmp_d1_r    : logic = pmp_allow(pmp_d1, 3'b001, priv);
+    let pmp_d1_w    : logic = pmp_allow(pmp_d1, 3'b010, priv);
+    let pmp_d2_r    : logic = pmp_allow(pmp_d2, 3'b001, priv);
+    let pmp_d2_w    : logic = pmp_allow(pmp_d2, 3'b010, priv);
+
+    // ------------------------------------------------------------------
+    // Interrupts (machine timer / software / external)
+    // ------------------------------------------------------------------
+    let mip_val : logic<32> = {20'h0, i_irq_ext, 3'h0, i_irq_timer, 3'h0, i_irq_soft, 3'h0};
+    let irq_bits: logic<32> = mip_val & csr_mie;
+    // Machine interrupts are always enabled while running below M-mode.
+    let irq_take: logic = (csr_mie_bit || priv == RvPkg::PRIV_U) && irq_bits != 32'h0;
+
+    var irq_cause : logic<32>;
+    var irq_vector: logic<32>;
+
+    always_comb {
+        // Priority per the privileged spec: external, software, timer.
+        if irq_bits[11] {
+            irq_cause = 32'h8000_000b; // machine external interrupt
+        } else if irq_bits[3] {
+            irq_cause = 32'h8000_0003; // machine software interrupt
+        } else {
+            irq_cause = 32'h8000_0007; // machine timer interrupt
+        }
+        if csr_mtvec[1:0] == 2'b01 {
+            irq_vector = {csr_mtvec[31:2], 2'b00} + {26'h0, irq_cause[3:0], 2'b00};
+        } else {
+            irq_vector = {csr_mtvec[31:2], 2'b00};
+        }
+    }
+
+    let csr_addr  : logic<12> = instr[31:20];
+    let csr_uimm  : logic<32> = {27'h0, rs1};
+    let csr_wr_en : logic     = funct3[1:0] == 2'b01 || rs1 != 5'h0;
+    let csr_ro    : logic     = csr_addr[11:10] == 2'b11;
+    let mstatus_rd: logic<32> = {19'h0, csr_mpp, csr_mpp, 3'h0, csr_mpie_bit, 3'h0, csr_mie_bit, 3'h0};
+
+    // CSR access permission: bits [9:8] hold the lowest privilege that may
+    // access the register; user counters additionally need mcounteren.
+    let csr_is_ucnt: logic = csr_addr[11:8] == 4'hc;
+    let csr_priv_ok: logic = priv == RvPkg::PRIV_M
+        || (csr_addr[9:8] == 2'b00 && (!csr_is_ucnt || csr_mcnten[csr_addr[4:0]]));
+
+    // A locked entry freezes its own cfg byte and address. An address is also
+    // frozen when the next entry is a locked TOR entry, because that entry
+    // uses this address as its lower bound.
+    let pmp_sel     : logic<4> = csr_addr[3:0];
+    let pmp_own_cfg : logic<8> = pmp_cfg_of(pmp_sel);
+    let pmp_next_cfg: logic<8> = pmp_cfg_of(pmp_sel + 4'h1);
+
+    let pmp_addr_locked: logic = pmp_own_cfg[7] || (pmp_sel != 4'hf && pmp_next_cfg[7] && pmp_next_cfg[4:3] == 2'b01);
+
+    var csr_rd_v : logic<32>;
+    var csr_known: logic    ;
+
+    always_comb {
+        csr_known = 1'b1;
+        csr_rd_v  = 32'h0;
+        if csr_addr == 12'h300 {
+            csr_rd_v = mstatus_rd;
+        } else if csr_addr == 12'h301 {
+            csr_rd_v = RvPkg::MISA_VALUE;
+        } else if csr_addr == 12'h304 {
+            csr_rd_v = csr_mie;
+        } else if csr_addr == 12'h305 {
+            csr_rd_v = csr_mtvec;
+        } else if csr_addr == 12'h306 {
+            csr_rd_v = csr_mcnten;
+        } else if csr_addr == 12'h320 {
+            csr_rd_v = csr_minhibit;
+        } else if csr_addr == 12'h340 {
+            csr_rd_v = csr_mscratch;
+        } else if csr_addr == 12'h341 {
+            csr_rd_v = csr_mepc;
+        } else if csr_addr == 12'h342 {
+            csr_rd_v = csr_mcause;
+        } else if csr_addr == 12'h343 {
+            csr_rd_v = csr_mtval;
+        } else if csr_addr == 12'h344 {
+            csr_rd_v = mip_val;
+        } else if csr_addr[11:2] == 10'h0e8 {
+            csr_rd_v = csr_pmpcfg[csr_addr[1:0]];
+        } else if csr_addr[11:4] == 8'h3b {
+            csr_rd_v = csr_pmpaddr[csr_addr[3:0]];
+        } else if csr_addr == 12'h7a0 {
+            csr_rd_v = 32'h1; // tselect: nonzero readback -> no triggers
+        } else if csr_addr == 12'hb00 {
+            csr_rd_v = csr_mcycle[31:0];
+        } else if csr_addr == 12'hb80 {
+            csr_rd_v = csr_mcycle[63:32];
+        } else if csr_addr == 12'hb02 {
+            csr_rd_v = csr_minstret[31:0];
+        } else if csr_addr == 12'hb82 {
+            csr_rd_v = csr_minstret[63:32];
+        } else if csr_addr == 12'hc00 {
+            csr_rd_v = csr_mcycle[31:0];
+        } else if csr_addr == 12'hc80 {
+            csr_rd_v = csr_mcycle[63:32];
+        } else if csr_addr == 12'hc02 {
+            csr_rd_v = csr_minstret[31:0];
+        } else if csr_addr == 12'hc82 {
+            csr_rd_v = csr_minstret[63:32];
+        } else if csr_addr == 12'hf11 || csr_addr == 12'hf12 || csr_addr == 12'hf13 || csr_addr == 12'hf14 {
+            csr_rd_v = 32'h0;
+        } else {
+            csr_known = 1'b0;
+        }
+    }
+
+    var csr_src: logic<32>;
+    var csr_wv : logic<32>;
+
+    always_comb {
+        if funct3[2] {
+            csr_src = csr_uimm;
+        } else {
+            csr_src = rs1_val;
+        }
+        csr_wv = csr_src;
+        if funct3[1:0] == 2'b10 {
+            csr_wv = csr_rd_v | csr_src;
+        }
+        if funct3[1:0] == 2'b11 {
+            csr_wv = csr_rd_v & ~csr_src;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Execute stage (combinational)
+    // ------------------------------------------------------------------
+    var w_next_pc  : logic<32>;
+    var w_wb_en    : logic    ;
+    var w_wb_data  : logic<32>;
+    var w_exc      : logic    ;
+    var w_cause    : logic<32>;
+    var w_tval     : logic<32>;
+    var w_mem_issue: logic    ;
+    var w_mem_addr : logic<32>;
+    var w_mem_wstrb: logic<4> ;
+    var w_mem_wdata: logic<32>;
+    var w_is_load  : logic    ;
+    var w_is_amo   : logic    ;
+    var w_lr_set   : logic    ;
+    var w_sc       : logic    ;
+    var w_csr_we   : logic    ;
+    var w_is_mret  : logic    ;
+    var w_cyc_wr   : logic    ;
+    var w_ir_wr    : logic    ;
+    var w_taken    : logic    ;
+    var w_target   : logic<32>;
+    var w_ea       : logic<32>;
+    var w_wdata2   : logic<32>;
+    var w_wstrb2   : logic<4> ;
+    var w_need2    : logic    ;
+    var w_need_r   : logic    ;
+    var w_need_w   : logic    ;
+    var st_data64  : logic<64>;
+    var st_strb8   : logic<8> ;
+    var st_base    : logic<8> ;
+
+    always_comb {
+        w_next_pc   = pc + 32'h4;
+        w_wb_en     = 1'b0;
+        w_wb_data   = 32'h0;
+        w_exc       = 1'b0;
+        w_cause     = 32'h0;
+        w_tval      = 32'h0;
+        w_mem_issue = 1'b0;
+        w_mem_addr  = 32'h0;
+        w_mem_wstrb = 4'h0;
+        w_mem_wdata = 32'h0;
+        w_is_load   = 1'b0;
+        w_is_amo    = 1'b0;
+        w_lr_set    = 1'b0;
+        w_sc        = 1'b0;
+        w_csr_we    = 1'b0;
+        w_is_mret   = 1'b0;
+        w_cyc_wr    = 1'b0;
+        w_ir_wr     = 1'b0;
+        w_taken     = 1'b0;
+        w_target    = 32'h0;
+        w_ea        = 32'h0;
+        w_wdata2    = 32'h0;
+        w_wstrb2    = 4'h0;
+        w_need2     = 1'b0;
+        w_need_r    = 1'b0;
+        w_need_w    = 1'b0;
+        st_data64   = 64'h0;
+        st_strb8    = 8'h0;
+        st_base     = 8'h0;
+
+        case opcode {
+            7'b0110111: { // LUI
+                w_wb_en   = 1'b1;
+                w_wb_data = imm_u;
+            }
+            7'b0010111: { // AUIPC
+                w_wb_en   = 1'b1;
+                w_wb_data = pc + imm_u;
+            }
+            7'b1101111: { // JAL
+                w_target = pc + imm_j;
+                if w_target[1:0] != 2'b00 {
+                    w_exc   = 1'b1;
+                    w_cause = 32'h0;
+                    w_tval  = w_target;
+                } else {
+                    w_wb_en   = 1'b1;
+                    w_wb_data = pc + 32'h4;
+                    w_next_pc = w_target;
+                }
+            }
+            7'b1100111: { // JALR
+                if funct3 != 3'b000 {
+                    w_exc   = 1'b1;
+                    w_cause = 32'h2;
+                    w_tval  = instr;
+                } else {
+                    w_target = (rs1_val + imm_i) & 32'hffff_fffe;
+                    if w_target[1] {
+                        w_exc   = 1'b1;
+                        w_cause = 32'h0;
+                        w_tval  = w_target;
+                    } else {
+                        w_wb_en   = 1'b1;
+                        w_wb_data = pc + 32'h4;
+                        w_next_pc = w_target;
+                    }
+                }
+            }
+            7'b1100011: { // BRANCH
+                case funct3 {
+                    3'b000 : w_taken = rs1_val == rs2_val;
+                    3'b001 : w_taken = rs1_val != rs2_val;
+                    3'b100 : w_taken = $signed(rs1_val) <: $signed(rs2_val);
+                    3'b101 : w_taken = !($signed(rs1_val) <: $signed(rs2_val));
+                    3'b110 : w_taken = rs1_val <: rs2_val;
+                    3'b111 : w_taken = !(rs1_val <: rs2_val);
+                    default: {
+                        w_exc   = 1'b1;
+                        w_cause = 32'h2;
+                        w_tval  = instr;
+                    }
+                }
+                if !w_exc && w_taken {
+                    w_target = pc + imm_b;
+                    if w_target[1:0] != 2'b00 {
+                        w_exc   = 1'b1;
+                        w_cause = 32'h0;
+                        w_tval  = w_target;
+                    } else {
+                        w_next_pc = w_target;
+                    }
+                }
+            }
+            7'b0000011: { // LOAD (misaligned access supported in hardware)
+                w_ea = dacc_addr;
+                if funct3 == 3'b011 || funct3 == 3'b110 || funct3 == 3'b111 {
+                    w_exc   = 1'b1;
+                    w_cause = 32'h2;
+                    w_tval  = instr;
+                } else {
+                    w_mem_issue = 1'b1;
+                    w_mem_addr  = w_ea;
+                    w_is_load   = 1'b1;
+                    w_need_r    = 1'b1;
+                    w_need2     = (funct3[1:0] == 2'b01 && w_ea[1:0] == 2'b11)
+                        || (funct3[1:0] == 2'b10 && w_ea[1:0] != 2'b00);
+                }
+            }
+            7'b0100011: { // STORE (misaligned access supported in hardware)
+                w_ea = dacc_addr;
+                if funct3 != 3'b000 && funct3 != 3'b001 && funct3 != 3'b010 {
+                    w_exc   = 1'b1;
+                    w_cause = 32'h2;
+                    w_tval  = instr;
+                } else {
+                    case funct3 {
+                        3'b000 : st_base = 8'h01;
+                        3'b001 : st_base = 8'h03;
+                        default: st_base = 8'h0f;
+                    }
+                    st_strb8  = st_base << w_ea[1:0];
+                    st_data64 = {32'h0, rs2_val} << {w_ea[1:0], 3'b000};
+
+                    w_mem_issue = 1'b1;
+                    w_mem_addr  = w_ea;
+                    w_mem_wdata = st_data64[31:0];
+                    w_mem_wstrb = st_strb8[3:0];
+                    w_wdata2    = st_data64[63:32];
+                    w_wstrb2    = st_strb8[7:4];
+                    w_need2     = st_strb8[7:4] != 4'h0;
+                    w_need_w    = 1'b1;
+                }
+            }
+            7'b0010011: { // OP-IMM
+                if (funct3 == 3'b001 && funct7 != 7'b0000000)
+                    || (funct3 == 3'b101 && funct7 != 7'b0000000 && funct7 != 7'b0100000) {
+                    w_exc   = 1'b1;
+                    w_cause = 32'h2;
+                    w_tval  = instr;
+                } else {
+                    w_wb_en   = 1'b1;
+                    w_wb_data = alu_y;
+                }
+            }
+            7'b0110011: { // OP
+                if funct7 == 7'b0000001 {
+                    w_wb_en   = 1'b1;
+                    w_wb_data = md_res;
+                } else if funct7 == 7'b0000000 || (funct7 == 7'b0100000 && (funct3 == 3'b000 || funct3 == 3'b101)) {
+                    w_wb_en   = 1'b1;
+                    w_wb_data = alu_y;
+                } else {
+                    w_exc   = 1'b1;
+                    w_cause = 32'h2;
+                    w_tval  = instr;
+                }
+            }
+            7'b0001111: {} // FENCE / FENCE.I: nop
+            7'b1110011: { // SYSTEM
+                if funct3 == 3'b000 {
+                    if instr == 32'h0000_0073 { // ecall
+                        w_exc = 1'b1;
+                        if priv == RvPkg::PRIV_M {
+                            w_cause = 32'd11; // environment call from M-mode
+                        } else {
+                            w_cause = 32'd8; // environment call from U-mode
+                        }
+                        w_tval = 32'h0;
+                    } else if instr == 32'h0010_0073 { // ebreak
+                        w_exc   = 1'b1;
+                        w_cause = 32'd3;
+                        w_tval  = pc;
+                    } else if instr == 32'h3020_0073 { // mret
+                        if priv == RvPkg::PRIV_M {
+                            w_is_mret = 1'b1;
+                            w_next_pc = csr_mepc;
+                        } else {
+                            w_exc   = 1'b1;
+                            w_cause = 32'h2;
+                            w_tval  = instr;
+                        }
+                    } else if instr == 32'h1050_0073 { // wfi: nop (mstatus.TW = 0)
+                    } else {
+                        w_exc   = 1'b1;
+                        w_cause = 32'h2;
+                        w_tval  = instr;
+                    }
+                } else if funct3 == 3'b100 {
+                    w_exc   = 1'b1;
+                    w_cause = 32'h2;
+                    w_tval  = instr;
+                } else { // Zicsr
+                    if !csr_known || (csr_ro && csr_wr_en) || !csr_priv_ok {
+                        w_exc   = 1'b1;
+                        w_cause = 32'h2;
+                        w_tval  = instr;
+                    } else {
+                        w_wb_en   = 1'b1;
+                        w_wb_data = csr_rd_v;
+                        w_csr_we  = csr_wr_en;
+                        if csr_wr_en && (csr_addr == 12'hb00 || csr_addr == 12'hb80) {
+                            w_cyc_wr = 1'b1;
+                        }
+                        if csr_wr_en && (csr_addr == 12'hb02 || csr_addr == 12'hb82) {
+                            w_ir_wr = 1'b1;
+                        }
+                    }
+                }
+            }
+            7'b0101111: { // AMO
+                w_ea = rs1_val;
+                if funct3 != 3'b010 || !amo_legal {
+                    w_exc   = 1'b1;
+                    w_cause = 32'h2;
+                    w_tval  = instr;
+                } else if funct5 == 5'b00010 && rs2 != 5'h0 {
+                    w_exc   = 1'b1;
+                    w_cause = 32'h2;
+                    w_tval  = instr;
+                } else if w_ea[1:0] != 2'b00 {
+                    w_exc = 1'b1;
+                    if funct5 == 5'b00010 {
+                        w_cause = 32'h4;
+                    } else {
+                        w_cause = 32'h6;
+                    }
+                    w_tval = w_ea;
+                } else if funct5 == 5'b00010 { // LR.W
+                    w_mem_issue = 1'b1;
+                    w_mem_addr  = w_ea;
+                    w_is_load   = 1'b1;
+                    w_lr_set    = 1'b1;
+                    w_need_r    = 1'b1;
+                } else if funct5 == 5'b00011 { // SC.W
+                    w_sc = 1'b1;
+                    if lr_valid && lr_addr == w_ea {
+                        w_mem_issue = 1'b1;
+                        w_mem_addr  = w_ea;
+                        w_mem_wdata = rs2_val;
+                        w_mem_wstrb = 4'b1111;
+                        w_wb_en     = 1'b1;
+                        w_wb_data   = 32'h0;
+                        w_need_w    = 1'b1;
+                    } else {
+                        w_wb_en   = 1'b1;
+                        w_wb_data = 32'h1;
+                    }
+                } else { // AMO read-modify-write
+                    w_mem_issue = 1'b1;
+                    w_mem_addr  = w_ea;
+                    w_is_load   = 1'b1;
+                    w_need_r    = 1'b1;
+                    w_need_w    = 1'b1;
+                    w_is_amo    = 1'b1;
+                }
+            }
+            default: {
+                w_exc   = 1'b1;
+                w_cause = 32'h2;
+                w_tval  = instr;
+            }
+        }
+
+        // PMP check on the data access. Both halves of a split misaligned
+        // access are checked before anything is issued, so a faulting access
+        // never partially completes.
+        if w_mem_issue
+            && !((!w_need_r || pmp_d1_r) && (!w_need_w || pmp_d1_w)
+                && (!w_need2 || ((!w_need_r || pmp_d2_r) && (!w_need_w || pmp_d2_w)))) {
+            w_exc = 1'b1;
+            if w_need_w {
+                w_cause = 32'h7; // store/AMO access fault
+            } else {
+                w_cause = 32'h5; // load access fault
+            }
+            w_tval      = w_mem_addr;
+            w_mem_issue = 1'b0;
+            w_wb_en     = 1'b0;
+            w_lr_set    = 1'b0;
+            w_sc        = 1'b0;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Load data formatting / AMO ALU
+    // ------------------------------------------------------------------
+    var load_sh64: logic<64>;
+    var load_src : logic<32>;
+    var load_val : logic<32>;
+
+    always_comb {
+        if state == State::mem_access2 {
+            load_sh64 = {i_mem_rdata, q_lo} >> {q_off, 3'b000};
+        } else {
+            load_sh64 = {32'h0, i_mem_rdata} >> {q_off, 3'b000};
+        }
+        load_src = load_sh64[31:0];
+        case q_funct3 {
+            3'b000 : load_val = {load_src[7] repeat 24, load_src[7:0]};
+            3'b100 : load_val = {24'h0, load_src[7:0]};
+            3'b001 : load_val = {load_src[15] repeat 16, load_src[15:0]};
+            3'b101 : load_val = {16'h0, load_src[15:0]};
+            default: load_val = load_src;
+        }
+    }
+
+    var amo_result: logic<32>;
+
+    always_comb {
+        case q_amo_op {
+            5'b00000: amo_result = i_mem_rdata + q_rs2val;
+            5'b00001: amo_result = q_rs2val;
+            5'b00100: amo_result = i_mem_rdata ^ q_rs2val;
+            5'b01000: amo_result = i_mem_rdata | q_rs2val;
+            5'b01100: amo_result = i_mem_rdata & q_rs2val;
+            5'b10000: {
+                if $signed(i_mem_rdata) <: $signed(q_rs2val) {
+                    amo_result = i_mem_rdata;
+                } else {
+                    amo_result = q_rs2val;
+                }
+            }
+            5'b10100: {
+                if $signed(i_mem_rdata) <: $signed(q_rs2val) {
+                    amo_result = q_rs2val;
+                } else {
+                    amo_result = i_mem_rdata;
+                }
+            }
+            5'b11000: {
+                if i_mem_rdata <: q_rs2val {
+                    amo_result = i_mem_rdata;
+                } else {
+                    amo_result = q_rs2val;
+                }
+            }
+            5'b11100: {
+                if i_mem_rdata <: q_rs2val {
+                    amo_result = q_rs2val;
+                } else {
+                    amo_result = i_mem_rdata;
+                }
+            }
+            default: amo_result = q_rs2val;
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Memory port / retire outputs
+    // ------------------------------------------------------------------
+    always_comb {
+        o_mem_valid = 1'b0;
+        o_mem_addr  = 32'h0;
+        o_mem_wstrb = 4'h0;
+        o_mem_wdata = 32'h0;
+        case state {
+            State::fetch: {
+                o_mem_valid = !irq_take && pmp_fetch_ok;
+                o_mem_addr  = pc;
+            }
+            State::mem_access: {
+                o_mem_valid = 1'b1;
+                o_mem_addr  = {q_addr[31:2], 2'b00};
+                o_mem_wstrb = q_wstrb;
+                o_mem_wdata = q_wdata;
+            }
+            State::mem_access2: {
+                o_mem_valid = 1'b1;
+                o_mem_addr  = {q_addr[31:2], 2'b00} + 32'h4;
+                o_mem_wstrb = q_wstrb2;
+                o_mem_wdata = q_wdata2;
+            }
+            State::amo_write: {
+                o_mem_valid = 1'b1;
+                o_mem_addr  = {q_addr[31:2], 2'b00};
+                o_mem_wstrb = 4'b1111;
+                o_mem_wdata = q_wdata;
+            }
+            default: {}
+        }
+    }
+
+    let ex_retire  : logic = state == State::execute && !w_exc && !w_mem_issue;
+    let mem_retire : logic = state == State::mem_access && i_mem_ready && !q_is_amo && !q_need2;
+    let mem2_retire: logic = state == State::mem_access2 && i_mem_ready;
+    let amo_retire : logic = state == State::amo_write && i_mem_ready;
+    let retire_now : logic = ex_retire || mem_retire || mem2_retire || amo_retire;
+    let trap_now   : logic = state == State::execute && w_exc;
+    let irq_taken  : logic = state == State::fetch && irq_take && !i_mem_ready;
+    let fetch_fault: logic = state == State::fetch && !irq_take && !pmp_fetch_ok;
+    let cyc_wr_eff : logic = state == State::execute && !w_exc && w_cyc_wr;
+    let ir_wr_eff  : logic = state == State::execute && !w_exc && w_ir_wr;
+
+    // Registered trace outputs: pulse one cycle after the event so the
+    // testbench can sample them cleanly after the clock edge.
+    var r_retire      : logic    ;
+    var r_retire_pc   : logic<32>;
+    var r_retire_instr: logic<32>;
+    var r_trap        : logic    ;
+    var r_trap_cause  : logic<32>;
+
+    assign o_retire       = r_retire;
+    assign o_retire_pc    = r_retire_pc;
+    assign o_retire_instr = r_retire_instr;
+    assign o_trap         = r_trap;
+    assign o_trap_cause   = r_trap_cause;
+
+    // ------------------------------------------------------------------
+    // State update
+    // ------------------------------------------------------------------
+    always_ff {
+        if_reset {
+            state = State::fetch;
+            pc    = RvPkg::RESET_VECTOR;
+            instr = 32'h0;
+            for i in 0..32 {
+                rf[i] = 32'h0;
+            }
+            priv         = RvPkg::PRIV_M;
+            csr_mie_bit  = 1'b0;
+            csr_mpie_bit = 1'b0;
+            csr_mpp      = RvPkg::PRIV_M;
+            csr_mcnten   = 32'h0;
+            csr_mie      = 32'h0;
+            csr_mtvec    = 32'h0;
+            csr_minhibit = 32'h0;
+            csr_mscratch = 32'h0;
+            csr_mepc     = 32'h0;
+            csr_mcause   = 32'h0;
+            csr_mtval    = 32'h0;
+            for i in 0..4 {
+                csr_pmpcfg[i] = 32'h0;
+            }
+            for i in 0..16 {
+                csr_pmpaddr[i] = 32'h0;
+            }
+            csr_mcycle     = 64'h0;
+            csr_minstret   = 64'h0;
+            lr_valid       = 1'b0;
+            lr_addr        = 32'h0;
+            q_rd           = 5'h0;
+            q_funct3       = 3'h0;
+            q_addr         = 32'h0;
+            q_off          = 2'h0;
+            q_wdata        = 32'h0;
+            q_wstrb        = 4'h0;
+            q_wdata2       = 32'h0;
+            q_wstrb2       = 4'h0;
+            q_need2        = 1'b0;
+            q_lo           = 32'h0;
+            q_is_load      = 1'b0;
+            q_is_amo       = 1'b0;
+            q_amo_op       = 5'h0;
+            q_rs2val       = 32'h0;
+            r_retire       = 1'b0;
+            r_retire_pc    = 32'h0;
+            r_retire_instr = 32'h0;
+            r_trap         = 1'b0;
+            r_trap_cause   = 32'h0;
+        } else {
+            if !csr_minhibit[0] && !cyc_wr_eff {
+                csr_mcycle = csr_mcycle + 64'h1;
+            }
+            if retire_now && !csr_minhibit[2] && !ir_wr_eff {
+                csr_minstret = csr_minstret + 64'h1;
+            }
+
+            r_retire = retire_now;
+            if retire_now {
+                r_retire_pc    = pc;
+                r_retire_instr = instr;
+            }
+            r_trap = trap_now || irq_taken || fetch_fault;
+            if trap_now {
+                r_retire_pc  = pc;
+                r_trap_cause = w_cause;
+            }
+            if irq_taken {
+                r_retire_pc  = pc;
+                r_trap_cause = irq_cause;
+            }
+            if fetch_fault {
+                r_retire_pc  = pc;
+                r_trap_cause = 32'h1;
+            }
+
+            case state {
+                State::fetch: {
+                    if i_mem_ready {
+                        instr = i_mem_rdata;
+                        state = State::execute;
+                    } else if irq_take {
+                        csr_mepc     = {pc[31:2], 2'b00};
+                        csr_mcause   = irq_cause;
+                        csr_mtval    = 32'h0;
+                        csr_mpie_bit = csr_mie_bit;
+                        csr_mie_bit  = 1'b0;
+                        csr_mpp      = priv;
+                        priv         = RvPkg::PRIV_M;
+                        pc           = irq_vector;
+                    } else if !pmp_fetch_ok {
+                        csr_mepc     = {pc[31:2], 2'b00};
+                        csr_mcause   = 32'h1; // instruction access fault
+                        csr_mtval    = pc;
+                        csr_mpie_bit = csr_mie_bit;
+                        csr_mie_bit  = 1'b0;
+                        csr_mpp      = priv;
+                        priv         = RvPkg::PRIV_M;
+                        pc           = {csr_mtvec[31:2], 2'b00};
+                    }
+                }
+                State::execute: {
+                    if w_exc {
+                        csr_mepc     = {pc[31:2], 2'b00};
+                        csr_mcause   = w_cause;
+                        csr_mtval    = w_tval;
+                        csr_mpie_bit = csr_mie_bit;
+                        csr_mie_bit  = 1'b0;
+                        csr_mpp      = priv;
+                        priv         = RvPkg::PRIV_M;
+                        pc           = {csr_mtvec[31:2], 2'b00};
+                        state        = State::fetch;
+                    } else {
+                        if w_wb_en && rd != 5'h0 {
+                            rf[rd] = w_wb_data;
+                        }
+                        if w_csr_we {
+                            if csr_addr == 12'h300 {
+                                csr_mie_bit  = csr_wv[3];
+                                csr_mpie_bit = csr_wv[7];
+                                // MPP is WARL: only M (11) and U (00) exist,
+                                // so any other encoding folds down to U.
+                                csr_mpp = csr_wv[12:11] == 2'b11;
+                            } else if csr_addr == 12'h306 {
+                                csr_mcnten = csr_wv & 32'h0000_0007;
+                            } else if csr_addr == 12'h304 {
+                                csr_mie = csr_wv & 32'h0000_0888;
+                            } else if csr_addr == 12'h305 {
+                                csr_mtvec = csr_wv;
+                            } else if csr_addr == 12'h320 {
+                                csr_minhibit = csr_wv & 32'h0000_0005;
+                            } else if csr_addr == 12'h340 {
+                                csr_mscratch = csr_wv;
+                            } else if csr_addr == 12'h341 {
+                                csr_mepc = {csr_wv[31:2], 2'b00};
+                            } else if csr_addr == 12'h342 {
+                                csr_mcause = csr_wv;
+                            } else if csr_addr == 12'h343 {
+                                csr_mtval = csr_wv;
+                            } else if csr_addr[11:2] == 10'h0e8 {
+                                // Reserved bits read as zero; locked bytes
+                                // ignore writes until reset.
+                                for j in 0..4 {
+                                    if !csr_pmpcfg[csr_addr[1:0]][8 * j + 7] {
+                                        csr_pmpcfg[csr_addr[1:0]][8 * j+:8] = csr_wv[8 * j+:8] & 8'h9f;
+                                    }
+                                }
+                            } else if csr_addr[11:4] == 8'h3b {
+                                if !pmp_addr_locked {
+                                    csr_pmpaddr[csr_addr[3:0]] = csr_wv;
+                                }
+                            } else if csr_addr == 12'hb00 {
+                                csr_mcycle[31:0] = csr_wv;
+                            } else if csr_addr == 12'hb80 {
+                                csr_mcycle[63:32] = csr_wv;
+                            } else if csr_addr == 12'hb02 {
+                                csr_minstret[31:0] = csr_wv;
+                            } else if csr_addr == 12'hb82 {
+                                csr_minstret[63:32] = csr_wv;
+                            }
+                            // misa / mip / tselect: writes ignored
+                        }
+                        if w_is_mret {
+                            csr_mie_bit  = csr_mpie_bit;
+                            csr_mpie_bit = 1'b1;
+                            priv         = csr_mpp;
+                            csr_mpp      = RvPkg::PRIV_U;
+                        }
+                        if w_lr_set {
+                            lr_valid = 1'b1;
+                            lr_addr  = w_ea;
+                        }
+                        if w_sc {
+                            lr_valid = 1'b0;
+                        }
+                        if w_mem_issue {
+                            q_rd      = rd;
+                            q_funct3  = funct3;
+                            q_addr    = w_mem_addr;
+                            q_off     = w_mem_addr[1:0];
+                            q_wdata   = w_mem_wdata;
+                            q_wstrb   = w_mem_wstrb;
+                            q_wdata2  = w_wdata2;
+                            q_wstrb2  = w_wstrb2;
+                            q_need2   = w_need2;
+                            q_lo      = 32'h0;
+                            q_is_load = w_is_load;
+                            q_is_amo  = w_is_amo;
+                            q_amo_op  = funct5;
+                            q_rs2val  = rs2_val;
+                            state     = State::mem_access;
+                        } else {
+                            pc    = w_next_pc;
+                            state = State::fetch;
+                        }
+                    }
+                }
+                State::mem_access: {
+                    if i_mem_ready {
+                        if q_is_amo {
+                            if q_rd != 5'h0 {
+                                rf[q_rd] = i_mem_rdata;
+                            }
+                            q_wdata = amo_result;
+                            q_wstrb = 4'b1111;
+                            state   = State::amo_write;
+                        } else if q_need2 {
+                            q_lo  = i_mem_rdata;
+                            state = State::mem_access2;
+                        } else {
+                            if q_is_load && q_rd != 5'h0 {
+                                rf[q_rd] = load_val;
+                            }
+                            pc    = pc + 32'h4;
+                            state = State::fetch;
+                        }
+                    }
+                }
+                State::mem_access2: {
+                    if i_mem_ready {
+                        if q_is_load && q_rd != 5'h0 {
+                            rf[q_rd] = load_val;
+                        }
+                        pc    = pc + 32'h4;
+                        state = State::fetch;
+                    }
+                }
+                State::amo_write: {
+                    if i_mem_ready {
+                        pc    = pc + 32'h4;
+                        state = State::fetch;
+                    }
+                }
+                default: {
+                    state = State::fetch;
+                }
+            }
+        }
+    }
+}
