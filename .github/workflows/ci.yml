@@ -1,12 +1,20 @@
 name: CI
 
 on:
+  # Only the default branch on push: branches with a pull request are covered
+  # by the pull_request event, and running both would double every run.
   push:
+    branches: [main]
   pull_request:
   workflow_dispatch:
   schedule:
     # Weekly, so the long Linux boot regression still runs regularly.
     - cron: '0 3 * * 1'
+
+# A new push supersedes the run in flight for the same ref.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 # The toolchain is pinned and large (oss-cad-suite, xPack GCC, a Spike build),
 # so it is installed under $HOME and cached. scripts/setup_toolchain.sh skips
