@@ -59,6 +59,7 @@ SHA256 を検証している。
 | Verilator | 5.051 (oss-cad-suite 2026-08-10) | YosysHQ/oss-cad-suite-build `oss-cad-suite-linux-x64-20260810.tgz` sha256:4d1137c56eaa7f2fadce7dd7f79b614cc5f7862684bcbe79765bb9a1f9037db0 |
 | riscv-none-elf-gcc | 15.2.0-1 (xPack) | xpack-dev-tools/riscv-none-elf-gcc-xpack `...linux-x64.tar.gz` sha256:aaaa8060c914851a3e5ee1ba82cc3d6f80972f90638a05c6e823a37557a33758 |
 | flex | 2.6.4 (カーネルビルド用) | westes/flex sha256:e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995 |
+| dtc | ディストリの device-tree-compiler (無ければ dgibson/dtc 5ec18c3 = v1.7.2) | Spike のビルドと実行が要求する |
 | Spike | 16c0b60 (riscv-isa-sim) | riscv-software-src/riscv-isa-sim |
 | riscv-tests | 447a5fcb8253627ddb5f6a226f64e43463afcdd5 (env: 6de71edb) | riscv-software-src/riscv-tests |
 | Linux | v6.12 (tag adc218676) | torvalds/linux |

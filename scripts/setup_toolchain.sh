@@ -31,6 +31,7 @@ XPACK_SHA=aaaa8060c914851a3e5ee1ba82cc3d6f80972f90638a05c6e823a37557a33758
 FLEX_VER=v2.6.4
 FLEX_SHA=e87aae032bf07c26f85ac0ed3250998c37621d95f8bd748b31f15b33c45ee995
 
+DTC_COMMIT=5ec18c3 # v1.7.2, only used when the distribution has no dtc
 SPIKE_COMMIT=16c0b60
 RISCV_TESTS_COMMIT=447a5fcb8253627ddb5f6a226f64e43463afcdd5
 LINUX_TAG=v6.12
@@ -79,6 +80,21 @@ if ! command -v flex >/dev/null; then
         make -j"$JOBS" >/dev/null && make install >/dev/null)
 fi
 
+# --- dtc -----------------------------------------------------------------
+# Spike's configure hard-requires dtc, and spike calls it at run time to build
+# its internal DTB. Install it before the Spike build; the kernel tree's copy is
+# no use here because it only exists once the kernel has been built.
+if ! command -v dtc >/dev/null; then
+    if command -v apt-get >/dev/null; then
+        apt-get install -y --no-install-recommends device-tree-compiler
+    fi
+fi
+if ! command -v dtc >/dev/null; then
+    [[ -d "$SRCDIR/dtc" ]] || git clone https://github.com/dgibson/dtc "$SRCDIR/dtc"
+    git -C "$SRCDIR/dtc" checkout --quiet "$DTC_COMMIT"
+    make -C "$SRCDIR/dtc" -j"$JOBS" NO_PYTHON=1 NO_YAML=1 PREFIX=/usr/local install-bin
+fi
+
 # --- Spike (reference model for the cosimulation) ------------------------
 if [[ ! -x "$SRCDIR/spike/build/spike" ]]; then
     [[ -d "$SRCDIR/spike" ]] || git clone https://github.com/riscv-software-src/riscv-isa-sim "$SRCDIR/spike"
@@ -87,12 +103,6 @@ if [[ ! -x "$SRCDIR/spike/build/spike" ]]; then
     (cd "$SRCDIR/spike/build" && ../configure --prefix=/usr/local >/dev/null && make -j"$JOBS")
 fi
 ln -sf "$SRCDIR/spike/build/spike" "$BINDIR/"
-
-# Spike needs dtc at run time; the kernel tree ships one, otherwise install
-# device-tree-compiler from the distribution.
-if ! command -v dtc >/dev/null && [[ -x "$SRCDIR/linux/scripts/dtc/dtc" ]]; then
-    ln -sf "$SRCDIR/linux/scripts/dtc/dtc" "$BINDIR/"
-fi
 
 # --- sources (opt-in) ----------------------------------------------------
 if [[ "$WITH_SOURCES" == "1" ]]; then
