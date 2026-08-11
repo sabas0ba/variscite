@@ -74,6 +74,7 @@ module test_core_smoke;
         .i_mem_ready    (mem_ready),
         .i_irq_timer    (1'b0),
         .i_irq_soft     (1'b0),
+        .i_irq_ext      (1'b0),
         .o_retire       (retire),
         .o_retire_pc    (retire_pc),
         .o_retire_instr (retire_instr),

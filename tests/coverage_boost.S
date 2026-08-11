@@ -104,17 +104,14 @@ RVTEST_CODE_BEGIN
   bne s11, t2, fail
 
   # ---- test 9: PMP register toggling ------------------------------------
+  # Addresses are toggled first and the cfg pattern avoids the L bit, so no
+  # entry gets locked and every register stays writable for the whole test.
   li TESTNUM, 9
   li t0, 0xffffffff
 #define PMP_TOGGLE(csr_name) \
   csrw csr_name, t0; \
   csrr t1, csr_name; \
   csrw csr_name, x0
-  PMP_TOGGLE(pmpcfg0)
-  PMP_TOGGLE(pmpcfg1)
-  PMP_TOGGLE(pmpcfg2)
-  PMP_TOGGLE(pmpcfg3)
-  PMP_TOGGLE(pmpaddr0)
   PMP_TOGGLE(pmpaddr1)
   PMP_TOGGLE(pmpaddr2)
   PMP_TOGGLE(pmpaddr3)
@@ -130,6 +127,10 @@ RVTEST_CODE_BEGIN
   PMP_TOGGLE(pmpaddr13)
   PMP_TOGGLE(pmpaddr14)
   PMP_TOGGLE(pmpaddr15)
+  li t0, 0x1f1f1f1f          # NAPOT|R|W|X in every byte, L clear
+  PMP_TOGGLE(pmpcfg1)
+  PMP_TOGGLE(pmpcfg2)
+  PMP_TOGGLE(pmpcfg3)
   # restore permissive PMP for the remainder
   li t0, -1
   csrw pmpaddr0, t0

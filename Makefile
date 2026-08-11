@@ -6,7 +6,7 @@ SIM          := sim/tb_core
 TESTS        := $(shell scripts/list_tests.sh)
 
 .PHONY: all lint veryl-build veryl-test tb tb-fast isa-build run-isa cov-test \
-        coverage linux-build linux-boot clean
+        coverage cosim linux-build linux-boot clean
 
 all: lint tb isa-build run-isa coverage
 
@@ -44,7 +44,7 @@ isa-build:
 run-isa:
 	scripts/run_all_isa.sh
 
-DIRECTED_TESTS := coverage_boost irq_test umode_test
+DIRECTED_TESTS := coverage_boost irq_test umode_test pmp_test
 
 cov-test:
 	mkdir -p sim logs/isa logs/cov
@@ -57,6 +57,9 @@ cov-test:
 	    scripts/run_isa.sh sim/$$t.elf || { cat logs/isa/$$t.out; exit 1; }; \
 	    cat logs/isa/$$t.out; \
 	done
+
+cosim:
+	scripts/run_cosim.sh
 
 coverage:
 	mkdir -p logs/cov/annotated

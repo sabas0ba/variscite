@@ -15,6 +15,7 @@ module Core (
 
     i_irq_timer: input logic,
     i_irq_soft : input logic,
+    i_irq_ext  : input logic,
 
     o_retire      : output logic    ,
     o_retire_pc   : output logic<32>,
@@ -201,12 +202,119 @@ module Core (
     }
 
     // ------------------------------------------------------------------
-    // CSR read
+    // Physical memory protection
+    //
+    // pmp_entry returns {matched, locked, x, w, r} of the lowest-numbered
+    // entry that covers `addr`. Entry priority is by index, so later matches
+    // are ignored. All accesses of this core are naturally contained in one
+    // 4-byte word (misaligned accesses are split), and every PMP boundary is
+    // 4-byte aligned, so checking the word address is exact.
     // ------------------------------------------------------------------
+    function pmp_entry (
+        addr: input logic<32>,
+    ) -> logic<5> {
+        var awd  : logic<30>;
+        var pa   : logic<30>;
+        var lo   : logic<30>;
+        var mask : logic<30>;
+        var cfg  : logic<8> ;
+        var hit  : logic    ;
+        var found: logic    ;
+        var res  : logic<5> ;
+
+        awd   = addr[31:2];
+        found = 1'b0;
+        res   = 5'h0;
+
+        for i in 0..16 {
+            cfg = csr_pmpcfg[i / 4][8 * (i % 4)+:8];
+            pa  = csr_pmpaddr[i][29:0];
+            if i == 0 {
+                lo = 30'h0;
+            } else {
+                lo = csr_pmpaddr[i - 1][29:0];
+            }
+            hit  = 1'b0;
+            mask = 30'h0;
+            case cfg[4:3] {
+                2'b01: hit = awd >= lo && awd <: pa; // TOR
+                2'b10: hit = awd == pa; // NA4
+                2'b11: {
+                    mask = pa ^ (pa + 30'h1); // NAPOT
+                    hit  = (awd & ~mask) == (pa & ~mask);
+                }
+                default: hit = 1'b0; // OFF
+            }
+            if hit && !found {
+                found = 1'b1;
+                res   = {1'b1, cfg[7], cfg[2:0]};
+            }
+        }
+        return res;
+    }
+
+    /// pmpcfg byte of entry `idx`.
+    function pmp_cfg_of (
+        idx: input logic<4>,
+    ) -> logic<8> {
+        var res: logic<8>;
+        res = 8'h0;
+        for i in 0..16 {
+            if {28'h0, idx} == i {
+                res = csr_pmpcfg[i / 4][8 * (i % 4)+:8];
+            }
+        }
+        return res;
+    }
+
+    /// Address of the data access this instruction would perform. Kept
+    /// separate from the execute block so the PMP lookup does not form a
+    /// combinational loop through it.
+    var dacc_addr: logic<32>;
+
+    always_comb {
+        case opcode {
+            7'b0100011: dacc_addr = rs1_val + imm_s; // STORE
+            7'b0101111: dacc_addr = rs1_val; // AMO / LR / SC
+            default   : dacc_addr = rs1_val + imm_i; // LOAD and everything else
+        }
+    }
+
+    let dacc_lo: logic<32> = {dacc_addr[31:2], 2'b00};
+    let dacc_hi: logic<32> = dacc_lo + 32'h4;
+
+    let pmp_pc: logic<5> = pmp_entry(pc);
+    let pmp_d1: logic<5> = pmp_entry(dacc_lo);
+    let pmp_d2: logic<5> = pmp_entry(dacc_hi);
+
+    /// An unlocked entry constrains U-mode only; when nothing matches, M-mode
+    /// is allowed and U-mode is denied.
+    function pmp_allow (
+        ent : input logic<5>,
+        need: input logic<3>,
+        cur : input logic   ,
+    ) -> logic {
+        var res: logic;
+        if !ent[4] {
+            res = cur == RvPkg::PRIV_M;
+        } else if cur == RvPkg::PRIV_M && !ent[3] {
+            res = 1'b1;
+        } else {
+            res = (ent[2:0] & need) == need;
+        }
+        return res;
+    }
+
+    let pmp_fetch_ok: logic = pmp_allow(pmp_pc, 3'b100, priv);
+    let pmp_d1_r    : logic = pmp_allow(pmp_d1, 3'b001, priv);
+    let pmp_d1_w    : logic = pmp_allow(pmp_d1, 3'b010, priv);
+    let pmp_d2_r    : logic = pmp_allow(pmp_d2, 3'b001, priv);
+    let pmp_d2_w    : logic = pmp_allow(pmp_d2, 3'b010, priv);
+
     // ------------------------------------------------------------------
-    // Interrupts (machine timer / software)
+    // Interrupts (machine timer / software / external)
     // ------------------------------------------------------------------
-    let mip_val : logic<32> = {24'h0, i_irq_timer, 3'h0, i_irq_soft, 3'h0};
+    let mip_val : logic<32> = {20'h0, i_irq_ext, 3'h0, i_irq_timer, 3'h0, i_irq_soft, 3'h0};
     let irq_bits: logic<32> = mip_val & csr_mie;
     // Machine interrupts are always enabled while running below M-mode.
     let irq_take: logic = (csr_mie_bit || priv == RvPkg::PRIV_U) && irq_bits != 32'h0;
@@ -215,7 +323,10 @@ module Core (
     var irq_vector: logic<32>;
 
     always_comb {
-        if irq_bits[3] {
+        // Priority per the privileged spec: external, software, timer.
+        if irq_bits[11] {
+            irq_cause = 32'h8000_000b; // machine external interrupt
+        } else if irq_bits[3] {
             irq_cause = 32'h8000_0003; // machine software interrupt
         } else {
             irq_cause = 32'h8000_0007; // machine timer interrupt
@@ -238,6 +349,15 @@ module Core (
     let csr_is_ucnt: logic = csr_addr[11:8] == 4'hc;
     let csr_priv_ok: logic = priv == RvPkg::PRIV_M
         || (csr_addr[9:8] == 2'b00 && (!csr_is_ucnt || csr_mcnten[csr_addr[4:0]]));
+
+    // A locked entry freezes its own cfg byte and address. An address is also
+    // frozen when the next entry is a locked TOR entry, because that entry
+    // uses this address as its lower bound.
+    let pmp_sel     : logic<4> = csr_addr[3:0];
+    let pmp_own_cfg : logic<8> = pmp_cfg_of(pmp_sel);
+    let pmp_next_cfg: logic<8> = pmp_cfg_of(pmp_sel + 4'h1);
+
+    let pmp_addr_locked: logic = pmp_own_cfg[7] || (pmp_sel != 4'hf && pmp_next_cfg[7] && pmp_next_cfg[4:3] == 2'b01);
 
     var csr_rd_v : logic<32>;
     var csr_known: logic    ;
@@ -341,6 +461,8 @@ module Core (
     var w_wdata2   : logic<32>;
     var w_wstrb2   : logic<4> ;
     var w_need2    : logic    ;
+    var w_need_r   : logic    ;
+    var w_need_w   : logic    ;
     var st_data64  : logic<64>;
     var st_strb8   : logic<8> ;
     var st_base    : logic<8> ;
@@ -370,6 +492,8 @@ module Core (
         w_wdata2    = 32'h0;
         w_wstrb2    = 4'h0;
         w_need2     = 1'b0;
+        w_need_r    = 1'b0;
+        w_need_w    = 1'b0;
         st_data64   = 64'h0;
         st_strb8    = 8'h0;
         st_base     = 8'h0;
@@ -439,7 +563,7 @@ module Core (
                 }
             }
             7'b0000011: { // LOAD (misaligned access supported in hardware)
-                w_ea = rs1_val + imm_i;
+                w_ea = dacc_addr;
                 if funct3 == 3'b011 || funct3 == 3'b110 || funct3 == 3'b111 {
                     w_exc   = 1'b1;
                     w_cause = 32'h2;
@@ -448,12 +572,13 @@ module Core (
                     w_mem_issue = 1'b1;
                     w_mem_addr  = w_ea;
                     w_is_load   = 1'b1;
+                    w_need_r    = 1'b1;
                     w_need2     = (funct3[1:0] == 2'b01 && w_ea[1:0] == 2'b11)
                         || (funct3[1:0] == 2'b10 && w_ea[1:0] != 2'b00);
                 }
             }
             7'b0100011: { // STORE (misaligned access supported in hardware)
-                w_ea = rs1_val + imm_s;
+                w_ea = dacc_addr;
                 if funct3 != 3'b000 && funct3 != 3'b001 && funct3 != 3'b010 {
                     w_exc   = 1'b1;
                     w_cause = 32'h2;
@@ -474,6 +599,7 @@ module Core (
                     w_wdata2    = st_data64[63:32];
                     w_wstrb2    = st_strb8[7:4];
                     w_need2     = st_strb8[7:4] != 4'h0;
+                    w_need_w    = 1'b1;
                 }
             }
             7'b0010011: { // OP-IMM
@@ -575,6 +701,7 @@ module Core (
                     w_mem_addr  = w_ea;
                     w_is_load   = 1'b1;
                     w_lr_set    = 1'b1;
+                    w_need_r    = 1'b1;
                 } else if funct5 == 5'b00011 { // SC.W
                     w_sc = 1'b1;
                     if lr_valid && lr_addr == w_ea {
@@ -584,6 +711,7 @@ module Core (
                         w_mem_wstrb = 4'b1111;
                         w_wb_en     = 1'b1;
                         w_wb_data   = 32'h0;
+                        w_need_w    = 1'b1;
                     } else {
                         w_wb_en   = 1'b1;
                         w_wb_data = 32'h1;
@@ -592,6 +720,8 @@ module Core (
                     w_mem_issue = 1'b1;
                     w_mem_addr  = w_ea;
                     w_is_load   = 1'b1;
+                    w_need_r    = 1'b1;
+                    w_need_w    = 1'b1;
                     w_is_amo    = 1'b1;
                 }
             }
@@ -600,6 +730,25 @@ module Core (
                 w_cause = 32'h2;
                 w_tval  = instr;
             }
+        }
+
+        // PMP check on the data access. Both halves of a split misaligned
+        // access are checked before anything is issued, so a faulting access
+        // never partially completes.
+        if w_mem_issue
+            && !((!w_need_r || pmp_d1_r) && (!w_need_w || pmp_d1_w)
+                && (!w_need2 || ((!w_need_r || pmp_d2_r) && (!w_need_w || pmp_d2_w)))) {
+            w_exc = 1'b1;
+            if w_need_w {
+                w_cause = 32'h7; // store/AMO access fault
+            } else {
+                w_cause = 32'h5; // load access fault
+            }
+            w_tval      = w_mem_addr;
+            w_mem_issue = 1'b0;
+            w_wb_en     = 1'b0;
+            w_lr_set    = 1'b0;
+            w_sc        = 1'b0;
         }
     }
 
@@ -677,7 +826,7 @@ module Core (
         o_mem_wdata = 32'h0;
         case state {
             State::fetch: {
-                o_mem_valid = !irq_take;
+                o_mem_valid = !irq_take && pmp_fetch_ok;
                 o_mem_addr  = pc;
             }
             State::mem_access: {
@@ -709,6 +858,7 @@ module Core (
     let retire_now : logic = ex_retire || mem_retire || mem2_retire || amo_retire;
     let trap_now   : logic = state == State::execute && w_exc;
     let irq_taken  : logic = state == State::fetch && irq_take && !i_mem_ready;
+    let fetch_fault: logic = state == State::fetch && !irq_take && !pmp_fetch_ok;
     let cyc_wr_eff : logic = state == State::execute && !w_exc && w_cyc_wr;
     let ir_wr_eff  : logic = state == State::execute && !w_exc && w_ir_wr;
 
@@ -791,7 +941,7 @@ module Core (
                 r_retire_pc    = pc;
                 r_retire_instr = instr;
             }
-            r_trap = trap_now || irq_taken;
+            r_trap = trap_now || irq_taken || fetch_fault;
             if trap_now {
                 r_retire_pc  = pc;
                 r_trap_cause = w_cause;
@@ -799,6 +949,10 @@ module Core (
             if irq_taken {
                 r_retire_pc  = pc;
                 r_trap_cause = irq_cause;
+            }
+            if fetch_fault {
+                r_retire_pc  = pc;
+                r_trap_cause = 32'h1;
             }
 
             case state {
@@ -815,6 +969,15 @@ module Core (
                         csr_mpp      = priv;
                         priv         = RvPkg::PRIV_M;
                         pc           = irq_vector;
+                    } else if !pmp_fetch_ok {
+                        csr_mepc     = {pc[31:2], 2'b00};
+                        csr_mcause   = 32'h1; // instruction access fault
+                        csr_mtval    = pc;
+                        csr_mpie_bit = csr_mie_bit;
+                        csr_mie_bit  = 1'b0;
+                        csr_mpp      = priv;
+                        priv         = RvPkg::PRIV_M;
+                        pc           = {csr_mtvec[31:2], 2'b00};
                     }
                 }
                 State::execute: {
@@ -856,9 +1019,17 @@ module Core (
                             } else if csr_addr == 12'h343 {
                                 csr_mtval = csr_wv;
                             } else if csr_addr[11:2] == 10'h0e8 {
-                                csr_pmpcfg[csr_addr[1:0]] = csr_wv;
+                                // Reserved bits read as zero; locked bytes
+                                // ignore writes until reset.
+                                for j in 0..4 {
+                                    if !csr_pmpcfg[csr_addr[1:0]][8 * j + 7] {
+                                        csr_pmpcfg[csr_addr[1:0]][8 * j+:8] = csr_wv[8 * j+:8] & 8'h9f;
+                                    }
+                                }
                             } else if csr_addr[11:4] == 8'h3b {
-                                csr_pmpaddr[csr_addr[3:0]] = csr_wv;
+                                if !pmp_addr_locked {
+                                    csr_pmpaddr[csr_addr[3:0]] = csr_wv;
+                                }
                             } else if csr_addr == 12'hb00 {
                                 csr_mcycle[31:0] = csr_wv;
                             } else if csr_addr == 12'hb80 {

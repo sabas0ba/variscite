@@ -3,7 +3,8 @@
 // Memory map:
 //   0x0000_1000 .. 0x0000_ffff  boot ROM (stub: a0=0, a1=0x2000, jump to RAM)
 //   0x0000_2000                 DTB (loaded from +dtb=..., inside ROM window)
-//   0x1000_0000 .. 0x1000_0007  UART (8250 subset: off0 data, off5 LSR)
+//   0x0c00_0000 .. 0x0c3f_ffff  PLIC (one source: UART = 1, one context)
+//   0x1000_0000 .. 0x1000_001f  16550A UART (reg-shift 2, reg-io-width 4)
 //   0x1100_0000                 CLINT msip (bit0 -> machine software irq)
 //   0x1100_4000 / 0x1100_4004   CLINT mtimecmp lo/hi
 //   0x1100_bff8 / 0x1100_bffc   CLINT mtime lo/hi (read only)
@@ -55,6 +56,14 @@ namespace {
 constexpr uint32_t kRomBase = 0x00001000u;
 constexpr uint32_t kRomSize = 0x0000f000u; // 60 KiB
 constexpr uint32_t kDtbAddr = 0x00002000u;
+constexpr uint32_t kPlicBase = 0x0c000000u;
+constexpr uint32_t kPlicSize = 0x00400000u;
+constexpr uint32_t kPlicPrio = 0x0c000000u;   // + 4 * source
+constexpr uint32_t kPlicPend = 0x0c001000u;
+constexpr uint32_t kPlicEnab = 0x0c002000u;   // context 0
+constexpr uint32_t kPlicThres = 0x0c200000u;  // context 0
+constexpr uint32_t kPlicClaim = 0x0c200004u;  // context 0
+constexpr uint32_t kUartIrq = 1u;             // PLIC source number of the UART
 constexpr uint32_t kUartBase = 0x10000000u;
 constexpr uint32_t kClintMsip = 0x11000000u;
 constexpr uint32_t kClintCmpLo = 0x11004000u;
@@ -179,6 +188,7 @@ int main(int argc, char** argv) {
     top->i_mem_rdata = 0;
     top->i_irq_timer = 0;
     top->i_irq_soft = 0;
+    top->i_irq_ext = 0;
     for (int i = 0; i < 4; i++) {
         tick_edges(0);
         tick_edges(1);
@@ -201,6 +211,12 @@ int main(int argc, char** argv) {
     uint8_t u_dll = 1, u_dlm = 0;
     const bool uart_dbg = !plusarg_str("uartdbg").empty();
 
+    // Simplified PLIC: a single context (hart 0, M-mode) and a single
+    // level-triggered source (the UART). A claimed source stops contributing
+    // to the pending set until the handler writes the completion.
+    uint32_t plic_prio = 0, plic_enable = 0, plic_threshold = 0;
+    bool plic_claimed = false;
+
     auto uart_iir = [&]() -> uint32_t {
         uint32_t code;
         if ((u_ier & 0x01u) && !rx_fifo.empty()) {
@@ -213,7 +229,27 @@ int main(int argc, char** argv) {
         return 0xc0u | code; // FIFOs enabled
     };
 
+    // The UART drives its interrupt line whenever IIR reports a cause.
+    auto uart_pending = [&]() -> bool { return (uart_iir() & 0x01u) == 0u; };
+    auto plic_pending = [&]() -> bool {
+        return uart_pending() && (plic_enable >> kUartIrq) & 1u && plic_prio > plic_threshold;
+    };
+
     auto mmio_read = [&](uint32_t addr) -> uint32_t {
+        if (addr >= kPlicBase && addr < kPlicBase + kPlicSize) {
+            if (addr == kPlicPrio + 4 * kUartIrq) return plic_prio;
+            if (addr == kPlicPend) return plic_pending() ? (1u << kUartIrq) : 0u;
+            if (addr == kPlicEnab) return plic_enable;
+            if (addr == kPlicThres) return plic_threshold;
+            if (addr == kPlicClaim) {
+                if (plic_pending() && !plic_claimed) {
+                    plic_claimed = true;
+                    return kUartIrq;
+                }
+                return 0; // nothing to claim
+            }
+            return 0;
+        }
         if (addr >= kUartBase && addr < kUartBase + 0x20) {
             const uint32_t idx = (addr - kUartBase) >> 2;
             uint32_t v = 0;
@@ -247,6 +283,13 @@ int main(int argc, char** argv) {
 
     auto mmio_write = [&](uint32_t addr, uint32_t val, uint32_t wstrb) {
         (void)wstrb;
+        if (addr >= kPlicBase && addr < kPlicBase + kPlicSize) {
+            if (addr == kPlicPrio + 4 * kUartIrq) plic_prio = val;
+            else if (addr == kPlicEnab) plic_enable = val;
+            else if (addr == kPlicThres) plic_threshold = val;
+            else if (addr == kPlicClaim) plic_claimed = false; // completion
+            return;
+        }
         if (addr >= kUartBase && addr < kUartBase + 0x20) {
             const uint32_t idx = (addr - kUartBase) >> 2;
             const uint8_t v = static_cast<uint8_t>(val & 0xffu);
@@ -367,6 +410,7 @@ int main(int argc, char** argv) {
         if (mtimediv <= 1 || (cycles % mtimediv) == 0) mtime++;
         top->i_irq_timer = (mtime >= mtimecmp) ? 1 : 0;
         top->i_irq_soft = msip & 1u;
+        top->i_irq_ext = (plic_pending() && !plic_claimed) ? 1 : 0;
 
         // Poll stdin for UART RX occasionally.
         if ((cycles & 0xfff) == 0) {

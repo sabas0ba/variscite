@@ -16,18 +16,56 @@ JOBS="${JOBS:-$(nproc)}"
 out="$root/sim/linux"
 mkdir -p "$out"
 
-# --- 1. userspace init (must exist before the kernel initramfs build) ----
-# Bare-metal ld has no -pie: link ET_EXEC at VMA 0 without relaxation
-# (keeps all references pc-relative), then patch e_type to ET_DYN so the
-# FDPIC loader relocates the whole image as one block.
-"${CROSS}gcc" -march=rv32ima_zicsr -mabi=ilp32 -c "$root/linux/init.S" \
-    -o "$out/init.o"
-"${CROSS}ld" -T "$root/linux/init.ld" --no-relax -o "$out/init" "$out/init.o"
-printf '\x03' | dd of="$out/init" bs=1 seek=16 conv=notrunc status=none
-if "${CROSS}readelf" -r "$out/init" | grep -q 'R_RISCV'; then
-    echo "error: init contains relocations" >&2
-    exit 1
-fi
+# --- 1. userspace (must exist before the kernel builds the initramfs) ----
+# Bare-metal ld has no -pie: link at a non-zero base without relaxation (which
+# keeps every reference pc-relative), then patch e_type to ET_DYN so the FDPIC
+# loader relocates each image as one block. A zero entry point would be
+# skipped by that loader, hence the non-zero base in linux/init.ld.
+# -fPIE keeps every symbol reference pc-relative (auipc based) so the image
+# works at whatever base the FDPIC loader picks; -mno-relax and -msmall-data-
+# limit=0 stop the assembler from rewriting those into gp-relative accesses,
+# which would need a global pointer this freestanding userland never sets up.
+CFLAGS_USER=(
+    -march=rv32ima_zicsr -mabi=ilp32
+    -Os -ffreestanding -fno-builtin -fno-stack-protector
+    -fPIE -mno-relax -msmall-data-limit=0 -Wall -Wextra
+    -I"$root/linux/user"
+)
+
+build_user() { # <name> <source...>
+    local name="$1"
+    shift
+    local objs=()
+    for src in "$@"; do
+        local obj="$out/$name.$(basename "$src").o"
+        "${CROSS}gcc" "${CFLAGS_USER[@]}" -c "$src" -o "$obj"
+        objs+=("$obj")
+    done
+    "${CROSS}ld" -T "$root/linux/init.ld" --no-relax -o "$out/$name" "${objs[@]}"
+    printf '\x03' | dd of="$out/$name" bs=1 seek=16 conv=notrunc status=none
+    if "${CROSS}readelf" -r "$out/$name" | grep -q 'R_RISCV'; then
+        echo "error: $name contains relocations" >&2
+        exit 1
+    fi
+    if "${CROSS}nm" -u "$out/$name" | grep -q .; then
+        echo "error: $name has undefined symbols (libgcc/libc are not linked)" >&2
+        "${CROSS}nm" -u "$out/$name" >&2
+        exit 1
+    fi
+}
+
+build_user init "$root/linux/user/init.c" "$root/linux/user/spawn.S"
+build_user donut "$root/linux/user/donut.c"
+build_user mandelbrot "$root/linux/user/mandelbrot.c"
+
+cat > "$out/initramfs.desc" <<EOF
+dir /dev 0755 0 0
+nod /dev/console 0600 0 0 c 5 1
+dir /bin 0755 0 0
+file /init $out/init 0755 0 0
+file /bin/donut $out/donut 0755 0 0
+file /bin/mandelbrot $out/mandelbrot 0755 0 0
+EOF
 
 # --- 2. kernel configuration --------------------------------------------
 cd "$LINUX_SRC"
@@ -53,7 +91,7 @@ scripts/config --file .config \
     --enable  POWER_RESET_SYSCON_POWEROFF \
     --enable  MFD_SYSCON \
     --enable  BLK_DEV_INITRD \
-    --set-str INITRAMFS_SOURCE "$root/linux/initramfs.desc" \
+    --set-str INITRAMFS_SOURCE "$out/initramfs.desc" \
     --set-str CMDLINE "earlycon console=ttyS0,1000000 panic=-1" \
     --enable  HZ_100 \
     --disable HZ_250 \

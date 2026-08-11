@@ -50,12 +50,24 @@
             interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>;
         };
 
+        plic0: interrupt-controller@c000000 {
+            compatible = "sifive,plic-1.0.0";
+            reg = <0x0c000000 0x00400000>;
+            #address-cells = <0>;
+            #interrupt-cells = <1>;
+            interrupt-controller;
+            interrupts-extended = <&cpu0_intc 11>;
+            riscv,ndev = <1>;
+        };
+
         uart0: serial@10000000 {
             compatible = "ns16850", "ns16550a";
             reg = <0x10000000 0x100>;
             reg-shift = <2>;
             reg-io-width = <4>;
             clock-frequency = <1000000>;
+            interrupt-parent = <&plic0>;
+            interrupts = <1>;
             status = "okay";
         };
 

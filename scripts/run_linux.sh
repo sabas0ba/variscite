@@ -35,16 +35,18 @@ args=(
     "+dtb=$out/rv32ima_veryl.dtb"
     "+ramsize_mb=64"
     "+mtimediv=64"
-    "+timeout=2000000000"
+    "+timeout=8000000000"
     "+conlog=$root/logs/linux/console.log"
 )
 
 if [[ "$batch" -eq 1 ]]; then
     (
         sleep 25
-        printf 'hello from the veryl core\n'
-        sleep 15
-        printf 'p\n'
+        printf 'mandel\n'
+        sleep 60
+        printf 'donut\n'
+        sleep 180
+        printf 'poweroff\n'
         sleep 60
     ) | "$sim" "${args[@]}" "$@"
 else

@@ -9,6 +9,12 @@
 #define MTIMECMP_HI 0x11004004
 #define MSIP        0x11000000
 
+#define UART_IER    0x10000004
+#define PLIC_PRIO1  0x0c000004
+#define PLIC_ENABLE 0x0c002000
+#define PLIC_THRES  0x0c200000
+#define PLIC_CLAIM  0x0c200004
+
 RVTEST_RV32M
 RVTEST_CODE_BEGIN
 
@@ -75,6 +81,33 @@ RVTEST_CODE_BEGIN
   csrw mtvec, s0
   csrw mie, x0
 
+  # ---- test 5: external interrupt through the PLIC -----------------------
+  # The UART asserts its line as soon as the transmit-holding interrupt is
+  # enabled, which needs no console input and is therefore deterministic.
+  li TESTNUM, 5
+  li s9, 0
+  li t0, PLIC_THRES
+  sw x0, 0(t0)
+  li t0, PLIC_PRIO1
+  li t1, 1
+  sw t1, 0(t0)
+  li t0, PLIC_ENABLE
+  li t1, 2                   # enable source 1
+  sw t1, 0(t0)
+  li t0, UART_IER
+  li t1, 2                   # IER.THRI -> device asserts its interrupt
+  sw t1, 0(t0)
+  li t0, 0x800               # mie.MEIE
+  csrw mie, t0
+  csrsi mstatus, MSTATUS_MIE
+  li t2, 10000
+1:
+  addi t2, t2, -1
+  beqz t2, fail
+  beqz s9, 1b
+  csrci mstatus, MSTATUS_MIE
+  csrw mie, x0
+
   TEST_PASSFAIL
 
   .align 2
@@ -85,7 +118,21 @@ mtvec_handler:
   beq t5, t6, timer_h
   li t6, 0x80000003
   beq t5, t6, soft_h
+  li t6, 0x8000000b
+  beq t5, t6, ext_h
   j fail
+ext_h:
+  li t5, PLIC_CLAIM
+  lw t6, 0(t5)
+  li t5, 1
+  bne t6, t5, fail           # the UART must be the claimed source
+  li t5, UART_IER
+  sw x0, 0(t5)               # deassert the device line
+  li t5, PLIC_CLAIM
+  li t6, 1
+  sw t6, 0(t5)               # completion
+  addi s9, s9, 1
+  mret
 timer_h:
   li t5, MTIMECMP_LO
   li t6, -1
