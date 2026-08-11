@@ -106,11 +106,9 @@ jobs:
           path: logs/
           retention-days: 14
 
-  # Synthesis for the Tang Primer 20K port. Place-and-route is deliberately not
-  # run here: the design does not currently fit the GW2A-18 at a clock the core
-  # closes timing at (see "Tang Primer 20K のビットストリームは未完である" in
-  # README.md), so the job would fail for a known reason. make fpga-sim covers
-  # the RTL itself on every push.
+  # Synthesis for the Arty A7 port, to catch a board top or constraint file that
+  # no longer elaborates. Place-and-route is not run: it needs openXC7, which is
+  # not part of the pinned toolchain. make fpga-sim covers the RTL on every push.
   fpga-synth:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-24.04
@@ -139,9 +137,12 @@ jobs:
           echo "$BINDIR" >> "$GITHUB_PATH"
           echo "$PREFIX/oss-cad-suite/bin" >> "$GITHUB_PATH"
 
-      # Catches a board top or constraint file that no longer elaborates.
+      # The script is called directly rather than through make: it exits 3 to
+      # mean "synthesis finished, no Xilinx place-and-route available", and make
+      # would report its own 2 instead.
       - name: Arty A7 synthesis
-        run: make fpga-arty || [ $? -eq 3 ]  # 3 = synthesis ok, no Xilinx P&R
+        run: |
+          scripts/build_fpga.sh arty || [ $? -eq 3 ]
 
       - name: Upload synthesis logs
         if: always()

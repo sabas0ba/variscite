@@ -1,5 +1,5 @@
-/// Byte-enabled single-port memory, written to infer block RAM on both the
-/// Xilinx and the Gowin flows.
+/// Byte-enabled single-port memory, written so the Xilinx flow infers block
+/// RAM from it.
 ///
 /// Read is synchronous: the word addressed in one cycle appears on o_rdata in
 /// the next. FpgaSoc's bus wrapper is built around that one-cycle latency.

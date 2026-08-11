@@ -285,13 +285,8 @@ toggle の残余 (約 2100/7750 点) は次の構造的要因によるもので�
 
 ## FPGA ポーティング例
 
-`fpga/` に 2 枚のボードへの移植例を置く。合成・配置配線・ビットストリーム生成は
-すべてオープンツールで行い、ベンダ IDE は使わない。
-
-| ボード | FPGA | SoC クロック | ボーレート | フロー |
-|---|---|---|---|---|
-| Sipeed Tang Primer 20K | Gowin GW2A-LV18PG256C8/I7 | 15 MHz (rPLL) | 117188 (host 115200) | yosys + nextpnr-himbaechel + gowin_pack |
-| Digilent Arty A7-35 | Xilinx XC7A35T | 25 MHz (100 MHz ÷4) | 57870 (host 57600) | yosys + nextpnr-xilinx (openXC7) |
+`fpga/` に Digilent Arty A7-35 (Xilinx XC7A35T) への移植例を置く。合成・配置配線・
+ビットストリーム生成はすべてオープンツールで行い、ベンダ IDE は使わない。
 
 ### 構成
 
@@ -305,81 +300,46 @@ src/ram.veryl         byte enable 付き単一ポート RAM ($readmemh で初期
 src/power_on_reset.veryl  コンフィグ後 256 クロックのリセット
 src/fpga_soc.veryl    Soc + ブートスタブ + RAM + UART + mtime tick 生成
 fpga/firmware/        ベアメタルのデモ (UART / CLINT タイマ / PLIC 外部割り込み)
-fpga/arty_a7/         トップ (Veryl) と XDC
-fpga/tang_primer_20k/ トップ (SystemVerilog)、PLL、パラメタ束ね (Veryl)、CST
+fpga/arty_a7/         トップと XDC
 ```
-
-Tang 側のトップだけ SystemVerilog なのは、Gowin の `rPLL` プリミティブを
-インスタンス化する必要があるためである (slang は未知のプリミティブを受け付けず、
-Veryl は外部モジュールを宣言できない)。クロック周波数・RAM サイズ・ボーレート
-分周比は `tang_soc.veryl` に置いてあり、SystemVerilog 側にはピンと PLL と
-リセットしか無い。
 
 メモリマップはシミュレーション側と同一で、CLINT (`0x1100_0000`) と PLIC
 (`0x0c00_0000`) は `Soc` が内部で応答し、`FpgaSoc` はブートスタブ (`0x0000_1000`)、
-UART (`0x1000_0000`)、RAM (`0x8000_0000`) を足す。
+UART (`0x1000_0000`)、RAM (`0x8000_0000`、64KiB) を足す。
+
+| 項目 | 値 |
+|---|---|
+| SoC クロック | 25 MHz (基板の 100 MHz を ÷4) |
+| ボーレート | 57870 (host 57600、+0.5%) 8N1 |
+| RAM | 64 KiB (オンチップ) |
 
 ### 使い方
 
 ```bash
 make fpga-sim         # ボード非依存の検証 (下記)
-make fpga-tang        # -> sim/fpga/tang/soc.fs
-make fpga-tang-prog   # 上記 + openFPGALoader で SRAM 書き込み
 make fpga-arty        # -> sim/fpga/arty/soc.bit
-make fpga-arty-prog
+make fpga-arty-prog   # 上記 + openFPGALoader で書き込み
 ```
 
-Tang Primer 20K は `scripts/setup_toolchain.sh` が入れる oss-cad-suite だけで完結
-する。Arty A7 は配置配線に nextpnr-xilinx が要るが oss-cad-suite に含まれないため、
+合成は `scripts/setup_toolchain.sh` が入れる oss-cad-suite だけで完結する。配置配線
+には nextpnr-xilinx が要るが oss-cad-suite に含まれないため、
 [openXC7](https://github.com/openXC7) を導入し `NEXTPNR_XILINX_CHIPDB` と
-`PRJXRAY_DB` を指定する (指定が無い場合、合成まで実行して案内を出して止まる)。
+`PRJXRAY_DB` を指定する (未指定なら合成まで実行し、案内を出して止まる)。
+
+生成 SV は yosys 標準フロントエンドでは読めない (Veryl が関数引数に
+`input var logic` を出す) ため、合成は `yosys -m slang` + `read_slang` で行う。
 
 ### クロックを下げてある理由
 
 このコアの M 拡張は除算を単一サイクルの組合せ回路で行うため、そこがクリティカル
-パスになる。Gowin GW2A-18C 上での nextpnr 実測は **19.0 MHz** で、ボードの 27 MHz
-水晶では閉じない。Tang は rPLL で 15 MHz を作る。15 MHz は 1 MHz の mtime タイム
-ベースを割り切れ、かつ 19 MHz に対して 21% の余裕がある。
-
-Arty も同じ理由で 100 MHz ÷4 の 25 MHz にしてあるが、Artix-7 での実測値は取れて
-いないため保守的な値である (スラックに余裕があれば `CLK_DIV_LOG2` を 1 に下げて
-50 MHz にできる)。
+パスになる。基板の 100 MHz では到底閉じないので ÷4 の 25 MHz で動かす。Artix-7 での
+実測値は本リポジトリの検証環境では取れていない (配置配線に openXC7 が必要) ため、
+これは保守的な初期値である。スラックに余裕があれば `CLK_DIV_LOG2` を 1 に下げて
+50 MHz にできる。
 
 ボーレートは 16550 の divisor latch をそのまま使い、UART の基準クロックを SoC の
-クロックとしている。誤差は Tang で +1.7%、Arty で +0.5% であり、8N1 のフレーミング
-が吸収できる範囲である (ストップビット時点でのサンプル点のずれが半ビット未満)。
-
-### Tang で FF 分周ではなく PLL を使う理由
-
-SoC のクロックをトップレベルの入力ポート以外から与えると、yosys の abc9 マッピング
-が劣化する。同じ設計・同じツールでの実測は次のとおりである。
-
-| SoC クロックの供給元 | 合成時間 | LUT4 (20736 中) | 配置 |
-|---|---|---|---|
-| トップレベル入力ポート直結 (27 MHz) | 1 分 26 秒 | 17065 (82%) | 成功、Fmax 19.0 MHz |
-| rPLL 出力 (15 MHz) | 43 分 | 20217 (97%) | **失敗** |
-| FF による ÷2 分周 (13.5 MHz) | 30 分以上 | 23329 (112%) | **失敗** |
-
-`-noabc9` も解決にならない。合成は 1 分半に縮むがセル数が 11192 から 17208 に増え、
-やはり配置できない。PLL は FF 分周より大幅にましだが、それでも 97% で
-`Unable to find legal placement` になる (`--placer-heap-beta` と
-`--placer-heap-cell-placement-timeout` を緩めても同じ)。
-
-### Tang Primer 20K のビットストリームは未完である
-
-上記のとおり、**Tang 向けのビットストリームはまだ生成できていない**。27 MHz 直結
-なら配置できるがコアが 19 MHz までしか閉じず、クロックを下げるとマッピングが太って
-配置できない、という板挟みである。
-
-原因は 1 つに帰着する。**M 拡張の除算が単一サイクルの組合せ回路であること**が、
-19 MHz というクリティカルパスと、GW2A-18 に対して大きすぎる面積の両方を作っている。
-除算を多サイクル化すれば、面積が下がって配置できるようになるだけでなく、
-クリティカルパスも解消して 27 MHz 直結で動く公算が高い (そうなればクロック供給が
-トップレベルポート直結に戻るため、abc9 の劣化も PLL も同時に不要になる)。
-
-これはコア自体の変更であり、riscv-tests・コシミュレーション・Linux 起動の再検証を
-伴うため、この FPGA 例の範囲では行っていない。Arty A7-35 は XC7A35T の LUT6 に
-対して余裕があるため、この制約は Tang 固有である。
+クロックとしている。25 MHz からの誤差は +0.5% で、8N1 のフレーミングが吸収できる
+範囲である。
 
 ### 検証状況
 
@@ -387,37 +347,20 @@ SoC のクロックをトップレベルの入力ポート以外から与える�
   コンソールを復号する。設計内部を覗かずボードと同じ 2 本の線だけを見るので、
   ボーレート生成が壊れれば文字化けとして現れる。ファームウェアのバナー、CLINT の
   タイマ割り込み、PLIC 経由の UART 受信割り込み (打鍵のエコー) までを確認する
-- Tang Primer 20K — 合成と配置配線を**実施**し、Fmax 19.0 MHz と使用率を実測した。
-  ただし動作クロックを 19 MHz 以下に下げた構成は配置に失敗するため、
-  **ビットストリームは未生成**である (前節)
-- Arty A7-35 — yosys 合成まで**実施**。配置配線以降は openXC7 が必要で、
-  本リポジトリの検証環境には導入できていない
-- **どちらのボードでも実機動作は未確認である**。ピン配置は Digilent の
-  Arty-A7-35-Master.xdc と LiteX の Tang Primer 20K プラットフォーム定義から
+- yosys 合成 — **実施**。LUT 15644 / 20800、RAMB36 16 / 50、DSP48E1 10 / 90 で
+  XC7A35T に収まる
+- 配置配線とビットストリーム生成 — **未実施**。openXC7 が必要で、本リポジトリの
+  検証環境には導入できていない
+- **実機動作は未確認である**。ピン配置は Digilent の Arty-A7-35-Master.xdc から
   取っており、目視照合しかしていない
-
-### 使用率
-
-Tang Primer 20K、クロックをトップレベル直結にした構成での nextpnr 実測
-(配置に成功する唯一の構成):
-
-| 資源 | 使用 | 全体 | |
-|---|---|---|---|
-| LUT4 | 17065 | 20736 | 82% |
-| DFF | 2626 | 15552 | 16% |
-| BSRAM | 16 | 46 | 34% |
-| MULT36X36 | 3 | 12 | 25% |
-
-Arty A7-35 (yosys 合成後の見積り): LUT 15644 / 20800、RAMB36 16 / 50、
-DSP48E1 10 / 90。XC7A35T は LUT6 なので、同じ論理でも Tang より余裕がある。
 
 ### FPGA 例の制限
 
-- 外部 DRAM は繋いでいないため RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
-  Linux は載らず、ベアメタル専用である
-- Tang は面積が足りていない (上記)。除算器の多サイクル化が本質的な解である
-- Tang 側はコアボードのピンのみを使う。ext-board のボタンや LED は使わないため、
-  どの dock でも動く。リセットは電源投入時のカウンタで生成する
+- 外部 DRAM は繋いでいないため RAM はオンチップの 64KiB のみ。Linux は載らず、
+  ベアメタル専用である
+- 除算器が単一サイクルの組合せ回路であることが動作周波数と面積の両方を律速する。
+  多サイクル化すれば両方改善するが、それはコアの変更になるためこの例では触れて
+  いない
 
 ## 既知の制限
 

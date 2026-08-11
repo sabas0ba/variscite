@@ -2,10 +2,11 @@
 ///
 /// The board's 100 MHz oscillator is well above what this core closes timing
 /// at - the M extension's single-cycle divide is the critical path - so the SoC
-/// runs from a divided clock. The same design reaches 19 MHz on the Gowin part
-/// used for the other port; a quarter of 100 MHz leaves margin on Artix-7
-/// without having been measured there. Lower CLK_DIV_LOG2 to 1 for 50 MHz if a
-/// build reports positive slack.
+/// runs from a divided clock. A quarter of 100 MHz is a deliberately
+/// conservative starting point: place-and-route for this part needs openXC7,
+/// which the repository's verified toolchain does not carry, so the achievable
+/// frequency has not been measured here. Lower CLK_DIV_LOG2 to 1 for 50 MHz if
+/// a build reports positive slack.
 ///
 /// A counter output is used directly as the SoC clock. The open flow routes it
 /// as an ordinary clock net, which is fine at these rates; a Vivado user would

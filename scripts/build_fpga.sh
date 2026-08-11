@@ -1,21 +1,18 @@
 #!/usr/bin/env bash
-# Build (and optionally program) an FPGA bitstream for one of the board ports.
+# Build (and optionally program) the FPGA bitstream for the board port.
 #
-#   scripts/build_fpga.sh tang            # -> sim/fpga/tang/soc.fs
-#   scripts/build_fpga.sh tang --prog     # ... and load it over USB
 #   scripts/build_fpga.sh arty            # -> sim/fpga/arty/soc.bit
+#   scripts/build_fpga.sh arty --prog     # ... and load it over USB
 #
 # Everything runs from the repository root: the board tops name the firmware
 # image as a relative path, because $readmemh resolves against the working
 # directory of whichever tool reads the Verilog.
 #
-# Tang Primer 20K needs only oss-cad-suite (yosys with the slang plugin,
-# nextpnr-himbaechel, gowin_pack, openFPGALoader), which
-# scripts/setup_toolchain.sh already installs.
-#
-# Arty A7 additionally needs the Xilinx place and route tools, which are not in
-# oss-cad-suite. Install openXC7 (nextpnr-xilinx, prjxray-db and a chipdb for
-# the part) and point PRJXRAY_DB and NEXTPNR_XILINX_CHIPDB at them.
+# Synthesis needs only oss-cad-suite (yosys with the slang plugin), which
+# scripts/setup_toolchain.sh already installs. Place and route needs the Xilinx
+# open tools, which oss-cad-suite does not carry: install openXC7
+# (nextpnr-xilinx, prjxray-db and a chipdb for the part) and point PRJXRAY_DB
+# and NEXTPNR_XILINX_CHIPDB at them.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -49,74 +46,26 @@ need() {
     command -v "$1" >/dev/null || { echo "error: $1 not found in PATH${2:+ ($2)}" >&2; exit 2; }
 }
 
-# Two frontends, on purpose:
-#
-#   - the Veryl output needs the slang plugin, because Veryl emits
-#     `input var logic` in function arguments and yosys's own parser rejects it;
-#   - the hand-written board files go through yosys's parser, because slang
-#     elaborates strictly and does not know vendor primitives such as rPLL.
-#
-# synth_gowin keeps abc9. -noabc9 is not an alternative: it maps the same
-# design to 17208 cells instead of 11192, and the placer then cannot find a
-# legal placement on a part this full.
-synth() { # <slang-top> <slang-extra> <verilog-files> <synth-command> <logfile>
-    local read_v=""
-    [[ -n "$3" ]] && read_v="read_verilog -sv $3"
+# yosys cannot parse the generated SystemVerilog with its own frontend: Veryl
+# emits `input var logic` in function arguments, which needs the slang plugin.
+synth() { # <top> <extra-source> <synth-command> <logfile>
     yosys -m slang -p "
         read_slang --top $1 ${RTL[*]} $2
-        $read_v
-        $4
-    " > "$5" 2>&1 || { tail -30 "$5" >&2; exit 1; }
+        $3
+    " > "$4" 2>&1 || { tail -30 "$4" >&2; exit 1; }
 }
 
 veryl build
 scripts/build_fw.sh
 
 case "$board" in
-tang)
-    out="sim/fpga/tang"
-    mkdir -p "$out"
-    need yosys
-    need nextpnr-himbaechel
-    need gowin_pack
-
-    echo "==> synthesis"
-    synth rv32ima_TangSoc target/tang_primer_20k/tang_soc.sv \
-        "fpga/tang_primer_20k/pll.sv fpga/tang_primer_20k/top.sv" \
-        "synth_gowin -top TangPrimer20k -json $out/soc.json" \
-        "$out/yosys.log"
-
-    echo "==> place and route"
-    nextpnr-himbaechel \
-        --device GW2A-LV18PG256C8/I7 \
-        --vopt family=GW2A-18C \
-        --vopt cst=fpga/tang_primer_20k/tang_primer_20k.cst \
-        --json "$out/soc.json" \
-        --write "$out/soc_pnr.json" \
-        --freq 15 > "$out/nextpnr.log" 2>&1 \
-        || { tail -30 "$out/nextpnr.log" >&2; exit 1; }
-    grep -E "Max frequency|Device utilisation" -A22 "$out/nextpnr.log" | head -30 || true
-
-    echo "==> bitstream"
-    gowin_pack -d GW2A-18C -o "$out/soc.fs" "$out/soc_pnr.json" > "$out/pack.log" 2>&1 \
-        || { tail -20 "$out/pack.log" >&2; exit 1; }
-    ls -l "$out/soc.fs"
-
-    if [[ "$prog" -eq 1 ]]; then
-        need openFPGALoader
-        # SRAM load: the design is gone at power off. Add -f to write it to the
-        # board's flash instead.
-        openFPGALoader -b tangprimer20k "$out/soc.fs"
-    fi
-    ;;
-
 arty)
     out="sim/fpga/arty"
     mkdir -p "$out"
     need yosys
 
     echo "==> synthesis"
-    synth rv32ima_ArtyA7 target/arty_a7/top.sv "" \
+    synth rv32ima_ArtyA7 target/arty_a7/top.sv \
         "synth_xilinx -family xc7 -top rv32ima_ArtyA7 -json $out/soc.json" \
         "$out/yosys.log"
     grep -A28 "Printing statistics" "$out/yosys.log" | tail -30 || true
@@ -166,7 +115,7 @@ MSG
     ;;
 
 *)
-    echo "usage: $0 {tang|arty} [--prog]" >&2
+    echo "usage: $0 arty [--prog]" >&2
     exit 2
     ;;
 esac
