@@ -283,6 +283,85 @@ toggle の残余 (約 2100/7750 点) は次の構造的要因によるもので�
   bit30:22 が常時 0
 - 命令フォーマット由来の定数: imm_u 下位 12bit 等
 
+## FPGA ポーティング例
+
+`fpga/` に Digilent Arty A7-35 (Xilinx XC7A35T) への移植例を置く。合成・配置配線・
+ビットストリーム生成はすべてオープンツールで行い、ベンダ IDE は使わない。
+
+### 構成
+
+シミュレーション用テストベンチ (`tb/tb_core.cpp`) が C++ で提供していた ROM / RAM /
+UART を RTL 化し、`FpgaSoc` にまとめてある。ボード側に残るのはピンとクロックだけで
+ある。
+
+```
+src/uart.veryl        16550 互換 UART (8N1、16 byte 受信 FIFO、divisor latch)
+src/ram.veryl         byte enable 付き単一ポート RAM ($readmemh で初期化)
+src/power_on_reset.veryl  コンフィグ後 256 クロックのリセット
+src/fpga_soc.veryl    Soc + ブートスタブ + RAM + UART + mtime tick 生成
+fpga/firmware/        ベアメタルのデモ (UART / CLINT タイマ / PLIC 外部割り込み)
+fpga/arty_a7/         トップと XDC
+```
+
+メモリマップはシミュレーション側と同一で、CLINT (`0x1100_0000`) と PLIC
+(`0x0c00_0000`) は `Soc` が内部で応答し、`FpgaSoc` はブートスタブ (`0x0000_1000`)、
+UART (`0x1000_0000`)、RAM (`0x8000_0000`、64KiB) を足す。
+
+| 項目 | 値 |
+|---|---|
+| SoC クロック | 25 MHz (基板の 100 MHz を ÷4) |
+| ボーレート | 57870 (host 57600、+0.5%) 8N1 |
+| RAM | 64 KiB (オンチップ) |
+
+### 使い方
+
+```bash
+make fpga-sim         # ボード非依存の検証 (下記)
+make fpga-arty        # -> sim/fpga/arty/soc.bit
+make fpga-arty-prog   # 上記 + openFPGALoader で書き込み
+```
+
+合成は `scripts/setup_toolchain.sh` が入れる oss-cad-suite だけで完結する。配置配線
+には nextpnr-xilinx が要るが oss-cad-suite に含まれないため、
+[openXC7](https://github.com/openXC7) を導入し `NEXTPNR_XILINX_CHIPDB` と
+`PRJXRAY_DB` を指定する (未指定なら合成まで実行し、案内を出して止まる)。
+
+生成 SV は yosys 標準フロントエンドでは読めない (Veryl が関数引数に
+`input var logic` を出す) ため、合成は `yosys -m slang` + `read_slang` で行う。
+
+### クロックを下げてある理由
+
+このコアの M 拡張は除算を単一サイクルの組合せ回路で行うため、そこがクリティカル
+パスになる。基板の 100 MHz では到底閉じないので ÷4 の 25 MHz で動かす。Artix-7 での
+実測値は本リポジトリの検証環境では取れていない (配置配線に openXC7 が必要) ため、
+これは保守的な初期値である。スラックに余裕があれば `CLK_DIV_LOG2` を 1 に下げて
+50 MHz にできる。
+
+ボーレートは 16550 の divisor latch をそのまま使い、UART の基準クロックを SoC の
+クロックとしている。25 MHz からの誤差は +0.5% で、8N1 のフレーミングが吸収できる
+範囲である。
+
+### 検証状況
+
+- `make fpga-sim` — **実施**。`FpgaSoc` を Verilator で回し、UART の送信線から
+  コンソールを復号する。設計内部を覗かずボードと同じ 2 本の線だけを見るので、
+  ボーレート生成が壊れれば文字化けとして現れる。ファームウェアのバナー、CLINT の
+  タイマ割り込み、PLIC 経由の UART 受信割り込み (打鍵のエコー) までを確認する
+- yosys 合成 — **実施**。LUT 15644 / 20800、RAMB36 16 / 50、DSP48E1 10 / 90 で
+  XC7A35T に収まる
+- 配置配線とビットストリーム生成 — **未実施**。openXC7 が必要で、本リポジトリの
+  検証環境には導入できていない
+- **実機動作は未確認である**。ピン配置は Digilent の Arty-A7-35-Master.xdc から
+  取っており、目視照合しかしていない
+
+### FPGA 例の制限
+
+- 外部 DRAM は繋いでいないため RAM はオンチップの 64KiB のみ。Linux は載らず、
+  ベアメタル専用である
+- 除算器が単一サイクルの組合せ回路であることが動作周波数と面積の両方を律速する。
+  多サイクル化すれば両方改善するが、それはコアの変更になるためこの例では触れて
+  いない
+
 ## 既知の制限
 
 - S-mode と MMU は実装しない (NOMMU 構成のみ)

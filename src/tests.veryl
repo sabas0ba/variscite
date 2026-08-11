@@ -569,3 +569,144 @@ module test_soc_decode;
     end
 endmodule
 }}}
+
+#[test(test_uart)]
+embed (inline) sv{{{
+// Loopback test: the transmit line is fed straight back into the receiver, so
+// a byte only survives if the shifter, the baud generator and the sampler all
+// agree on the bit rate.
+module test_uart;
+    logic        clk = 0;
+    logic        rst = 1;
+    logic        sel = 0;
+    logic [2:0]  addr = 0;
+    logic [3:0]  wstrb = 0;
+    logic [31:0] wdata = 0;
+    logic [31:0] rdata;
+    logic        tx;
+    logic        irq;
+
+    // RESET_DIV = 1: a bit is 16 clocks, which keeps the test short.
+    rv32ima_Uart #(.RESET_DIV (1)) dut (
+        .i_clk   (clk),
+        .i_rst   (rst),
+        .i_sel   (sel),
+        .i_addr  (addr),
+        .i_wstrb (wstrb),
+        .i_wdata (wdata),
+        .o_rdata (rdata),
+        .i_rx    (tx),   // loopback
+        .o_tx    (tx),
+        .o_irq   (irq)
+    );
+
+    always #5 clk = ~clk;
+
+    task automatic bus_write(input logic [2:0] a, input logic [31:0] d);
+        @(negedge clk);
+        sel = 1; addr = a; wstrb = 4'hf; wdata = d;
+        @(posedge clk);
+        @(negedge clk);
+        sel = 0; wstrb = 4'h0;
+    endtask
+
+    task automatic bus_read(input logic [2:0] a, output logic [31:0] d);
+        @(negedge clk);
+        sel = 1; addr = a; wstrb = 4'h0;
+        #1 d = rdata;
+        @(posedge clk);
+        @(negedge clk);
+        sel = 0;
+    endtask
+
+    task automatic send_byte(input logic [7:0] c);
+        logic [31:0] v;
+        bus_read(3'd5, v);
+        assert (v[5]) else $fatal(1, "THR not empty before the write: lsr=%h", v);
+        bus_write(3'd0, {24'h0, c});
+        bus_read(3'd5, v);
+        assert (!v[5]) else $fatal(1, "LSR still reports THR empty while sending");
+        // 10 bits at 16 clocks each, plus slack for the sampler.
+        repeat (200) @(posedge clk);
+    endtask
+
+    task automatic expect_byte(input logic [7:0] c);
+        logic [31:0] v;
+        bus_read(3'd5, v);
+        assert (v[0]) else $fatal(1, "no received data: lsr=%h", v);
+        bus_read(3'd0, v);
+        assert (v[7:0] == c) else $fatal(1, "received %h, expected %h", v[7:0], c);
+    endtask
+
+    logic [31:0] v;
+
+    initial begin
+        repeat (2) @(posedge clk);
+        @(negedge clk);
+        rst = 0;
+
+        bus_write(3'd3, 32'h03); // 8N1
+
+        // Idle: nothing received, transmitter free, no interrupt requested
+        // while IER is clear.
+        bus_read(3'd5, v);
+        assert (v[0] == 1'b0) else $fatal(1, "data ready out of reset");
+        assert (v[5] && v[6]) else $fatal(1, "transmitter busy out of reset");
+        assert (irq == 1'b0) else $fatal(1, "irq with IER clear");
+
+        send_byte(8'h41); // 'A'
+        expect_byte(8'h41);
+
+        // The byte is consumed, so the flag drops again.
+        bus_read(3'd5, v);
+        assert (v[0] == 1'b0) else $fatal(1, "data ready still set after the read");
+
+        // A byte with a different bit pattern, to catch a stuck shifter.
+        send_byte(8'h5a);
+        expect_byte(8'h5a);
+
+        // The FIFO holds bytes that arrive faster than they are read.
+        send_byte(8'h31);
+        send_byte(8'h32);
+        send_byte(8'h33);
+        expect_byte(8'h31);
+        expect_byte(8'h32);
+        expect_byte(8'h33);
+
+        // Receive interrupts are reported through IER and IIR.
+        bus_write(3'd1, 32'h01); // IER.RDI
+        send_byte(8'h37);
+        assert (irq == 1'b1) else $fatal(1, "no irq for a received byte");
+        bus_read(3'd2, v);
+        assert (v[3:0] == 4'h4) else $fatal(1, "iir=%h, expected received-data", v);
+        expect_byte(8'h37);
+        assert (irq == 1'b0) else $fatal(1, "irq still asserted after the read");
+        bus_write(3'd1, 32'h00);
+
+        // The divisor latches are behind DLAB and read back.
+        bus_write(3'd3, 32'h83); // DLAB
+        bus_write(3'd0, 32'h11);
+        bus_write(3'd1, 32'h22);
+        bus_read(3'd0, v);
+        assert (v[7:0] == 8'h11) else $fatal(1, "dll=%h", v[7:0]);
+        bus_read(3'd1, v);
+        assert (v[7:0] == 8'h22) else $fatal(1, "dlm=%h", v[7:0]);
+        bus_write(3'd3, 32'h03); // clear DLAB
+
+        // The scratch register is plain storage; MSR is wired on.
+        bus_write(3'd7, 32'ha5);
+        bus_read(3'd7, v);
+        assert (v[7:0] == 8'ha5) else $fatal(1, "scr=%h", v[7:0]);
+        bus_read(3'd6, v);
+        assert (v[7:0] == 8'hb0) else $fatal(1, "msr=%h", v[7:0]);
+
+        $display("test_uart OK");
+        $finish;
+    end
+
+    initial begin
+        repeat (20000) @(posedge clk);
+        $fatal(1, "timeout");
+    end
+endmodule
+}}}

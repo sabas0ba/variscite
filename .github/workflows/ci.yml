@@ -1,5 +1,9 @@
 name: CI
 
+# Third-party actions are pinned to a commit, not a tag: a tag can be moved to
+# point at different code, and these run with access to the repository. The
+# trailing comment is the release each SHA corresponds to.
+
 on:
   # Only the default branch on push: branches with a pull request are covered
   # by the pull_request event, and running both would double every run.
@@ -30,7 +34,7 @@ jobs:
     timeout-minutes: 120
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       # dtc is what Spike's configure looks for; taking the distribution
       # package keeps the setup script from having to build it.
@@ -40,7 +44,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends device-tree-compiler
 
       - name: Cache toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             /home/runner/toolchain
@@ -48,7 +52,7 @@ jobs:
           key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/setup_toolchain.sh') }}
 
       - name: Cache riscv-tests
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: third_party/riscv-tests
           key: riscv-tests-${{ hashFiles('scripts/setup_toolchain.sh') }}
@@ -89,12 +93,63 @@ jobs:
       - name: Spike cosimulation
         run: make cosim
 
+      # Board-independent check of the FPGA platform: the RTL UART, RAM and
+      # boot stub, exercised by the demo firmware over a decoded serial line.
+      - name: FPGA platform
+        run: make fpga-sim
+
       - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: logs
           path: logs/
+          retention-days: 14
+
+  # Synthesis for the Arty A7 port, to catch a board top or constraint file that
+  # no longer elaborates. Place-and-route is not run: it needs openXC7, which is
+  # not part of the pinned toolchain. make fpga-sim covers the RTL on every push.
+  fpga-synth:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install host packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends device-tree-compiler
+
+      - name: Cache toolchain
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            /home/runner/toolchain
+            /home/runner/src/spike
+          key: toolchain-${{ runner.os }}-${{ hashFiles('scripts/setup_toolchain.sh') }}
+
+      - name: Install toolchain
+        run: |
+          mkdir -p "$BINDIR"
+          scripts/setup_toolchain.sh
+          echo "$BINDIR" >> "$GITHUB_PATH"
+          echo "$PREFIX/oss-cad-suite/bin" >> "$GITHUB_PATH"
+
+      # The script is called directly rather than through make: it exits 3 to
+      # mean "synthesis finished, no Xilinx place-and-route available", and make
+      # would report its own 2 instead.
+      - name: Arty A7 synthesis
+        run: |
+          scripts/build_fpga.sh arty || [ $? -eq 3 ]
+
+      - name: Upload synthesis logs
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fpga-synth
+          path: sim/fpga/arty/*.log
           retention-days: 14
 
   # The kernel build plus an ~8e8 cycle boot is far longer than the checks
@@ -105,7 +160,7 @@ jobs:
     timeout-minutes: 240
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
       - name: Install host packages
         run: |
@@ -113,7 +168,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends device-tree-compiler flex bison bc
 
       - name: Cache toolchain
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
         with:
           path: |
             /home/runner/toolchain
@@ -134,7 +189,7 @@ jobs:
 
       - name: Upload console log
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: linux-console
           path: logs/linux/
