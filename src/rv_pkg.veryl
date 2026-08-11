@@ -1,0 +1,26 @@
+/// Common definitions for the RV32IMA_Zicsr core.
+package RvPkg {
+    /// Boot ROM address. The testbench serves a stub here that sets a0/a1
+    /// and jumps to the RAM base (0x8000_0000).
+    const RESET_VECTOR: logic<32> = 32'h0000_1000;
+
+    /// misa: RV32 (MXL=1), extensions A, I, M, U
+    const MISA_VALUE: logic<32> = 32'h4010_1101;
+
+    /// Privilege levels implemented by this core (M and U only).
+    const PRIV_U: logic = 1'b0;
+    const PRIV_M: logic = 1'b1;
+
+    enum AluOp: logic<4> {
+        op_add,
+        op_sub,
+        op_sll,
+        op_slt,
+        op_sltu,
+        op_xor,
+        op_srl,
+        op_sra,
+        op_or,
+        op_and,
+    }
+}

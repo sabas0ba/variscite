@@ -1,0 +1,32 @@
+/// Arithmetic logic unit for RV32I register-register / register-immediate ops.
+module Alu (
+    i_op: input  RvPkg::AluOp    ,
+    i_a : input  logic       <32>,
+    i_b : input  logic       <32>,
+    o_y : output logic       <32>,
+) {
+    always_comb {
+        o_y = 32'h0;
+        case i_op {
+            RvPkg::AluOp::op_add: o_y = i_a + i_b;
+            RvPkg::AluOp::op_sub: o_y = i_a - i_b;
+            RvPkg::AluOp::op_sll: o_y = i_a << i_b[4:0];
+            RvPkg::AluOp::op_slt: {
+                if $signed(i_a) <: $signed(i_b) {
+                    o_y = 32'h1;
+                }
+            }
+            RvPkg::AluOp::op_sltu: {
+                if i_a <: i_b {
+                    o_y = 32'h1;
+                }
+            }
+            RvPkg::AluOp::op_xor: o_y = i_a ^ i_b;
+            RvPkg::AluOp::op_srl: o_y = i_a >> i_b[4:0];
+            RvPkg::AluOp::op_sra: o_y = $signed(i_a) >>> i_b[4:0];
+            RvPkg::AluOp::op_or : o_y = i_a | i_b;
+            RvPkg::AluOp::op_and: o_y = i_a & i_b;
+            default             : o_y = 32'h0;
+        }
+    }
+}
