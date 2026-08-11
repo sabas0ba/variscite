@@ -287,8 +287,10 @@ toggle の残余 (約 2100/7750 点) は次の構造的要因によるもので�
 
 - S-mode と MMU は実装しない (NOMMU 構成のみ)
 - Sdtrig (デバッグトリガ) は実装しない。tselect は非ゼロを返し「トリガ無し」を示す
-- PLIC は 1 コンテキスト固定。ソース数は `SRC_COUNT` で変えられるが、レジスタは
-  32bit 1 ワード分なので最大 31 ソース。既定は本プラットフォームの 1 (UART)
+- PLIC は 1 コンテキスト固定。`Plic` のソース数は `SRC_COUNT` パラメータで変えられる
+  が、レジスタは 32bit 1 ワード分なので最大 31 ソース。本プラットフォームが繋ぐ本数は
+  `RvPkg::PLIC_SRC_COUNT` (= 1、UART) で、SoC の `i_irq_src` 幅と PLIC への引き渡しは
+  そこから決まる。DTS の `riscv,ndev` と揃えること
 - CLINT は 1 hart 固定。mtime の歩進はプラットフォームが `i_mtime_tick` で与える
 - UART と SYSCON はテストベンチ (C++) 側のままである
 
