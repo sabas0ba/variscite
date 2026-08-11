@@ -1,0 +1,81 @@
+/dts-v1/;
+
+/ {
+    #address-cells = <1>;
+    #size-cells = <1>;
+    compatible = "rv32ima-veryl";
+    model = "rv32ima-veryl";
+
+    chosen {
+        bootargs = "earlycon console=ttyS0,1000000 panic=-1";
+        stdout-path = &uart0;
+    };
+
+    memory@80000000 {
+        device_type = "memory";
+        reg = <0x80000000 0x04000000>;
+    };
+
+    cpus {
+        #address-cells = <1>;
+        #size-cells = <0>;
+        timebase-frequency = <1000000>;
+
+        cpu@0 {
+            device_type = "cpu";
+            compatible = "riscv";
+            reg = <0>;
+            status = "okay";
+            riscv,isa = "rv32ima_zicsr_zifencei";
+            riscv,isa-base = "rv32i";
+            riscv,isa-extensions = "i", "m", "a", "zicsr", "zifencei";
+
+            cpu0_intc: interrupt-controller {
+                #interrupt-cells = <1>;
+                compatible = "riscv,cpu-intc";
+                interrupt-controller;
+            };
+        };
+    };
+
+    soc {
+        #address-cells = <1>;
+        #size-cells = <1>;
+        compatible = "simple-bus";
+        ranges;
+
+        clint@11000000 {
+            compatible = "sifive,clint0", "riscv,clint0";
+            reg = <0x11000000 0x10000>;
+            interrupts-extended = <&cpu0_intc 3>, <&cpu0_intc 7>;
+        };
+
+        uart0: serial@10000000 {
+            compatible = "ns16850", "ns16550a";
+            reg = <0x10000000 0x100>;
+            reg-shift = <2>;
+            reg-io-width = <4>;
+            clock-frequency = <1000000>;
+            status = "okay";
+        };
+
+        syscon0: syscon@11100000 {
+            compatible = "syscon";
+            reg = <0x11100000 0x1000>;
+        };
+
+        poweroff {
+            compatible = "syscon-poweroff";
+            regmap = <&syscon0>;
+            offset = <0>;
+            value = <0x5555>;
+        };
+
+        reboot {
+            compatible = "syscon-reboot";
+            regmap = <&syscon0>;
+            offset = <0>;
+            value = <0x7777>;
+        };
+    };
+};

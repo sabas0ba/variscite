@@ -27,4 +27,4 @@ fi
     "+tohost=$tohost" \
     "+logfile=$root/logs/isa/$t.trace.log" \
     "+covfile=$root/logs/cov/$t.dat" \
-    "$@" > "$root/logs/isa/$t.out" 2>&1
+    "$@" > "$root/logs/isa/$t.out" 2>&1 < /dev/null

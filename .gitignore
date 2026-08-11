@@ -2,6 +2,7 @@
 /sim/
 /logs/
 /third_party/
+/.build/
 *.fst
 *.bin
 coverage.dat

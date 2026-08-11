@@ -72,6 +72,8 @@ module test_core_smoke;
         .o_mem_wdata    (mem_wdata),
         .i_mem_rdata    (mem_rdata),
         .i_mem_ready    (mem_ready),
+        .i_irq_timer    (1'b0),
+        .i_irq_soft     (1'b0),
         .o_retire       (retire),
         .o_retire_pc    (retire_pc),
         .o_retire_instr (retire_instr),
@@ -108,6 +110,10 @@ module test_core_smoke;
                 end
                 if (mem_addr == 32'h8000_1000) got_sum  <= mem_wdata;
                 if (mem_addr == 32'h8000_1004) got_prod <= mem_wdata;
+            end else if (mem_addr == 32'h0000_1000) begin
+                mem_rdata <= 32'h800002b7; // boot stub: lui t0, 0x80000
+            end else if (mem_addr == 32'h0000_1004) begin
+                mem_rdata <= 32'h00028067; // boot stub: jalr x0, 0(t0)
             end else begin
                 mem_rdata <= mem[widx];
             end

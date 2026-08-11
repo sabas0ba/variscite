@@ -13,6 +13,9 @@ module Core (
     i_mem_rdata: input  logic<32>,
     i_mem_ready: input  logic    ,
 
+    i_irq_timer: input logic,
+    i_irq_soft : input logic,
+
     o_retire      : output logic    ,
     o_retire_pc   : output logic<32>,
     o_retire_instr: output logic<32>,
@@ -36,9 +39,14 @@ module Core (
     var instr: logic<32>     ;
     var rf   : logic<32> [32];
 
+    // Privilege state (1 = M, 0 = U; see RvPkg::PRIV_*)
+    var priv: logic;
+
     // CSR state
     var csr_mie_bit : logic         ;
     var csr_mpie_bit: logic         ;
+    var csr_mpp     : logic         ;
+    var csr_mcnten  : logic<32>     ;
     var csr_mie     : logic<32>     ;
     var csr_mtvec   : logic<32>     ;
     var csr_minhibit: logic<32>     ;
@@ -195,11 +203,41 @@ module Core (
     // ------------------------------------------------------------------
     // CSR read
     // ------------------------------------------------------------------
+    // ------------------------------------------------------------------
+    // Interrupts (machine timer / software)
+    // ------------------------------------------------------------------
+    let mip_val : logic<32> = {24'h0, i_irq_timer, 3'h0, i_irq_soft, 3'h0};
+    let irq_bits: logic<32> = mip_val & csr_mie;
+    // Machine interrupts are always enabled while running below M-mode.
+    let irq_take: logic = (csr_mie_bit || priv == RvPkg::PRIV_U) && irq_bits != 32'h0;
+
+    var irq_cause : logic<32>;
+    var irq_vector: logic<32>;
+
+    always_comb {
+        if irq_bits[3] {
+            irq_cause = 32'h8000_0003; // machine software interrupt
+        } else {
+            irq_cause = 32'h8000_0007; // machine timer interrupt
+        }
+        if csr_mtvec[1:0] == 2'b01 {
+            irq_vector = {csr_mtvec[31:2], 2'b00} + {26'h0, irq_cause[3:0], 2'b00};
+        } else {
+            irq_vector = {csr_mtvec[31:2], 2'b00};
+        }
+    }
+
     let csr_addr  : logic<12> = instr[31:20];
     let csr_uimm  : logic<32> = {27'h0, rs1};
     let csr_wr_en : logic     = funct3[1:0] == 2'b01 || rs1 != 5'h0;
     let csr_ro    : logic     = csr_addr[11:10] == 2'b11;
-    let mstatus_rd: logic<32> = {19'h0, 2'b11, 3'h0, csr_mpie_bit, 3'h0, csr_mie_bit, 3'h0};
+    let mstatus_rd: logic<32> = {19'h0, csr_mpp, csr_mpp, 3'h0, csr_mpie_bit, 3'h0, csr_mie_bit, 3'h0};
+
+    // CSR access permission: bits [9:8] hold the lowest privilege that may
+    // access the register; user counters additionally need mcounteren.
+    let csr_is_ucnt: logic = csr_addr[11:8] == 4'hc;
+    let csr_priv_ok: logic = priv == RvPkg::PRIV_M
+        || (csr_addr[9:8] == 2'b00 && (!csr_is_ucnt || csr_mcnten[csr_addr[4:0]]));
 
     var csr_rd_v : logic<32>;
     var csr_known: logic    ;
@@ -215,6 +253,8 @@ module Core (
             csr_rd_v = csr_mie;
         } else if csr_addr == 12'h305 {
             csr_rd_v = csr_mtvec;
+        } else if csr_addr == 12'h306 {
+            csr_rd_v = csr_mcnten;
         } else if csr_addr == 12'h320 {
             csr_rd_v = csr_minhibit;
         } else if csr_addr == 12'h340 {
@@ -226,7 +266,7 @@ module Core (
         } else if csr_addr == 12'h343 {
             csr_rd_v = csr_mtval;
         } else if csr_addr == 12'h344 {
-            csr_rd_v = 32'h0; // mip: no interrupt sources
+            csr_rd_v = mip_val;
         } else if csr_addr[11:2] == 10'h0e8 {
             csr_rd_v = csr_pmpcfg[csr_addr[1:0]];
         } else if csr_addr[11:4] == 8'h3b {
@@ -463,18 +503,28 @@ module Core (
             7'b0001111: {} // FENCE / FENCE.I: nop
             7'b1110011: { // SYSTEM
                 if funct3 == 3'b000 {
-                    if instr == 32'h0000_0073 { // ecall (M-mode)
-                        w_exc   = 1'b1;
-                        w_cause = 32'd11;
-                        w_tval  = 32'h0;
+                    if instr == 32'h0000_0073 { // ecall
+                        w_exc = 1'b1;
+                        if priv == RvPkg::PRIV_M {
+                            w_cause = 32'd11; // environment call from M-mode
+                        } else {
+                            w_cause = 32'd8; // environment call from U-mode
+                        }
+                        w_tval = 32'h0;
                     } else if instr == 32'h0010_0073 { // ebreak
                         w_exc   = 1'b1;
                         w_cause = 32'd3;
                         w_tval  = pc;
                     } else if instr == 32'h3020_0073 { // mret
-                        w_is_mret = 1'b1;
-                        w_next_pc = csr_mepc;
-                    } else if instr == 32'h1050_0073 { // wfi: nop
+                        if priv == RvPkg::PRIV_M {
+                            w_is_mret = 1'b1;
+                            w_next_pc = csr_mepc;
+                        } else {
+                            w_exc   = 1'b1;
+                            w_cause = 32'h2;
+                            w_tval  = instr;
+                        }
+                    } else if instr == 32'h1050_0073 { // wfi: nop (mstatus.TW = 0)
                     } else {
                         w_exc   = 1'b1;
                         w_cause = 32'h2;
@@ -485,7 +535,7 @@ module Core (
                     w_cause = 32'h2;
                     w_tval  = instr;
                 } else { // Zicsr
-                    if !csr_known || (csr_ro && csr_wr_en) {
+                    if !csr_known || (csr_ro && csr_wr_en) || !csr_priv_ok {
                         w_exc   = 1'b1;
                         w_cause = 32'h2;
                         w_tval  = instr;
@@ -627,7 +677,7 @@ module Core (
         o_mem_wdata = 32'h0;
         case state {
             State::fetch: {
-                o_mem_valid = 1'b1;
+                o_mem_valid = !irq_take;
                 o_mem_addr  = pc;
             }
             State::mem_access: {
@@ -658,14 +708,23 @@ module Core (
     let amo_retire : logic = state == State::amo_write && i_mem_ready;
     let retire_now : logic = ex_retire || mem_retire || mem2_retire || amo_retire;
     let trap_now   : logic = state == State::execute && w_exc;
+    let irq_taken  : logic = state == State::fetch && irq_take && !i_mem_ready;
     let cyc_wr_eff : logic = state == State::execute && !w_exc && w_cyc_wr;
     let ir_wr_eff  : logic = state == State::execute && !w_exc && w_ir_wr;
 
-    assign o_retire       = retire_now;
-    assign o_retire_pc    = pc;
-    assign o_retire_instr = instr;
-    assign o_trap         = trap_now;
-    assign o_trap_cause   = w_cause;
+    // Registered trace outputs: pulse one cycle after the event so the
+    // testbench can sample them cleanly after the clock edge.
+    var r_retire      : logic    ;
+    var r_retire_pc   : logic<32>;
+    var r_retire_instr: logic<32>;
+    var r_trap        : logic    ;
+    var r_trap_cause  : logic<32>;
+
+    assign o_retire       = r_retire;
+    assign o_retire_pc    = r_retire_pc;
+    assign o_retire_instr = r_retire_instr;
+    assign o_trap         = r_trap;
+    assign o_trap_cause   = r_trap_cause;
 
     // ------------------------------------------------------------------
     // State update
@@ -678,8 +737,11 @@ module Core (
             for i in 0..32 {
                 rf[i] = 32'h0;
             }
+            priv         = RvPkg::PRIV_M;
             csr_mie_bit  = 1'b0;
             csr_mpie_bit = 1'b0;
+            csr_mpp      = RvPkg::PRIV_M;
+            csr_mcnten   = 32'h0;
             csr_mie      = 32'h0;
             csr_mtvec    = 32'h0;
             csr_minhibit = 32'h0;
@@ -693,24 +755,29 @@ module Core (
             for i in 0..16 {
                 csr_pmpaddr[i] = 32'h0;
             }
-            csr_mcycle   = 64'h0;
-            csr_minstret = 64'h0;
-            lr_valid     = 1'b0;
-            lr_addr      = 32'h0;
-            q_rd         = 5'h0;
-            q_funct3     = 3'h0;
-            q_addr       = 32'h0;
-            q_off        = 2'h0;
-            q_wdata      = 32'h0;
-            q_wstrb      = 4'h0;
-            q_wdata2     = 32'h0;
-            q_wstrb2     = 4'h0;
-            q_need2      = 1'b0;
-            q_lo         = 32'h0;
-            q_is_load    = 1'b0;
-            q_is_amo     = 1'b0;
-            q_amo_op     = 5'h0;
-            q_rs2val     = 32'h0;
+            csr_mcycle     = 64'h0;
+            csr_minstret   = 64'h0;
+            lr_valid       = 1'b0;
+            lr_addr        = 32'h0;
+            q_rd           = 5'h0;
+            q_funct3       = 3'h0;
+            q_addr         = 32'h0;
+            q_off          = 2'h0;
+            q_wdata        = 32'h0;
+            q_wstrb        = 4'h0;
+            q_wdata2       = 32'h0;
+            q_wstrb2       = 4'h0;
+            q_need2        = 1'b0;
+            q_lo           = 32'h0;
+            q_is_load      = 1'b0;
+            q_is_amo       = 1'b0;
+            q_amo_op       = 5'h0;
+            q_rs2val       = 32'h0;
+            r_retire       = 1'b0;
+            r_retire_pc    = 32'h0;
+            r_retire_instr = 32'h0;
+            r_trap         = 1'b0;
+            r_trap_cause   = 32'h0;
         } else {
             if !csr_minhibit[0] && !cyc_wr_eff {
                 csr_mcycle = csr_mcycle + 64'h1;
@@ -719,11 +786,35 @@ module Core (
                 csr_minstret = csr_minstret + 64'h1;
             }
 
+            r_retire = retire_now;
+            if retire_now {
+                r_retire_pc    = pc;
+                r_retire_instr = instr;
+            }
+            r_trap = trap_now || irq_taken;
+            if trap_now {
+                r_retire_pc  = pc;
+                r_trap_cause = w_cause;
+            }
+            if irq_taken {
+                r_retire_pc  = pc;
+                r_trap_cause = irq_cause;
+            }
+
             case state {
                 State::fetch: {
                     if i_mem_ready {
                         instr = i_mem_rdata;
                         state = State::execute;
+                    } else if irq_take {
+                        csr_mepc     = {pc[31:2], 2'b00};
+                        csr_mcause   = irq_cause;
+                        csr_mtval    = 32'h0;
+                        csr_mpie_bit = csr_mie_bit;
+                        csr_mie_bit  = 1'b0;
+                        csr_mpp      = priv;
+                        priv         = RvPkg::PRIV_M;
+                        pc           = irq_vector;
                     }
                 }
                 State::execute: {
@@ -733,6 +824,8 @@ module Core (
                         csr_mtval    = w_tval;
                         csr_mpie_bit = csr_mie_bit;
                         csr_mie_bit  = 1'b0;
+                        csr_mpp      = priv;
+                        priv         = RvPkg::PRIV_M;
                         pc           = {csr_mtvec[31:2], 2'b00};
                         state        = State::fetch;
                     } else {
@@ -743,6 +836,11 @@ module Core (
                             if csr_addr == 12'h300 {
                                 csr_mie_bit  = csr_wv[3];
                                 csr_mpie_bit = csr_wv[7];
+                                // MPP is WARL: only M (11) and U (00) exist,
+                                // so any other encoding folds down to U.
+                                csr_mpp = csr_wv[12:11] == 2'b11;
+                            } else if csr_addr == 12'h306 {
+                                csr_mcnten = csr_wv & 32'h0000_0007;
                             } else if csr_addr == 12'h304 {
                                 csr_mie = csr_wv & 32'h0000_0888;
                             } else if csr_addr == 12'h305 {
@@ -775,6 +873,8 @@ module Core (
                         if w_is_mret {
                             csr_mie_bit  = csr_mpie_bit;
                             csr_mpie_bit = 1'b1;
+                            priv         = csr_mpp;
+                            csr_mpp      = RvPkg::PRIV_U;
                         }
                         if w_lr_set {
                             lr_valid = 1'b1;
