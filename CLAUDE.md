@@ -4,13 +4,33 @@ Claude Code が本リポジトリで作業する際の補足。構成、メモ�
 固定バージョン、ビルド・検証手順、カバレッジ基準、Linux ブート手順は
 [README.md](README.md) に定義してある。重複記述はしない。
 
+## 初回セットアップ
+
+本リポジトリは git bundle で受け渡されることがある。その場合は次で復元する。
+
+```bash
+git clone variscite.bundle rv32ima_veryl
+cd rv32ima_veryl
+```
+
+ツールチェーンと外部ソースは git 管理外である。以下で固定バージョンを導入する。
+`/opt` と `/usr/local/bin` に書き込み Spike をソースビルドするため、コンテナ内で
+実行すること。
+
+```bash
+WITH_SOURCES=1 scripts/setup_toolchain.sh
+```
+
+導入されるもの (バージョンと SHA256 は README.md の表と一致させること):
+Veryl / Verilator (oss-cad-suite) / xPack riscv-none-elf-gcc / flex / Spike、
+および `third_party/riscv-tests` と Linux ソース。
+
 ## 作業環境
 
 - 検証済み環境は README.md 記載の固定バイナリ構成 (Veryl v0.20.3 / Verilator 5.051
   / xPack riscv-none-elf-gcc 15.2.0-1)。nix が利用可能な環境では `flake.nix` の
   devShell を用いる (未評価につき、初回利用時は動作確認から行うこと)
-- `third_party/riscv-tests` と Linux ソースは git 管理外。無い場合は README.md の
-  手順でリビジョン固定で取得する
+- Linux ソースの位置は `LINUX_SRC` で指定する (既定 `~/src/linux`)
 
 ## 変更後の検証
 

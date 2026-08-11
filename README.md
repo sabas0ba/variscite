@@ -82,7 +82,14 @@ make linux-build # Linux カーネル / ユーザランド / DTB のビルド
 make linux-boot  # Linux 起動 (バッチ入力で mandel/donut/poweroff)
 ```
 
-riscv-tests は次で取得する (リビジョンは上表に固定):
+ツールチェーンと外部ソース (riscv-tests、Linux) は次で導入する。`/opt` と
+`/usr/local/bin` に書き込み Spike をソースビルドするため、コンテナ内で実行すること。
+
+```bash
+WITH_SOURCES=1 scripts/setup_toolchain.sh
+```
+
+riscv-tests のみ手動で取得する場合 (リビジョンは上表に固定):
 
 ```bash
 git clone --recurse-submodules https://github.com/riscv-software-src/riscv-tests \
