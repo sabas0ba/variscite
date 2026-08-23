@@ -1,0 +1,60 @@
+/// Sipeed Tang Primer 20K (Gowin GW2A-LV18PG256C8/I7).
+///
+/// Only core-board pins are used - the 27 MHz crystal and the serial pair that
+/// reaches the USB bridge - so the port works whichever dock is fitted. Reset
+/// comes from an internal counter rather than a button, because the buttons
+/// live on the dock.
+///
+/// The SoC runs straight from the crystal, with no PLL and no divider. That
+/// was not possible while the M extension divided in a single combinational
+/// cycle: the core then closed at 19.0 MHz on this part, and every way of
+/// lowering the clock made things worse rather than better, because yosys's
+/// abc9 mapping degrades badly when the SoC clock comes from anything other
+/// than a top-level port. With the divide sequential the critical path is gone
+/// and the clock can stay a port.
+///
+/// Build with `make fpga-tang`, program with `make fpga-tang-prog`.
+module TangPrimer20k (
+    i_clk: input clock, // H11, 27 MHz
+
+    i_uart_rx: input  logic, // T13, host -> FPGA
+    o_uart_tx: output logic, // M11, FPGA -> host
+) {
+
+    const CLK_HZ: u32 = 27_000_000;
+
+    /// 27 MHz / (16 * 15) = 112500 baud, 2.3% under 115200. 8N1 absorbs that:
+    /// by the stop bit the sample point has drifted 22% of a bit, well inside
+    /// the half-bit margin.
+    const UART_DIV: u32 = 15;
+
+    var por_rst: logic;
+
+    inst u_por: PowerOnReset (
+        i_clk: i_clk  ,
+        o_rst: por_rst,
+    );
+
+    let rst: reset = por_rst as reset;
+
+    inst u_soc: FpgaSoc #(
+        CLK_HZ   : CLK_HZ                 ,
+        RAM_WORDS: 8192                   , // 32 KiB
+        RAM_INIT : "sim/fpga/firmware.hex",
+        UART_DIV : UART_DIV               ,
+        // The GW2A-18C does not hold the core with all 16 PMP entries: their
+        // matching logic is three instances of a per-entry comparison and
+        // accounts for about a fifth of the fabric. The firmware here is
+        // machine mode only and leaves PMP at its permissive default, so four
+        // entries are enough to keep the feature demonstrable. See README.md.
+        PMP_ENTRIES: 4,
+    ) (
+        i_clk: i_clk,
+        i_rst: rst  ,
+
+        i_uart_rx: i_uart_rx,
+        o_uart_tx: o_uart_tx,
+
+        o_retire: _,
+    );
+}

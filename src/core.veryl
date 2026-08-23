@@ -2,7 +2,18 @@
 ///
 /// Memory protocol: o_mem_valid is held until i_mem_ready. wstrb == 0 means
 /// read; on ready the read data is sampled from i_mem_rdata.
-module Core (
+module Core #(
+    /// Number of PMP entries that are implemented. The privileged spec leaves
+    /// the count to the implementation and requires unimplemented entries to
+    /// read as zero, so a board build can trade the matching logic - three
+    /// instances of a per-entry comparison, and by far the largest block of
+    /// combinational logic in this core - against what it actually needs.
+    /// Writes above the limit are ignored, which leaves those registers at
+    /// their reset value and lets synthesis fold them and their matching logic
+    /// away entirely. Must be a multiple of four so that whole pmpcfg words
+    /// are implemented, and at most 16.
+    param PMP_ENTRIES: u32 = 16,
+) (
     i_clk: input clock,
     i_rst: input reset,
 
@@ -45,21 +56,26 @@ module Core (
     var priv: logic;
 
     // CSR state
-    var csr_mie_bit : logic         ;
-    var csr_mpie_bit: logic         ;
-    var csr_mpp     : logic         ;
-    var csr_mcnten  : logic<32>     ;
-    var csr_mie     : logic<32>     ;
-    var csr_mtvec   : logic<32>     ;
-    var csr_minhibit: logic<32>     ;
-    var csr_mscratch: logic<32>     ;
-    var csr_mepc    : logic<32>     ;
-    var csr_mcause  : logic<32>     ;
-    var csr_mtval   : logic<32>     ;
-    var csr_pmpcfg  : logic<32> [4] ;
-    var csr_pmpaddr : logic<32> [16];
-    var csr_mcycle  : logic<64>     ;
-    var csr_minstret: logic<64>     ;
+    var csr_mie_bit : logic    ;
+    var csr_mpie_bit: logic    ;
+    var csr_mpp     : logic    ;
+    var csr_mcnten  : logic<32>;
+    var csr_mie     : logic<32>;
+    var csr_mtvec   : logic<32>;
+    var csr_minhibit: logic<32>;
+    var csr_mscratch: logic<32>;
+    var csr_mepc    : logic<32>;
+    var csr_mcause  : logic<32>;
+    var csr_mtval   : logic<32>;
+
+    /// pmpcfg packs four entries per word.
+    const PMP_CFG_WORDS: u32 = PMP_ENTRIES / 4;
+
+    var csr_pmpcfg : logic<32> [PMP_CFG_WORDS];
+    var csr_pmpaddr: logic<32> [PMP_ENTRIES]  ;
+
+    var csr_mcycle  : logic<64>;
+    var csr_minstret: logic<64>;
 
     // LR/SC reservation
     var lr_valid: logic    ;
@@ -256,7 +272,7 @@ module Core (
         found = 1'b0;
         res   = 5'h0;
 
-        for i in 0..16 {
+        for i in 0..PMP_ENTRIES {
             cfg = csr_pmpcfg[i / 4][8 * (i % 4)+:8];
             pa  = csr_pmpaddr[i][29:0];
             if i == 0 {
@@ -289,7 +305,7 @@ module Core (
     ) -> logic<8> {
         var res: logic<8>;
         res = 8'h0;
-        for i in 0..16 {
+        for i in 0..PMP_ENTRIES {
             if {28'h0, idx} == i {
                 res = csr_pmpcfg[i / 4][8 * (i % 4)+:8];
             }
@@ -418,9 +434,20 @@ module Core (
         } else if csr_addr == 12'h344 {
             csr_rd_v = mip_val;
         } else if csr_addr[11:2] == 10'h0e8 {
-            csr_rd_v = csr_pmpcfg[csr_addr[1:0]];
+            // Selected by comparison rather than by indexing: with fewer than
+            // 16 entries the CSR address can name a word that does not exist,
+            // and an unimplemented PMP register reads as zero.
+            for i in 0..PMP_CFG_WORDS {
+                if {30'h0, csr_addr[1:0]} == i {
+                    csr_rd_v = csr_pmpcfg[i];
+                }
+            }
         } else if csr_addr[11:4] == 8'h3b {
-            csr_rd_v = csr_pmpaddr[csr_addr[3:0]];
+            for i in 0..PMP_ENTRIES {
+                if {28'h0, csr_addr[3:0]} == i {
+                    csr_rd_v = csr_pmpaddr[i];
+                }
+            }
         } else if csr_addr == 12'h7a0 {
             csr_rd_v = 32'h1; // tselect: nonzero readback -> no triggers
         } else if csr_addr == 12'hb00 {
@@ -932,10 +959,10 @@ module Core (
             csr_mepc     = 32'h0;
             csr_mcause   = 32'h0;
             csr_mtval    = 32'h0;
-            for i in 0..4 {
+            for i in 0..PMP_CFG_WORDS {
                 csr_pmpcfg[i] = 32'h0;
             }
-            for i in 0..16 {
+            for i in 0..PMP_ENTRIES {
                 csr_pmpaddr[i] = 32'h0;
             }
             csr_mcycle     = 64'h0;
@@ -1084,15 +1111,25 @@ module Core (
                                 csr_mtval = csr_wv;
                             } else if csr_addr[11:2] == 10'h0e8 {
                                 // Reserved bits read as zero; locked bytes
-                                // ignore writes until reset.
-                                for j in 0..4 {
-                                    if !csr_pmpcfg[csr_addr[1:0]][8 * j + 7] {
-                                        csr_pmpcfg[csr_addr[1:0]][8 * j+:8] = csr_wv[8 * j+:8] & 8'h9f;
+                                // ignore writes until reset. Words that do not
+                                // exist match no iteration, so the write is
+                                // dropped.
+                                for w in 0..PMP_CFG_WORDS {
+                                    if {30'h0, csr_addr[1:0]} == w {
+                                        for j in 0..4 {
+                                            if !csr_pmpcfg[w][8 * j + 7] {
+                                                csr_pmpcfg[w][8 * j+:8] = csr_wv[8 * j+:8] & 8'h9f;
+                                            }
+                                        }
                                     }
                                 }
                             } else if csr_addr[11:4] == 8'h3b {
                                 if !pmp_addr_locked {
-                                    csr_pmpaddr[csr_addr[3:0]] = csr_wv;
+                                    for i in 0..PMP_ENTRIES {
+                                        if {28'h0, csr_addr[3:0]} == i {
+                                            csr_pmpaddr[i] = csr_wv;
+                                        }
+                                    }
                                 }
                             } else if csr_addr == 12'hb00 {
                                 csr_mcycle[31:0] = csr_wv;

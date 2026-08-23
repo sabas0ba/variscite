@@ -19,6 +19,9 @@ module FpgaSoc #(
     param RAM_INIT : string = ""        ,
     /// 16550 divisor before software programs one: CLK_HZ / (16 * baud).
     param UART_DIV: u32 = 15,
+    /// Forwarded to Core. The bare-metal firmware here does not use PMP beyond
+    /// the permissive default, so a board that is short of fabric can cut this.
+    param PMP_ENTRIES: u32 = 16,
 ) (
     i_clk: input clock,
     i_rst: input reset,
@@ -181,7 +184,9 @@ module FpgaSoc #(
         }
     }
 
-    inst u_soc: Soc (
+    inst u_soc: Soc #(
+        PMP_ENTRIES: PMP_ENTRIES,
+    ) (
         i_clk: i_clk,
         i_rst: i_rst,
 

@@ -9,7 +9,7 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
 
 .PHONY: all lint veryl-build veryl-test plic-multi-test tb tb-fast isa-build \
         run-isa cov-test coverage cov-check cosim linux-build linux-boot \
-        fpga-fw fpga-sim fpga-arty fpga-arty-prog clean
+        fpga-fw fpga-sim fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
 all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
      cosim fpga-sim
@@ -113,6 +113,12 @@ fpga-sim: veryl-build fpga-fw
 	    $(FPGA_RTL) tb/tb_fpga.cpp
 	sim/obj_fpga/tb_fpga +cycles=4000000 +bitcycles=32 +send="Hi!" \
 	    +expect="[tick] 2"
+
+fpga-tang:
+	scripts/build_fpga.sh tang
+
+fpga-tang-prog:
+	scripts/build_fpga.sh tang --prog
 
 fpga-arty:
 	scripts/build_fpga.sh arty

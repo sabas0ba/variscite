@@ -3,6 +3,7 @@
 /logs/
 /third_party/
 /dependencies/
+/tools/
 /.build/
 *.f
 *.fst

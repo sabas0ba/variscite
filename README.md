@@ -17,8 +17,9 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
   1 サイクルで確定する
 - 特権: M-mode と U-mode。mstatus.MPP、mcounteren によるカウンタ許可、CSR の特権
   チェック、U-mode からの特権命令の不正命令例外
-- PMP: 16 エントリ。OFF/TOR/NA4/NAPOT、R/W/X、L bit (ロック時は M-mode にも適用し、
-  当該 cfg と address の書き込みを凍結)。非マッチ時は M-mode 許可 / U-mode 拒否
+- PMP: 16 エントリ (`Core` の `PMP_ENTRIES` で変更可、既定 16)。OFF/TOR/NA4/NAPOT、
+  R/W/X、L bit (ロック時は M-mode にも適用し、当該 cfg と address の書き込みを凍結)。
+  非マッチ時は M-mode 許可 / U-mode 拒否。未実装エントリは 0 読み出し・書き込み無視
 - 割り込み: machine timer / software / external (PLIC 経由)。mie/mip、mstatus.MIE、
   mtvec の direct / vectored 両モード、M-mode 未満では MIE に依らず受理
 - CLINT: msip と mtime / mtimecmp (64bit)。mtime は SoC の `i_mtime_tick` で歩進する
@@ -89,9 +90,42 @@ SHA256 を検証している。
 | Spike | 16c0b60 (riscv-isa-sim) | riscv-software-src/riscv-isa-sim |
 | riscv-tests | 447a5fcb8253627ddb5f6a226f64e43463afcdd5 (env: 6de71edb) | riscv-software-src/riscv-tests |
 | Linux | v6.12 (tag adc218676) | torvalds/linux |
+| oss-cad-suite (Windows) | 2026-08-10 | YosysHQ/oss-cad-suite-build `oss-cad-suite-windows-x64-20260810.tgz` sha256:818a5bc96c0e0719e2e21da0d2cf6fbbeed959689657202b5b942cf26af4e502 — 基板への書き込み (openFPGALoader) にのみ用いる |
 
 `flake.nix` に nix devShell の定義を置くが、本セッションの検証環境には nix が
 無いため未評価である。検証済み環境は上記の固定バイナリ構成とする。
+
+## 開発環境
+
+ビルドと検証はすべて `container/Containerfile` のコンテナ内で行う。ベースイメージは
+CI と同じディストリビューションを digest で固定し、ツールの導入は
+`scripts/setup_toolchain.sh` をそのまま実行することで上表と一致させている。
+ツールチェーンと Linux ソースはイメージに含めてあるので、実行時に永続ボリュームは
+要らない。riscv-tests だけは作業ツリーの `third_party/` に属するため実行時に取得する。
+
+```bash
+podman build -t variscite-dev -f container/Containerfile .
+podman run --rm -v "$PWD:/work" variscite-dev env WITH_TESTS=1 scripts/setup_toolchain.sh
+podman run --rm --network none -v "$PWD:/work" variscite-dev make all
+```
+
+Windows からは `scripts/dev.ps1` が同じことを中継する。
+
+```powershell
+.\scripts\dev.ps1 -Setup      # 初回のみ: riscv-tests を取得する
+.\scripts\dev.ps1 make all
+.\scripts\dev.ps1             # 対話シェル
+```
+
+Windows ネイティブのバイナリ (veryl.exe、verilator、nextpnr) は Smart App Control が
+未署名として実行を止めるため、ホストで直接動かす前提には立たない。例外は
+openFPGALoader だけで、これはコンテナから USB デバイスに届かないという別の理由で
+ホスト側に置く ([FPGA ポーティング例](#fpga-ポーティング例))。
+
+`.gitattributes` で作業ツリーを LF に固定してある。`core.autocrlf=true` の環境では
+チェックアウトが CRLF になり、コンテナ内で shebang が `bash\r` と解釈されて
+`scripts/setup_toolchain.sh` が起動しない。make のレシピ、yosys のスクリプト、
+`veryl fmt --check` も同様に CR を受け付けない。
 
 ## ビルドと検証
 
@@ -295,8 +329,13 @@ toggle の残余 (約 2100/7750 点) は次の構造的要因によるもので�
 
 ## FPGA ポーティング例
 
-`fpga/` に Digilent Arty A7-35 (Xilinx XC7A35T) への移植例を置く。合成・配置配線・
-ビットストリーム生成はすべてオープンツールで行い、ベンダ IDE は使わない。
+`fpga/` に 2 枚のボードへの移植例を置く。合成・配置配線・ビットストリーム生成は
+すべてオープンツールで行い、ベンダ IDE は使わない。
+
+| ボード | FPGA | SoC クロック | ボーレート | フロー |
+|---|---|---|---|---|
+| Sipeed Tang Primer 20K | Gowin GW2A-LV18PG256C8/I7 | 27 MHz (水晶直結) | 112500 (host 115200) | yosys + nextpnr-himbaechel + gowin_pack |
+| Digilent Arty A7-35 | Xilinx XC7A35T | 25 MHz (100 MHz ÷4) | 57870 (host 57600) | yosys + nextpnr-xilinx (openXC7) |
 
 ### 構成
 
@@ -310,46 +349,120 @@ src/ram.veryl         byte enable 付き単一ポート RAM ($readmemh で初期
 src/power_on_reset.veryl  コンフィグ後 256 クロックのリセット
 src/fpga_soc.veryl    Soc + ブートスタブ + RAM + UART + mtime tick 生成
 fpga/firmware/        ベアメタルのデモ (UART / CLINT タイマ / PLIC 外部割り込み)
+fpga/tang_primer_20k/ トップと CST
 fpga/arty_a7/         トップと XDC
 ```
 
-メモリマップはシミュレーション側と同一で、CLINT (`0x1100_0000`) と PLIC
-(`0x0c00_0000`) は `Soc` が内部で応答し、`FpgaSoc` はブートスタブ (`0x0000_1000`)、
-UART (`0x1000_0000`)、RAM (`0x8000_0000`、64KiB) を足す。
+どちらのトップも Veryl である。メモリマップはシミュレーション側と同一で、
+CLINT (`0x1100_0000`) と PLIC (`0x0c00_0000`) は `Soc` が内部で応答し、`FpgaSoc` は
+ブートスタブ (`0x0000_1000`)、UART (`0x1000_0000`)、RAM (`0x8000_0000`) を足す。
 
-| 項目 | 値 |
-|---|---|
-| SoC クロック | 25 MHz (基板の 100 MHz を ÷4) |
-| ボーレート | 57870 (host 57600、+0.5%) 8N1 |
-| RAM | 64 KiB (オンチップ) |
+| 項目 | Tang Primer 20K | Arty A7-35 |
+|---|---|---|
+| SoC クロック | 27 MHz (水晶直結) | 25 MHz (基板の 100 MHz を ÷4) |
+| ボーレート | 112500 (host 115200、-2.3%) 8N1 | 57870 (host 57600、+0.5%) 8N1 |
+| RAM | 32 KiB (オンチップ) | 64 KiB (オンチップ) |
+| PMP エントリ | 4 | 16 |
+
+ボーレートは 16550 の divisor latch をそのまま使い、UART の基準クロックを SoC の
+クロックとしている。8N1 が要求するのはストップビット時点でのサンプル点のずれが
+半ビット未満であることで、-2.3% でもずれは 22% に留まる。
 
 ### 使い方
 
+合成までは他の検証と同じくコンテナ内で実行する。
+
 ```bash
 make fpga-sim         # ボード非依存の検証 (下記)
+make fpga-tang        # -> sim/fpga/tang/soc.fs
 make fpga-arty        # -> sim/fpga/arty/soc.bit
-make fpga-arty-prog   # 上記 + openFPGALoader で書き込み
 ```
 
-合成は `scripts/setup_toolchain.sh` が入れる oss-cad-suite だけで完結する。配置配線
-には nextpnr-xilinx が要るが oss-cad-suite に含まれないため、
+Tang のフローは `scripts/setup_toolchain.sh` が入れる oss-cad-suite だけで完結する。
+Arty は配置配線に nextpnr-xilinx が要るが oss-cad-suite に含まれないため、
 [openXC7](https://github.com/openXC7) を導入し `NEXTPNR_XILINX_CHIPDB` と
 `PRJXRAY_DB` を指定する (未指定なら合成まで実行し、案内を出して止まる)。
 
 生成 SV は yosys 標準フロントエンドでは読めない (Veryl が関数引数に
 `input var logic` を出す) ため、合成は `yosys -m slang` + `read_slang` で行う。
 
-### クロックを下げてある理由
+書き込みだけはコンテナから USB デバイスに届かないためホスト側で行う。
 
-このコアの M 拡張は除算を単一サイクルの組合せ回路で行うため、そこがクリティカル
-パスになる。基板の 100 MHz では到底閉じないので ÷4 の 25 MHz で動かす。Artix-7 での
-実測値は本リポジトリの検証環境では取れていない (配置配線に openXC7 が必要) ため、
-これは保守的な初期値である。スラックに余裕があれば `CLK_DIV_LOG2` を 1 に下げて
-50 MHz にできる。
+```powershell
+.\scripts\setup-toolchain.ps1   # 初回のみ: Windows 版 oss-cad-suite を tools\ へ
+.\scripts\flash.ps1 -Detect     # JTAG の IDCODE スキャン (書き込みはしない)
+.\scripts\flash.ps1             # SRAM へロード (電源断で消える)
+.\scripts\flash.ps1 -Flash      # 基板の flash へ書く
+.\scripts\uart-term.ps1         # 115200 8N1 のシリアルコンソール
+```
 
-ボーレートは 16550 の divisor latch をそのまま使い、UART の基準クロックを SoC の
-クロックとしている。25 MHz からの誤差は +0.5% で、8N1 のフレーミングが吸収できる
-範囲である。
+openFPGALoader が JTAG に届くには、FTDI インタフェース 0 に WinUSB ドライバを
+[Zadig](https://zadig.akeo.ie/) で割り当てておく必要がある。20K Dock のデバッガは
+BL702 だが FT2232 として振る舞うため、`-b tangprimer20k` (ケーブル `ft2232`、
+`0403:6010`) がそのまま使える。
+
+### 面積を詰めた経緯
+
+GW2A-18C は LUT4 が 20736 しかなく、コアをそのまま載せると入らない。2 段階で詰めた。
+
+**1. 除算器の逐次化。** M 拡張の除算が単一サイクルの組合せ回路だったため、これが
+クリティカルパスであった。逐次化 (`State::divide`) により 27 MHz が閉じるように
+なった。面積の効果は限定的で、同一フローでの実測は LUT4 21232 → 20467 である。
+
+**2. PMP エントリ数の削減。** 面積の支配要因はこちらであった。`pmp_entry` は
+フェッチ / データ下位ワード / データ上位ワードの 3 インスタンスあり、それぞれが
+全エントリぶんの TOR 比較 (30bit×2) と NAPOT マスク生成 (30bit インクリメンタ) を
+持つ。16 エントリでは 48 個のインクリメンタが並ぶ。`Core` の `PMP_ENTRIES`
+パラメタ (既定 16) を `Soc` と `FpgaSoc` を通してボードトップまで出し、Tang だけ
+4 にしてある。
+
+yosys `synth_gowin` 後のセル数 (Tang トップ、逐次除算器):
+
+| PMP エントリ | LUT | MUX2_LUT5-8 | ALU | FF |
+|---|---|---|---|---|
+| 4 | 13562 | 6134 | 1470 | 2275 |
+| 8 | 14937 | 5939 | 1950 | 2427 |
+| 16 (既定) | 17011 | 5569 | 2910 | 2731 |
+
+特権仕様は PMP エントリ数を実装依存とし、未実装エントリは 0 読み出しを要求する。
+`PMP_ENTRIES` は配列の大きさそのものを変え、CSR の読み書きは比較による選択にして
+あるため、存在しないエントリはどのループにも一致せず、読み出しは 0、書き込みは
+捨てられる。シミュレーションと `make all` は既定の 16 で動くので、`tests/pmp_test.S`
+を含む全テストは変わらない。
+
+上限を超えるエントリを「配列に残したまま書き込みだけ禁止する」実装も試したが、
+定数畳み込みされた 12 エントリが abc9 のマッピングを崩し、LUT が 13724 から 19690 に
+増えた。配列自体を縮めるほうが結果が安定する。
+
+### クロックの与え方
+
+Tang は 27 MHz の水晶に直結している。nextpnr の実測は **31.05 MHz** で、27 MHz に
+対して 15% の余裕がある。
+
+これは以前は成立しなかった。組合せ除算器があった時代のコアは同じ石で 19.0 MHz
+までしか閉じず、かといってクロックを落とすと事態が悪化した。SoC のクロックを
+トップレベル入力ポート以外 (PLL 出力や FF 分周) から与えると yosys の abc9
+マッピングが崩れ、LUT が大きく増えて配置できなくなるためである。除算器の逐次化で
+クリティカルパスが消えたので、クロックはトップレベルポートのままでよくなり、
+PLL も分周も要らなくなった。27 MHz は mtime の 1 MHz タイムベースを割り切る。
+
+Arty は基板が 100 MHz なので ÷4 の 25 MHz で動かす。Artix-7 での実測値は本リポジトリ
+の検証環境では取れていない (配置配線に openXC7 が必要) ため、これは保守的な初期値
+である。スラックに余裕があれば `CLK_DIV_LOG2` を 1 に下げて 50 MHz にできる。
+
+### 使用率
+
+Tang Primer 20K、`PMP_ENTRIES = 4`、RAM 32 KiB での nextpnr 実測:
+
+| 資源 | 使用 | 全体 | |
+|---|---|---|---|
+| LUT4 | 15146 | 20736 | 73% |
+| DFF | 2275 | 15552 | 14% |
+| BSRAM | 16 | 46 | 34% |
+| MULT36X36 | 3 | 12 | 25% |
+
+Arty A7-35 (yosys 合成後の見積り): LUT 15644 / 20800、RAMB36 16 / 50、
+DSP48E1 10 / 90。
 
 ### 検証状況
 
@@ -357,20 +470,21 @@ make fpga-arty-prog   # 上記 + openFPGALoader で書き込み
   コンソールを復号する。設計内部を覗かずボードと同じ 2 本の線だけを見るので、
   ボーレート生成が壊れれば文字化けとして現れる。ファームウェアのバナー、CLINT の
   タイマ割り込み、PLIC 経由の UART 受信割り込み (打鍵のエコー) までを確認する
-- yosys 合成 — **実施**。LUT 15644 / 20800、RAMB36 16 / 50、DSP48E1 10 / 90 で
-  XC7A35T に収まる
-- 配置配線とビットストリーム生成 — **未実施**。openXC7 が必要で、本リポジトリの
-  検証環境には導入できていない
-- **実機動作は未確認である**。ピン配置は Digilent の Arty-A7-35-Master.xdc から
-  取っており、目視照合しかしていない
+- Tang Primer 20K — 合成・配置配線・ビットストリーム生成まで**実施**。タイミングも
+  閉じている (上記)
+- Arty A7-35 — yosys 合成まで**実施**。配置配線以降は openXC7 が必要で、本リポジトリ
+  の検証環境には導入できていない
+- ピン配置は Tang が Sipeed の TangPrimer-20K-example と LiteX のプラットフォーム
+  定義、Arty が Digilent の Arty-A7-35-Master.xdc による
 
 ### FPGA 例の制限
 
-- 外部 DRAM は繋いでいないため RAM はオンチップの 64KiB のみ。Linux は載らず、
-  ベアメタル専用である
-- 除算器が単一サイクルの組合せ回路であることが動作周波数と面積の両方を律速する。
-  多サイクル化すれば両方改善するが、それはコアの変更になるためこの例では触れて
-  いない
+- 外部 DRAM は繋いでいないため RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
+  Linux は載らず、ベアメタル専用である
+- Tang の PMP は 4 エントリである (上記)。ベアメタルのファームウェアは M-mode のみで
+  動き PMP を既定の全許可のままにするため、機能上の差は出ない
+- Tang は core board のピンだけを使う。dock 上のボタンや LED は使わないため、
+  どの dock でも動く。リセットは電源投入時のカウンタで生成する
 
 ## 既知の制限
 
