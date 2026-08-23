@@ -2,8 +2,11 @@
 # you type. Exit with Esc.
 #
 #   .\scripts\uart-term.ps1                  # auto-detect the FTDI COM port
-#   .\scripts\uart-term.ps1 -Port COM7
+#   .\scripts\uart-term.ps1 -Port COM4
 #   .\scripts\uart-term.ps1 -MaxBytes 200    # exit after N bytes (for capture)
+#
+# With more than one FTDI board plugged in the auto-detection refuses to guess
+# and lists what it found; pass -Port.
 #
 # 115200 8N1 is what the host uses. The Tang port transmits at 112500 (27 MHz
 # divided by 16 * 15), 2.3% low; by the stop bit the sample point has drifted
@@ -20,12 +23,19 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 if (-not $Port) {
-    $names = Get-CimInstance Win32_PnPEntity -Filter "PNPDeviceID LIKE 'FTDIBUS%'" |
-        Select-Object -ExpandProperty Name
-    foreach ($n in $names) {
-        if ($n -match '\((COM\d+)\)') { $Port = $Matches[1]; break }
+    $found = @()
+    Get-CimInstance Win32_PnPEntity -Filter "PNPDeviceID LIKE 'FTDIBUS%'" |
+        Select-Object -ExpandProperty Name |
+        ForEach-Object {
+            if ($_ -match '\((COM\d+)\)') { $found += $Matches[1] }
+        }
+    if ($found.Count -eq 0) {
+        throw "no FTDI COM port found. Specify -Port explicitly"
     }
-    if (-not $Port) { throw "FTDI COM port not found. Specify -Port explicitly" }
+    if ($found.Count -gt 1) {
+        throw "several FTDI COM ports present ($($found -join ', ')). Specify -Port"
+    }
+    $Port = $found[0]
 }
 
 $serial = New-Object System.IO.Ports.SerialPort $Port, $BaudRate, 'None', 8, 'One'
