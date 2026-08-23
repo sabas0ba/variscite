@@ -30,6 +30,7 @@ module Core (
         mem_access,
         mem_access2,
         amo_write,
+        divide,
     }
 
     // ------------------------------------------------------------------
@@ -151,14 +152,58 @@ module Core (
     }
 
     // ------------------------------------------------------------------
-    // M extension (single-cycle combinational)
+    // M extension
+    //
+    // The multiply stays combinational: it maps to the DSP blocks of both FPGA
+    // families this is ported to, so it costs no fabric and is not the critical
+    // path. The divide is sequential. As a single-cycle combinational divider it
+    // was both the critical path and the dominant area term, which is what kept
+    // the Gowin port from fitting; see README.md.
+    //
+    // One restoring-division step runs per cycle in State::divide, and signed
+    // operands are reduced to magnitudes so that one unsigned divider serves
+    // DIV, DIVU, REM and REMU. The two architectural special cases (division by
+    // zero, and the signed overflow of INT_MIN / -1) produce their results
+    // directly and skip the iteration.
     // ------------------------------------------------------------------
     var md_au  : logic<64>;
     var md_bu  : logic<64>;
     var md_prod: logic<64>;
-    var md_divq: logic<32>;
-    var md_divr: logic<32>;
     var md_res : logic<32>;
+
+    // Divider state. div_q holds the dividend on entry and is shifted left one
+    // place per step, the quotient bits filling in from the bottom as the
+    // dividend bits leave the top into the remainder.
+    var div_q    : logic<32>;
+    var div_rem  : logic<32>;
+    var div_b    : logic<32>;
+    var div_cnt  : logic<6> ;
+    var div_neg_q: logic    ;
+    var div_neg_r: logic    ;
+
+    // One restoring-division step. The shifted remainder needs 33 bits: the
+    // divisor can be as large as 2^32-1 and the shift doubles the remainder.
+    // The step keeps rem < div_b, so div_sh <= 2*div_b - 1 and the difference
+    // is below 2^32 whenever it is non-negative; bit 32 of the subtraction is
+    // therefore exactly the borrow, and one subtracter serves as the comparator
+    // as well.
+    let div_sh  : logic<33> = {div_rem, div_q[31]};
+    let div_sub : logic<33> = div_sh - {1'b0, div_b};
+    let div_ge  : logic     = !div_sub[32];
+    let div_nrem: logic<32> = if div_ge ? div_sub[31:0] : div_sh[31:0];
+
+    // DIV/DIVU/REM/REMU are the funct3 encodings of OP with funct7 = 0000001
+    // and bit 2 set; the four below it are the multiplies. funct3[0] selects
+    // the unsigned form for both pairs.
+    let is_div: logic = opcode == 7'b0110011 && funct7 == 7'b0000001 && funct3[2];
+
+    let div_a_abs: logic<32> = if (!funct3[0] && rs1_val[31]) ? ~rs1_val + 32'h1 : rs1_val;
+    let div_b_abs: logic<32> = if (!funct3[0] && rs2_val[31]) ? ~rs2_val + 32'h1 : rs2_val;
+
+    // The quotient takes the sign of the operands combined; the remainder takes
+    // the sign of the dividend, which is what RISC-V specifies.
+    let div_q_fin: logic<32> = if div_neg_q ? ~div_q + 32'h1 : div_q;
+    let div_r_fin: logic<32> = if div_neg_r ? ~div_rem + 32'h1 : div_rem;
 
     always_comb {
         if (funct3 == 3'b001 || funct3 == 3'b010) && rs1_val[31] {
@@ -173,30 +218,15 @@ module Core (
         }
         md_prod = md_au * md_bu;
 
-        if rs2_val == 32'h0 {
-            md_divq = 32'hffff_ffff;
-            md_divr = rs1_val;
-        } else if funct3[0] == 1'b0 && rs1_val == 32'h8000_0000 && rs2_val == 32'hffff_ffff {
-            // signed overflow: DIV/REM of INT_MIN by -1
-            md_divq = 32'h8000_0000;
-            md_divr = 32'h0;
-        } else if funct3[0] == 1'b0 {
-            md_divq = $signed(rs1_val) / $signed(rs2_val);
-            md_divr = $signed(rs1_val) % $signed(rs2_val);
-        } else {
-            md_divq = rs1_val / rs2_val;
-            md_divr = rs1_val % rs2_val;
-        }
-
         case funct3 {
             3'b000 : md_res = md_prod[31:0];
             3'b001 : md_res = md_prod[63:32];
             3'b010 : md_res = md_prod[63:32];
             3'b011 : md_res = md_prod[63:32];
-            3'b100 : md_res = md_divq;
-            3'b101 : md_res = md_divq;
-            3'b110 : md_res = md_divr;
-            3'b111 : md_res = md_divr;
+            3'b100 : md_res = div_q_fin;
+            3'b101 : md_res = div_q_fin;
+            3'b110 : md_res = div_r_fin;
+            3'b111 : md_res = div_r_fin;
             default: md_res = 32'h0;
         }
     }
@@ -851,11 +881,14 @@ module Core (
         }
     }
 
-    let ex_retire  : logic = state == State::execute && !w_exc && !w_mem_issue;
+    // A divide leaves State::execute without retiring: it retires on the cycle
+    // that State::divide writes the result back.
+    let ex_retire  : logic = state == State::execute && !w_exc && !w_mem_issue && !is_div;
     let mem_retire : logic = state == State::mem_access && i_mem_ready && !q_is_amo && !q_need2;
     let mem2_retire: logic = state == State::mem_access2 && i_mem_ready;
     let amo_retire : logic = state == State::amo_write && i_mem_ready;
-    let retire_now : logic = ex_retire || mem_retire || mem2_retire || amo_retire;
+    let div_retire : logic = state == State::divide && div_cnt == 6'd0;
+    let retire_now : logic = ex_retire || mem_retire || mem2_retire || amo_retire || div_retire;
     let trap_now   : logic = state == State::execute && w_exc;
     let irq_taken  : logic = state == State::fetch && irq_take && !i_mem_ready;
     let fetch_fault: logic = state == State::fetch && !irq_take && !pmp_fetch_ok;
@@ -923,6 +956,12 @@ module Core (
             q_is_amo       = 1'b0;
             q_amo_op       = 5'h0;
             q_rs2val       = 32'h0;
+            div_q          = 32'h0;
+            div_rem        = 32'h0;
+            div_b          = 32'h0;
+            div_cnt        = 6'd0;
+            div_neg_q      = 1'b0;
+            div_neg_r      = 1'b0;
             r_retire       = 1'b0;
             r_retire_pc    = 32'h0;
             r_retire_instr = 32'h0;
@@ -991,6 +1030,31 @@ module Core (
                         priv         = RvPkg::PRIV_M;
                         pc           = {csr_mtvec[31:2], 2'b00};
                         state        = State::fetch;
+                    } else if is_div {
+                        // Nothing else in a divide has a side effect, so the
+                        // whole execute body is skipped: only the divider is
+                        // primed, and the writeback happens on the way out of
+                        // State::divide.
+                        div_b     = div_b_abs;
+                        div_neg_q = 1'b0;
+                        div_neg_r = 1'b0;
+                        if rs2_val == 32'h0 {
+                            div_q   = 32'hffff_ffff;
+                            div_rem = rs1_val;
+                            div_cnt = 6'd0;
+                        } else if !funct3[0] && rs1_val == 32'h8000_0000 && rs2_val == 32'hffff_ffff {
+                            // signed overflow: DIV/REM of INT_MIN by -1
+                            div_q   = 32'h8000_0000;
+                            div_rem = 32'h0;
+                            div_cnt = 6'd0;
+                        } else {
+                            div_q     = div_a_abs;
+                            div_rem   = 32'h0;
+                            div_cnt   = 6'd32;
+                            div_neg_q = !funct3[0] && (rs1_val[31] ^ rs2_val[31]);
+                            div_neg_r = !funct3[0] && rs1_val[31];
+                        }
+                        state = State::divide;
                     } else {
                         if w_wb_en && rd != 5'h0 {
                             rf[rd] = w_wb_data;
@@ -1110,6 +1174,27 @@ module Core (
                     if i_mem_ready {
                         pc    = pc + 32'h4;
                         state = State::fetch;
+                    }
+                }
+                State::divide: {
+                    if div_cnt == 6'd0 {
+                        // instr and pc are untouched throughout the divide, so
+                        // the execute-stage decode is still valid here and the
+                        // ordinary writeback path applies. w_wb_data is md_res,
+                        // which now reads the divider's result registers.
+                        //
+                        // The execute path's w_wb_en test is not repeated: this
+                        // state is only entered for a divide, and the OP decode
+                        // asserts w_wb_en for every one of them.
+                        if rd != 5'h0 {
+                            rf[rd] = w_wb_data;
+                        }
+                        pc    = w_next_pc;
+                        state = State::fetch;
+                    } else {
+                        div_q   = {div_q[30:0], div_ge};
+                        div_rem = div_nrem;
+                        div_cnt = div_cnt - 6'd1;
                     }
                 }
                 default: {

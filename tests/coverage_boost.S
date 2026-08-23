@@ -162,6 +162,24 @@ RVTEST_CODE_BEGIN
   beqz t1, fail
   csrci mstatus, MSTATUS_MIE
 
+  # ---- test 12: divide with rd = x0 -------------------------------------
+  # riscv-tests never targets x0 with an arithmetic result, so the discarding
+  # path out of the sequential divider is only reached from here. The divide
+  # must still run to completion and leave x0 alone.
+  li TESTNUM, 12
+  li t0, 100
+  li t1, 7
+  div x0, t0, t1
+  rem x0, t0, t1
+  # the discarded divides must still leave the divider able to produce the
+  # next result, which is what this checks
+  div t2, t0, t1
+  li t3, 14
+  bne t2, t3, fail
+  rem t2, t0, t1
+  li t3, 2
+  bne t2, t3, fail
+
   TEST_PASSFAIL
 
   .align 2

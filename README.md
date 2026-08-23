@@ -7,9 +7,14 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
 
 ## 構成
 
-- コア: マルチサイクル (fetch / execute / mem_access / mem_access2 / amo_write)、
-  単一 32bit メモリポート (valid/ready、wstrb=0 で read)
+- コア: マルチサイクル (fetch / execute / mem_access / mem_access2 / amo_write /
+  divide)、単一 32bit メモリポート (valid/ready、wstrb=0 で read)
 - RV32I 全命令、M (MUL/DIV 系)、A (LR/SC, AMO 9 種)、Zicsr
+- M 拡張の乗算は単一サイクルの組合せ回路である (FPGA では DSP に載るため fabric を
+  消費しない)。除算は逐次で、復元法 1 ステップ/サイクルの 33 サイクルを要する。
+  符号付きオペランドは絶対値に還元するため、DIV/DIVU/REM/REMU は 33bit の減算器を
+  1 個だけ共用する。ゼロ除算と INT_MIN / -1 の符号付きオーバーフローは反復せず
+  1 サイクルで確定する
 - 特権: M-mode と U-mode。mstatus.MPP、mcounteren によるカウンタ許可、CSR の特権
   チェック、U-mode からの特権命令の不正命令例外
 - PMP: 16 エントリ。OFF/TOR/NA4/NAPOT、R/W/X、L bit (ロック時は M-mode にも適用し、
@@ -213,12 +218,17 @@ mul/mulh の明示記述、除算は 32bit に収める形で、libgcc も libm 
 | 項目 | 値 |
 |---|---|
 | ブート〜ユーザ空間到達 | 約 6.5e7 サイクル |
-| mandelbrot + donut + poweroff まで | 8.2e8 サイクル / 3.2e8 命令 |
+| mandelbrot + donut + poweroff まで | 1.0e9 サイクル / 3.6e8 命令 |
 | 実行速度 | 約 6 Mcycles/s (約 2.3 MIPS) |
 
 `make linux-boot` の総サイクル数は run ごとに数 % ぶれる。バッチ入力が実時間の
 sleep で与えられるため、シェルが次のコマンドを待って回すアイドルループの長さが
 run ごとに変わるためである。
+
+除算を逐次化する前の同じ測定は 8.2e8 サイクル / 3.2e8 命令であった。donut と
+mandelbrot は Q16.16 の除算を含むため、除算 1 命令あたり 33 サイクルという代償が
+ここに現れる。命令数の増加は、実行が長くかかることでアイドルループの回転数が
+増えたためである。
 
 ### mtimediv について
 
