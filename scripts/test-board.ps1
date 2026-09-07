@@ -42,6 +42,7 @@ try {
         throw 'Expected exactly one GW2A-18C JTAG target'
     }
     $serial.Open()
+    $serial.DiscardInBuffer()
     & $loader -b tangprimer20k $bitstream 2>&1 | Tee-Object -FilePath "$prefix-load.log"
     if ($LASTEXITCODE -ne 0) { throw 'SRAM loading failed' }
     # Keep startup bytes for the SoC banner; probes need no startup capture.
@@ -67,6 +68,10 @@ try {
         UartProbe { $passed = $bytes.Length -ge 100 -and $received -cmatch '^U+$' }
         Loopback { $passed = $received -ceq 'Tang20K-loopback-55AA' }
         { $_ -in @('Soc', 'LcdSoc') } {
+            # Ignore output from the old SRAM image before the new boot banner.
+            # Keep the unmodified bytes in the capture file for diagnosis.
+            $banner = $received.LastIndexOf('rv32ima_veryl on FPGA', [StringComparison]::Ordinal)
+            if ($banner -ge 0) { $received = $received.Substring($banner) }
             $passed = $received.Contains('rv32ima_veryl on FPGA') -and
                 ([regex]::Matches($received, '\[tick\]')).Count -ge 2 -and
                 $received.Contains('[rx] Z (0x0000005a)') -and
