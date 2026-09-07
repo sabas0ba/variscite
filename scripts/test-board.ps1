@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -19,6 +19,7 @@ $images = @{
     UartProbe = 'sim/fpga/probe/probe.fs'
     Loopback = 'sim/fpga/probe/loopback.fs'
     Soc = 'sim/fpga/tang/soc.fs'
+    LcdSoc = 'sim/fpga/lcd_soc/soc.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -44,14 +45,14 @@ try {
     & $loader -b tangprimer20k $bitstream 2>&1 | Tee-Object -FilePath "$prefix-load.log"
     if ($LASTEXITCODE -ne 0) { throw 'SRAM loading failed' }
     # Keep startup bytes for the SoC banner; probes need no startup capture.
-    if ($Mode -ne 'Soc') { $serial.DiscardInBuffer() }
+    if ($Mode -notin @('Soc', 'LcdSoc')) { $serial.DiscardInBuffer() }
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $sent = $false
     $buffer = New-Object byte[] 4096
     while ($timer.Elapsed.TotalSeconds -lt $Seconds) {
         if (-not $sent -and $timer.Elapsed.TotalSeconds -ge 1) {
             if ($Mode -eq 'Loopback') { $serial.Write('Tang20K-loopback-55AA') }
-            if ($Mode -eq 'Soc') { $serial.Write('Z') }
+            if ($Mode -in @('Soc', 'LcdSoc')) { $serial.Write('Z') }
             $sent = $true
         }
         if ($serial.BytesToRead -gt 0) {
@@ -65,11 +66,16 @@ try {
     switch ($Mode) {
         UartProbe { $passed = $bytes.Length -ge 100 -and $received -cmatch '^U+$' }
         Loopback { $passed = $received -ceq 'Tang20K-loopback-55AA' }
-        Soc {
+        { $_ -in @('Soc', 'LcdSoc') } {
             $passed = $received.Contains('rv32ima_veryl on FPGA') -and
                 ([regex]::Matches($received, '\[tick\]')).Count -ge 2 -and
                 $received.Contains('[rx] Z (0x0000005a)') -and
                 -not $received.Contains('[trap]')
+            if ($Mode -eq 'LcdSoc') {
+                $passed = $passed -and $received.Contains('[lcd] ready:') -and
+                    ([regex]::Matches($received, '\[lcd\] applied')).Count -ge 2 -and
+                    -not $received.Contains('[lcd] timeout')
+            }
         }
     }
 } catch {

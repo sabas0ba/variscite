@@ -5,8 +5,11 @@ module tb_lcd;
     wire [15:0] rgb;
     reg [15:0] bars [0:7];
     integer active;
+    reg bars_enabled = 1;
     rv32ima_TangLcdTiming dut (
         .i_clk(clk), .i_rst(rst), .o_hs(hs), .o_vs(vs), .o_de(de), .o_rgb(rgb)
+        , .i_bars(bars_enabled), .i_bg(16'h0010), .i_fg(16'hffe0),
+        .i_x0(10'd40), .i_y0(9'd180), .i_x1(10'd160), .i_y1(9'd300), .o_frame()
     );
     always #5 clk = ~clk;
     initial begin
@@ -15,7 +18,8 @@ module tb_lcd;
         repeat (2) @(posedge clk);
         @(negedge clk);
         rst = 0;
-        for (integer frame=0; frame<2; frame=frame+1) begin
+        for (integer frame=0; frame<3; frame=frame+1) begin
+            bars_enabled = frame < 2;
             active = 0;
             for (integer y=0; y<505; y=y+1) begin
                 for (integer x=0; x<1056; x=x+1) begin
@@ -24,14 +28,17 @@ module tb_lcd;
                     if (de !== (x>=216 && x<1016 && y>=24 && y<504)) $fatal(1,"DE at %0d,%0d",x,y);
                     if (de) begin
                         active = active + 1;
-                        if (rgb !== bars[(x-216)/100]) $fatal(1,"bar at %0d,%0d",x,y);
+                        if (bars_enabled) begin
+                            if (rgb !== bars[(x-216)/100]) $fatal(1,"bar at %0d,%0d",x,y);
+                        end else if (rgb !== ((x>=256 && x<376 && y>=204 && y<324) ? 16'hffe0 : 16'h0010))
+                            $fatal(1,"rectangle at %0d,%0d",x,y);
                     end else if (rgb !== 0) $fatal(1,"blanking RGB");
                     @(negedge clk);
                 end
             end
             if (active != 800*480) $fatal(1,"active pixel count %0d",active);
         end
-        $display("PASS: two 1056x505 frames, 800x480 active, sync widths, eight RGB565 bars");
+        $display("PASS: 1056x505 scan, 800x480 active, RGB565 bars and programmed rectangle");
         $finish;
     end
 endmodule

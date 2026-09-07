@@ -12,7 +12,7 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
         fpga-fw fpga-sim por-test lcd-test fpga-lcd fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
 all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
-     cosim fpga-sim por-test lcd-test
+     cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-soc-test
 
 lint:
 	veryl fmt --check
@@ -111,6 +111,23 @@ lcd-test: veryl-build
 
 fpga-lcd:
 	bash scripts/build_lcd.sh
+
+.PHONY: lcd-mmio-test lcd-soc-test fpga-lcd-soc
+lcd-mmio-test:
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_lcd_mmio \
+	    -Mdir sim/obj_lcd_mmio -o tb_lcd_mmio fpga/tang_primer_20k/lcd_mmio.sv tb/tb_lcd_mmio.sv
+	sim/obj_lcd_mmio/tb_lcd_mmio
+
+fpga-lcd-soc:
+	bash scripts/build_lcd_soc.sh
+
+lcd-soc-test: veryl-build fpga-fw
+	verilator --cc --exe --build -O2 --top-module TangLcdSystem \
+	    -GCLK_HZ=1000000 -GUART_DIV=2 -CFLAGS -DLCD_SYSTEM \
+	    -Mdir sim/obj_lcd_soc -o tb_lcd_soc $(FPGA_RTL) \
+	    target/tang_primer_20k/lcd_timing.sv fpga/tang_primer_20k/lcd_mmio.sv \
+	    fpga/tang_primer_20k/lcd_system.sv tb/tb_fpga.cpp
+	sim/obj_lcd_soc/tb_lcd_soc +cycles=4000000 +bitcycles=32 +send=Z +expect="[lcd] applied"
 
 # Board-independent check of the FPGA platform: the firmware runs on FpgaSoc
 # and the console is decoded off the serial line, so a broken UART, RAM or

@@ -27,6 +27,8 @@ module TangLcdProbe (
     assign lcd_dclk = pixel_clk;
     rv32ima_TangLcdTiming timing (
         .i_clk(pixel_clk), .i_rst(!ready[1]),
+        .i_bars(1'b1), .i_bg(16'b0), .i_fg(16'b0),
+        .i_x0(10'b0), .i_y0(9'b0), .i_x1(10'b0), .i_y1(9'b0), .o_frame(),
         .o_hs(lcd_hs), .o_vs(lcd_vs), .o_de(lcd_de),
         .o_rgb({lcd_r, lcd_g, lcd_b})
     );

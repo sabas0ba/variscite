@@ -79,6 +79,10 @@ cov-check / cosim)。
   レジスタレベルの検査は `tests/clint_plic_test.S` と `src/tests.veryl` の
   組込テストに、それぞれ追加する。窓の外へ素通しされることは
   `test_soc_decode` に倣って検査する
+- FPGA 専用の LCD は `FpgaSoc` の外部バスポートに接続する。Linux シミュレータには
+  存在しないため DTS には追加しない。レジスタ仕様は README.md を参照する。
+  変更時は `make lcd-test lcd-mmio-test lcd-soc-test` を通し、クロック領域をまたぐ
+  設定保持とフレーム境界での反映、CPU から LCD 出力までを検証する (`make all` に含む)。
 - `src/power_on_reset.veryl` の `init=0` 属性は Gowin 合成時に必須。初期値を
   セル既定に任せると `done` が初期値 1 の DFFS に写像され、起動リセットが出ない。
   変更時は `make por-test` で初期値展開後 RTL と合成後セルモデルを検証する

@@ -22,7 +22,13 @@
 
 #include <verilated.h>
 
+#ifdef LCD_SYSTEM
+#include "VTangLcdSystem.h"
+using FpgaTop = VTangLcdSystem;
+#else
 #include "Vrv32ima_FpgaSoc.h"
+using FpgaTop = Vrv32ima_FpgaSoc;
+#endif
 
 namespace {
 
@@ -135,7 +141,7 @@ int main(int argc, char** argv) {
     const std::string send = plusarg_str("send");
     const std::string expect = plusarg_str("expect");
 
-    Vrv32ima_FpgaSoc* top = new Vrv32ima_FpgaSoc;
+    FpgaTop* top = new FpgaTop;
     UartRx console(bit_cycles);
     UartTx injector(bit_cycles);
 
@@ -143,23 +149,66 @@ int main(int argc, char** argv) {
     uint64_t retired = 0;
 
     top->i_rst = 1;
-    top->i_uart_rx = 1;
-    for (int i = 0; i < 8; i++) {
+#ifndef LCD_SYSTEM
+    top->i_ext_rdata = 0;
+#else
+    top->i_pixel_rst = 1;
+    top->i_lcd_ready = 0;
+    uint64_t subcycle = 0;
+    bool last_pixel_clk = false, last_vs = false;
+    unsigned pixels = 0, yellow = 0, magenta = 0, dark = 0;
+    bool saw_yellow = false, saw_magenta = false;
+    unsigned frames = 0;
+#endif
+    auto clock_cycle = [&]() {
+#ifdef LCD_SYSTEM
+        // Independent 11:9 clock periods preserve the board's 27:33 ratio.
+        for (unsigned phase = 0; phase < 22; ++phase, ++subcycle) {
+            top->i_clk = phase >= 11;
+            const bool pixel_clk = ((subcycle / 9) & 1) != 0;
+            top->i_pixel_clk = pixel_clk;
+            top->eval();
+            if (!top->i_rst && pixel_clk && !last_pixel_clk) {
+                if (last_vs && !top->lcd_vs) {
+                    if (pixels == 800 * 480) {
+                        frames++;
+                        saw_yellow |= yellow == 120*120 && dark == 800*480-120*120;
+                        saw_magenta |= magenta == 120*120 && dark == 800*480-120*120;
+                    }
+                    pixels = yellow = magenta = dark = 0;
+                }
+                if (top->lcd_de) {
+                    pixels++;
+                    yellow += top->lcd_rgb == 0xffe0;
+                    magenta += top->lcd_rgb == 0xf81f;
+                    dark += top->lcd_rgb == 0x0010;
+                }
+                last_vs = top->lcd_vs;
+            }
+            last_pixel_clk = pixel_clk;
+        }
+#else
         top->i_clk = 0;
         top->eval();
         top->i_clk = 1;
         top->eval();
+#endif
+    };
+    top->i_uart_rx = 1;
+    for (int i = 0; i < 8; i++) {
+        clock_cycle();
     }
     top->i_rst = 0;
+#ifdef LCD_SYSTEM
+    top->i_pixel_rst = 0;
+    top->i_lcd_ready = 1;
+#endif
 
     bool sent = false;
     for (uint64_t c = 0; c < max_cycles; c++) {
         top->i_uart_rx = injector.step() ? 1 : 0;
 
-        top->i_clk = 0;
-        top->eval();
-        top->i_clk = 1;
-        top->eval();
+        clock_cycle();
 
         if (top->o_retire) retired++;
 
@@ -172,7 +221,11 @@ int main(int argc, char** argv) {
 
         // Inject once the firmware has armed its interrupts, so the character
         // exercises the PLIC path rather than being dropped before setup.
-        if (!sent && !send.empty() && out.find("armed") != std::string::npos) {
+        if (!sent && !send.empty() && out.find("armed") != std::string::npos
+#ifdef LCD_SYSTEM
+            && out.find("[lcd] applied") != std::string::npos
+#endif
+        ) {
             injector.send(send);
             sent = true;
         }
@@ -194,6 +247,14 @@ int main(int argc, char** argv) {
         std::printf("[tb] FAIL: never reached the point of injecting input\n");
         rc = 1;
     }
+#ifdef LCD_SYSTEM
+    if (!saw_yellow || !saw_magenta || frames < 3 || out.find("[lcd] timeout") != std::string::npos) {
+        std::printf("[tb] FAIL: LCD frames=%u yellow=%d magenta=%d\n", frames, saw_yellow, saw_magenta);
+        rc = 1;
+    } else {
+        std::printf("[tb] LCD: %u frames; CPU-drawn yellow and UART-selected magenta rectangles verified\n", frames);
+    }
+#endif
     if (rc == 0) std::printf("[tb] PASS\n");
 
     top->final();

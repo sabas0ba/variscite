@@ -1,0 +1,4 @@
+IO_LOC "i_uart_rx" T13;
+IO_PORT "i_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+IO_LOC "o_uart_tx" M11;
+IO_PORT "o_uart_tx" IO_TYPE=LVCMOS33 DRIVE=8;

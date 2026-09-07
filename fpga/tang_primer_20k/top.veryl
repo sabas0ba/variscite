@@ -55,6 +55,12 @@ module TangPrimer20k (
         i_uart_rx: i_uart_rx,
         o_uart_tx: o_uart_tx,
 
+        o_ext_sel  : _    ,
+        o_ext_addr : _    ,
+        o_ext_wstrb: _    ,
+        o_ext_wdata: _    ,
+        i_ext_rdata: 32'h0,
+
         o_retire: _,
     );
 }

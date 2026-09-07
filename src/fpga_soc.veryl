@@ -29,6 +29,14 @@ module FpgaSoc #(
     i_uart_rx: input  logic,
     o_uart_tx: output logic,
 
+    /// Board peripherals receive accesses outside ROM/RAM/UART. Read data is
+    /// combinational during o_ext_sel and is held by this bus wrapper.
+    o_ext_sel  : output logic    ,
+    o_ext_addr : output logic<32>,
+    o_ext_wstrb: output logic<4> ,
+    o_ext_wdata: output logic<32>,
+    i_ext_rdata: input  logic<32>,
+
     /// Pulses once per retired instruction; boards drive an activity LED.
     o_retire: output logic,
 ) {
@@ -83,6 +91,11 @@ module FpgaSoc #(
     // The access is presented for one cycle and answered in the next, so
     // writes and read side effects happen exactly once.
     let first: logic = mem_valid && !mem_ready;
+
+    assign o_ext_sel   = first && !(rom_hit || uart_hit || ram_hit);
+    assign o_ext_addr  = mem_addr;
+    assign o_ext_wstrb = mem_wstrb;
+    assign o_ext_wdata = mem_wdata;
 
     always_ff {
         if_reset {
@@ -158,9 +171,8 @@ module FpgaSoc #(
                 } else if rom_hit {
                     held_rdata = rom_rdata;
                 } else {
-                    // Nothing is mapped here; read as zero rather than
-                    // aliasing whichever device decoded last.
-                    held_rdata = 32'h0;
+                    // The board returns zero for its unmapped addresses.
+                    held_rdata = i_ext_rdata;
                 }
             }
         }

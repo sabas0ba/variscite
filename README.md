@@ -524,7 +524,7 @@ Dock の DISPLAY コネクタに接続する 800×480 RGB LCD 用に、SoC と�
 実装は `fpga/tang_primer_20k/lcd_timing.veryl`、Gowin PLL の接続は `lcd_probe.sv` にある。
 
 ```bash
-make lcd-test   # 2フレームの同期幅、有効領域、色、ブランキングを確認
+make lcd-test   # 3フレームの同期幅、有効領域、カラーバー、矩形、ブランキングを確認
 make fpga-lcd   # sim/fpga/lcd/lcd.fs
 ```
 
@@ -541,15 +541,56 @@ SoC に戻す場合は `scripts/flash.ps1` に `sim/fpga/tang/soc.fs` を指定�
 8 色のカラーバーの正常表示を確認した。
 ビットストリーム SHA256: `49b01aaf6496f25b4e6894b80cc469518ac1f9b7011471c6316e745835d06593`。
 
+### SoC からの LCD 制御
+
+`make fpga-lcd-soc` は CPU、UART、LCD を統合した `sim/fpga/lcd_soc/soc.fs` を生成する。
+CPU は 27 MHz、LCD は PLL の 33 MHz で動作する。ビルドログは `sim/fpga/lcd_soc/` に保存する。
+
+```powershell
+.\scripts\test-board.ps1 -Suite C:\path\to\oss-cad-suite -Port COM4 -Mode LcdSoc
+```
+
+`LcdSoc` は通常の SoC 起動検証に加えて LCD の検出、2 回以上の描画反映応答、
+タイムアウトがないことを確認する。起動時は濃青の背景に黄色の 120×120 画素の矩形を表示し、
+毎秒 x 座標を 40、140、240、340、440、540 と移動する。y 座標は 180。
+UART の `r` / `g` / `b` は矩形を赤 / 緑 / 青に変更し、`c` はカラーバー、`m` は矩形に切り替える。
+検証スクリプトが送信する `Z` は矩形をマゼンタに変更する。
+
+LCD レジスタは FPGA 専用の外部バスポート経由で `0x1200_0000` に配置する。
+共有 `Soc` と Linux シミュレータの構成は変更せず、Linux DTS にこのデバイスは追加しない。
+通常の Tang / Arty トップでは外部バスの読み出しを 0 に接続する。
+
+| オフセット | 読み書き | 内容 |
+|---|---|---|
+| `0x00` | RW | bit 0: 1 = カラーバー、0 = 矩形 |
+| `0x04` | RW | 背景色 RGB565 |
+| `0x08` | RW | 矩形色 RGB565 |
+| `0x0c` / `0x10` | RW | 左上 x (10 bit) / y (9 bit) |
+| `0x14` / `0x18` | RW | 右下 x (10 bit) / y (9 bit)、この座標は矩形に含まない |
+| `0x1c` | RW | read bit 0: busy、write bit 0: 描画設定の commit |
+| `0x20` | RO | ID `0x4c434431` (`LCD1`) |
+
+設定レジスタは byte enable に従って更新し、未使用 bit は 0 とする。
+窓は 256 byte で、予約領域と窓外は 0 を返す。busy 中の commit は無視する。
+commit 時に設定一式を保持し、要求と応答の toggle をそれぞれ 2 段同期する。
+画素側は次のフレーム先頭のブランキング期間に設定を一括反映して応答するため、
+描画途中で色や座標が切り替わらない。busy 中に次の設定を書いても、保持済みの設定は変わらない。
+PLL のロック喪失時は両クロック領域の制御をリセットする。
+
+`make lcd-mmio-test` は非同期クロックでアドレスデコード、byte enable、busy、設定保持、
+フレーム境界での反映を検証する。`make lcd-soc-test` は実ファームウェアを動かし、
+UART コマンドの前後で黄色とマゼンタの矩形が LCD 出力に現れることを画素単位で検証する。
+両方とも `make all` と CI に含まれる。
+
 ### FPGA 例の制限
 
-- SoC への LCD 制御統合は未実装。表示は上記の LCD 単体検証回路で行う。
+- LCD 描画はカラーバーと単一矩形のみ。フレームバッファと文字描画は未実装。
 - 外部 DRAM は繋いでいないため RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
   Linux は載らず、ベアメタル専用である
 - Tang の PMP は 4 エントリである (上記)。ベアメタルのファームウェアは M-mode のみで
   動き PMP を既定の全許可のままにするため、機能上の差は出ない
-- Tang は core board のピンだけを使う。dock 上のボタンや LED は使わないため、
-  どの dock でも動く。リセットは電源投入時のカウンタで生成する
+- Tang の基本 SoC は core board のピンだけを使う。LCD 版は DISPLAY コネクタ付き Dock と
+  上記のタイミングに適合する RGB LCD を必要とする。リセットは電源投入時のカウンタで生成する
 
 ## 既知の制限
 
