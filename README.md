@@ -622,6 +622,9 @@ Veryl 統一コミット `4a1bd89` の CI に合格し、統合版も配置配�
 
 ### FPGA 例の制限
 
+Linux 実機起動、LCD ブートログ、GUI への拡張は [実装計画と DDR3 ツール検証](docs/tang-linux-lcd.md)
+に記録する。現時点で DDR3 の DQS プリミティブは固定 nextpnr の配置段階で未対応である。
+
 - LCD 描画はカラーバーと単一矩形のみ。フレームバッファと文字描画は未実装。
 - 外部 DRAM は繋いでいないため RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
   Linux は載らず、ベアメタル専用である
