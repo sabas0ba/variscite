@@ -28,6 +28,9 @@ env:
   BINDIR: /home/runner/.local/bin
   SRCDIR: /home/runner/src
 
+permissions:
+  contents: read
+
 jobs:
   verify:
     runs-on: ubuntu-24.04
