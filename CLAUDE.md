@@ -79,6 +79,10 @@ cov-check / cosim)。
   レジスタレベルの検査は `tests/clint_plic_test.S` と `src/tests.veryl` の
   組込テストに、それぞれ追加する。窓の外へ素通しされることは
   `test_soc_decode` に倣って検査する
+- `src/power_on_reset.veryl` の `init=0` 属性は Gowin 合成時に必須。初期値を
+  セル既定に任せると `done` が初期値 1 の DFFS に写像され、起動リセットが出ない。
+  変更時は `make por-test` で初期値展開後 RTL と合成後セルモデルを検証する
+  (`make all` に含む)。実機検証手順は README.md の `scripts/test-board.ps1` を参照する。
 - FPGA 例 (`fpga/`) は Tang Primer 20K と Arty A7-35 の 2 枚。ボード側の差は
   パラメタだけで、コア自体はどちらも同じものが載る。`src/uart.veryl` `src/ram.veryl`
   `src/fpga_soc.veryl` はシミュレーション用テストベンチが C++ で持っていた周辺を

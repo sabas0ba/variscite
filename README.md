@@ -396,6 +396,25 @@ Arty は配置配線に nextpnr-xilinx が要るが oss-cad-suite に含まれ�
 .\scripts\uart-term.ps1         # 115200 8N1 のシリアルコンソール
 ```
 
+実機の自動検証は `scripts/test-board.ps1` を使う。`-Suite` に既存の Windows 版
+oss-cad-suite、`-Port` に対象基板の COM ポートを指定する。JTAG 上の対象が
+GW2A-18C 1 個であることを確認し、SRAM にロードして UART を有限時間採取する。
+
+```powershell
+# 先にコンテナ内で scripts/build_probe.sh または make fpga-tang を実行する。
+.\scripts\test-board.ps1 -Suite C:\path\to\oss-cad-suite -Port COM4 -Mode UartProbe
+.\scripts\test-board.ps1 -Suite C:\path\to\oss-cad-suite -Port COM4 -Mode Soc
+```
+
+`UartProbe` は 100 byte 以上がすべて `0x55` であること、`Soc` は起動バナー、
+2 回以上のタイマ出力、送信した `Z` に対する `[rx] Z (0x0000005a)`、trap 出力が
+ないことを検査する。`Loopback` は `scripts/build_probe.sh loopback` の生成物で
+送受信の完全一致を検査する。結果 JSON、ビットストリームの SHA256、JTAG ログ、
+SRAM ロードログ、UART の生データは `logs/board/` に保存する。失敗時は非ゼロで終了する。
+PowerShell の実行ポリシーでスクリプトが無効な環境では、実行許可を得たうえで
+`powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-board.ps1 ...`
+を使用する。この指定は起動したプロセスだけに適用される。
+
 openFPGALoader が JTAG に届くには、FTDI インタフェース 0 に WinUSB ドライバを
 [Zadig](https://zadig.akeo.ie/) で割り当てておく必要がある。20K Dock のデバッガは
 BL702 だが FT2232 として振る舞うため、`-b tangprimer20k` (ケーブル `ft2232`、
@@ -436,8 +455,8 @@ yosys `synth_gowin` 後のセル数 (Tang トップ、逐次除算器):
 
 ### クロックの与え方
 
-Tang は 27 MHz の水晶に直結している。nextpnr の実測は **31.05 MHz** で、27 MHz に
-対して 15% の余裕がある。
+Tang は 27 MHz の水晶に直結している。リセット初期値修正後 (2026-09-07) の
+nextpnr の実測は **29.55 MHz** で、27 MHz の制約に合格している。
 
 これは以前は成立しなかった。組合せ除算器があった時代のコアは同じ石で 19.0 MHz
 までしか閉じず、かといってクロックを落とすと事態が悪化した。SoC のクロックを
@@ -456,15 +475,22 @@ Tang Primer 20K、`PMP_ENTRIES = 4`、RAM 32 KiB での nextpnr 実測:
 
 | 資源 | 使用 | 全体 | |
 |---|---|---|---|
-| LUT4 | 15146 | 20736 | 73% |
+| LUT4 | 12501 | 20736 | 60% |
 | DFF | 2275 | 15552 | 14% |
 | BSRAM | 16 | 46 | 34% |
 | MULT36X36 | 3 | 12 | 25% |
 
-Arty A7-35 (yosys 合成後の見積り): LUT 15644 / 20800、RAMB36 16 / 50、
+Arty A7-35 (リセット初期値修正前の yosys 合成後の見積り): LUT 15644 / 20800、RAMB36 16 / 50、
 DSP48E1 10 / 90。
 
 ### 検証状況
+
+2026-09-07 の実機検証で、初期値未指定の `PowerOnReset.done` が `DFFS` に合成され、
+セル既定の `INIT=1` によって起動時リセットが発生しない不具合を確認した。
+`count` と `done` に `init=0` 属性を指定して修正した。Veryl の
+[`sv` 属性](https://doc.veryl-lang.org/book/05_language_reference/06_declaration/08_attribute.html)
+で Yosys に初期値を渡す。直接の RTL シミュレーションはこの属性を初期代入として扱わないため、
+`por-test` は Yosys が初期値を展開した RTL と合成後セルモデルを検査する。
 
 - `make fpga-sim` — **実施**。`FpgaSoc` を Verilator で回し、UART の送信線から
   コンソールを復号する。設計内部を覗かずボードと同じ 2 本の線だけを見るので、
@@ -472,13 +498,52 @@ DSP48E1 10 / 90。
   タイマ割り込み、PLIC 経由の UART 受信割り込み (打鍵のエコー) までを確認する
 - Tang Primer 20K — 合成・配置配線・ビットストリーム生成まで**実施**。タイミングも
   閉じている (上記)
+- 2026-09-07 の Tang Primer 20K 実機検証: JTAG IDCODE `0x81b`、USB
+  `0403:6010`、シリアル番号 `FACTORYAIOT_PRO`、COM4 を確認。
+  `UartProbe` を SRAM にロードし、115200 baud・5 秒で 57,536 byte を受信、
+  全 byte が `0x55` であることを確認した。
+  SoC も SRAM ロード後に起動バナー、`[tick] 1s` から `4s`、
+  `[rx] Z (0x0000005a)` を確認 (5 秒、301 byte)。使用ビットストリームの SHA256 は
+  `85092438ebff5ad53495c0b055b73a3ef0261a4c00b4747b03208edb25e0ba5f`。
+- `make por-test` — リセット回路を Yosys で展開した RTL と Gowin セルへの合成後の
+  両方で、初期リセット、256 クロック後の解除、その後 512 クロックの非再アサートを検証する。
+  `make all` に含まれる。ログは `sim/por/` に保存する。
+- 2026-09-07 の修正後 `make all` は合格。Veryl 組込テスト 7 件、ISA 76 件、
+  Spike 照合 77 件、カバレッジ予算、FPGA シミュレーション、`por-test` を確認した。
 - Arty A7-35 — yosys 合成まで**実施**。配置配線以降は openXC7 が必要で、本リポジトリ
   の検証環境には導入できていない
 - ピン配置は Tang が Sipeed の TangPrimer-20K-example と LiteX のプラットフォーム
   定義、Arty が Digilent の Arty-A7-35-Master.xdc による
 
+### LCD 単体の実機検証
+
+Dock の DISPLAY コネクタに接続する 800×480 RGB LCD 用に、SoC とは独立した
+カラーバー回路を用意した。ピン配置、水平・垂直タイミング、PLL の分周比は
+[Sipeed の 5 インチ用例](https://github.com/sipeed/TangPrimer-20K-example/tree/e469df4c0c9c41824f405a8515decf24ef1e8e6f/RGB_lcd/800x480_5inch_lcd)
+の仕様値を参照した。接続パネルの型番は未確定で、このプロファイルとの適合性は表示で確認する。
+実装は `fpga/tang_primer_20k/lcd_timing.veryl`、Gowin PLL の接続は `lcd_probe.sv` にある。
+
+```bash
+make lcd-test   # 2フレームの同期幅、有効領域、色、ブランキングを確認
+make fpga-lcd   # sim/fpga/lcd/lcd.fs
+```
+
+```powershell
+.\scripts\flash.ps1 -Suite C:\path\to\oss-cad-suite -Bitstream sim/fpga/lcd/lcd.fs
+```
+
+33 MHz、1056×505 の総画素数で約 61.88 Hz。左から白・黄・シアン・緑・マゼンタ・赤・青・黒の
+各 100 画素幅の縦帯を表示する。ロードすると SRAM 上の SoC を置き換える。
+SoC に戻す場合は `scripts/flash.ps1` に `sim/fpga/tang/soc.fs` を指定する。
+`lcd-test` は `make all` に含まれる。ビルドログは `sim/fpga/lcd/` に保存する。
+
+2026-09-07: `lcd-test`、33 MHz の配置配線、JTAG SRAM ロードに成功。利用者による目視でも
+8 色のカラーバーの正常表示を確認した。
+ビットストリーム SHA256: `49b01aaf6496f25b4e6894b80cc469518ac1f9b7011471c6316e745835d06593`。
+
 ### FPGA 例の制限
 
+- SoC への LCD 制御統合は未実装。表示は上記の LCD 単体検証回路で行う。
 - 外部 DRAM は繋いでいないため RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
   Linux は載らず、ベアメタル専用である
 - Tang の PMP は 4 エントリである (上記)。ベアメタルのファームウェアは M-mode のみで

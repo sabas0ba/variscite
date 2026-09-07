@@ -8,11 +8,9 @@
 /// A reset really is needed rather than just relying on power-up state, since
 /// the core has to start with pc at the reset vector rather than zero.
 ///
-/// This is the usual FPGA idiom: the counter has no reset of its own and
-/// instead starts from the flip-flops' configuration state, which is zero by
-/// default on both Gowin and Xilinx parts. It is therefore only valid on an
-/// FPGA - in simulation the counter would start unknown, so the simulation
-/// testbenches drive FpgaSoc's reset directly instead of instantiating this.
+/// Configuration initial values are explicit: synthesis can map `done` to
+/// a Gowin DFFS, whose default INIT is one. Without an explicit zero, that
+/// mapping skips the reset pulse and prevents the SoC from booting.
 ///
 /// o_rst is plain logic; the board top casts it to the reset type.
 module PowerOnReset #(
@@ -22,8 +20,10 @@ module PowerOnReset #(
     o_rst: output logic,
 ) {
 
+    #[sv("init = 0")]
     var count: logic<CYCLES_LOG2>;
-    var done : logic             ;
+    #[sv("init = 0")]
+    var done: logic;
 
     always_ff (i_clk) {
         if !done {

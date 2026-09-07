@@ -9,10 +9,10 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
 
 .PHONY: all lint veryl-build veryl-test plic-multi-test tb tb-fast isa-build \
         run-isa cov-test coverage cov-check cosim linux-build linux-boot \
-        fpga-fw fpga-sim fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
+        fpga-fw fpga-sim por-test lcd-test fpga-lcd fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
 all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
-     cosim fpga-sim
+     cosim fpga-sim por-test lcd-test
 
 lint:
 	veryl fmt --check
@@ -23,7 +23,7 @@ veryl-build:
 
 veryl-test:
 	mkdir -p logs
-	veryl test 2>&1 | tee logs/veryl_test.log
+	set -o pipefail; veryl test 2>&1 | tee logs/veryl_test.log
 
 # Built standalone with an explicit top: see the header of tb/tb_plic_multi.sv
 # for why this one cannot go through `veryl test`.
@@ -100,6 +100,17 @@ FPGA_RTL := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
 
 fpga-fw:
 	scripts/build_fw.sh
+
+por-test: veryl-build
+	bash scripts/test_por.sh
+
+lcd-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_lcd \
+	    -Mdir sim/obj_lcd -o tb_lcd target/tang_primer_20k/lcd_timing.sv tb/tb_lcd.sv
+	sim/obj_lcd/tb_lcd
+
+fpga-lcd:
+	bash scripts/build_lcd.sh
 
 # Board-independent check of the FPGA platform: the firmware runs on FpgaSoc
 # and the console is decoded off the serial line, so a broken UART, RAM or

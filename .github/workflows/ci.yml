@@ -96,7 +96,7 @@ jobs:
       # Board-independent check of the FPGA platform: the RTL UART, RAM and
       # boot stub, exercised by the demo firmware over a decoded serial line.
       - name: FPGA platform
-        run: make fpga-sim
+        run: make fpga-sim por-test lcd-test
 
       - name: Upload logs
         if: always()
