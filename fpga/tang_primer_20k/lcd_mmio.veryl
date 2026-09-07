@@ -1,0 +1,97 @@
+/// Staged RGB565 drawing registers at 0x12000000, committed at frame start.
+/// Both domains must reset together. The mailbox remains stable until ack.
+module TangLcdMmio (
+    i_cpu_clk  : input  'cpu   clock     ,
+    i_cpu_rst  : input  'cpu   reset     ,
+    i_sel      : input  'cpu   logic     ,
+    i_addr     : input  'cpu   logic<32> ,
+    i_wdata    : input  'cpu   logic<32> ,
+    i_wstrb    : input  'cpu   logic<4>  ,
+    o_rdata    : output 'cpu   logic<32> ,
+    i_pixel_clk: input  'pixel clock     ,
+    i_pixel_rst: input  'pixel reset     ,
+    i_frame    : input  'pixel logic     ,
+    o_config   : output 'pixel logic<224>,
+) {
+    var stage      : 'cpu   logic<32>  [7];
+    var mailbox    : 'cpu   logic<224>    ;
+    var request    : 'cpu   logic         ;
+    var acknowledge: 'pixel logic         ;
+    #[sv("async_reg = \"true\"")]
+    var ack_sync: 'cpu logic<2>;
+    #[sv("async_reg = \"true\"")]
+    var req_sync : 'pixel logic<2> ;
+    let hit      : 'cpu   logic     = i_sel && i_addr[31:8] == 24'h120000;
+    let busy     : 'cpu   logic     = i_cpu_rst || request != ack_sync[1];
+    let word_addr: 'cpu   logic<6>  = i_addr[7:2];
+    let byte_mask: 'cpu   logic<32> = {
+        i_wstrb[3] repeat 8, i_wstrb[2] repeat 8, i_wstrb[1] repeat 8, i_wstrb[0] repeat 8
+    };
+    function register_mask (
+        index: input logic<6>,
+    ) -> logic<32> {
+        return case index {
+            0      : 32'h1,
+            1, 2   : 32'hffff,
+            3, 5   : 32'h3ff,
+            4, 6   : 32'h1ff,
+            default: 32'h0,
+        };
+    }
+    always_comb {
+        o_rdata = 0;
+        if hit {
+            case word_addr {
+                0, 1, 2, 3, 4, 5, 6: o_rdata = stage[word_addr[2:0]];
+                7                  : o_rdata = {31'b0, busy};
+                8                  : o_rdata = 32'h4c434431;
+                default            : o_rdata = 0;
+            }
+        }
+    }
+    always_ff (i_cpu_clk, i_cpu_rst) {
+        if_reset {
+            for k in 0..7 {
+                stage[k] = if k == 0 ? 32'd1 : 32'd0;
+            }
+            mailbox = 224'd1;
+            request = 0;
+        } else if hit && (|i_wstrb) {
+            if word_addr <: 7 {
+                stage[word_addr[2:0]] = ((stage[word_addr[2:0]] & ~byte_mask) | (i_wdata & byte_mask))
+                    & register_mask(word_addr);
+            }
+            // Busy commits are ignored; staged writes are still accepted.
+            if word_addr == 7 && i_wstrb[0] && i_wdata[0] && !busy {
+                mailbox = {stage[6], stage[5], stage[4], stage[3], stage[2], stage[1], stage[0]};
+                request = ~request;
+            }
+        }
+    }
+    // Only synchronizer inputs and the held mailbox cross clock domains.
+    unsafe (cdc) {
+        always_ff (i_cpu_clk, i_cpu_rst) {
+            if_reset {
+                ack_sync = 0;
+            } else {
+                ack_sync = {ack_sync[0], acknowledge};
+            }
+        }
+        always_ff (i_pixel_clk, i_pixel_rst) {
+            if_reset {
+                req_sync = 0;
+            } else {
+                req_sync = {req_sync[0], request};
+            }
+        }
+        always_ff (i_pixel_clk, i_pixel_rst) {
+            if_reset {
+                acknowledge = 0;
+                o_config    = 224'd1;
+            } else if i_frame && req_sync[1] != acknowledge {
+                o_config    = mailbox;
+                acknowledge = req_sync[1];
+            }
+        }
+    }
+}

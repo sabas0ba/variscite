@@ -132,7 +132,7 @@ openFPGALoader だけで、これはコンテナから USB デバイスに届か
 ```bash
 make all         # 下記のうち Linux 以外を全て実行する (CI と同じ内容)
 make lint        # veryl fmt --check && veryl check
-make veryl-test  # veryl 組込テスト (6 本)
+make veryl-test  # veryl 組込テスト (7 本)
 make plic-multi-test # 複数ソース PLIC テストベンチ (単独ビルド)
 make tb          # veryl build + Verilator ビルド (--coverage --trace)
 make tb-fast     # 計装なしの高速モデル (Linux ブート用)
@@ -203,6 +203,10 @@ Linux ブートはカーネルビルドと 8e8 サイクル級の実行で桁違
 `tb/tb_plic_multi.sv` として `--top-module` を明示し必要なファイルだけを渡して
 単独でビルドする (`make plic-multi-test`)。上書きが効いていることは、
 4 ソース構成でしか成立しない enable マスク `0x1e` の検査で担保している。
+
+`make veryl-test` の入力は `src/*.veryl` に限定する。基板トップを含めると、
+組込テストに不要な Gowin PLL までトップとして展開され、デバイスライブラリが必要になる。
+FPGA と LCD は専用ターゲットでトップを明示して検証する。
 
 ## Spike コシミュレーション
 
@@ -521,10 +525,11 @@ Dock の DISPLAY コネクタに接続する 800×480 RGB LCD 用に、SoC と�
 カラーバー回路を用意した。ピン配置、水平・垂直タイミング、PLL の分周比は
 [Sipeed の 5 インチ用例](https://github.com/sipeed/TangPrimer-20K-example/tree/e469df4c0c9c41824f405a8515decf24ef1e8e6f/RGB_lcd/800x480_5inch_lcd)
 の仕様値を参照した。接続パネルの型番は未確定で、このプロファイルとの適合性は表示で確認する。
-実装は `fpga/tang_primer_20k/lcd_timing.veryl`、Gowin PLL の接続は `lcd_probe.sv` にある。
+実装は `fpga/tang_primer_20k/lcd_timing.veryl`、Gowin PLL の接続とリセット同期は
+`lcd_clock.veryl`、単体表示トップは `lcd_probe.veryl` にある。
 
 ```bash
-make lcd-test   # 3フレームの同期幅、有効領域、カラーバー、矩形、ブランキングを確認
+make lcd-test   # 12フレームの同期幅、有効領域、クリッピング、リセットを確認
 make fpga-lcd   # sim/fpga/lcd/lcd.fs
 ```
 
@@ -577,17 +582,35 @@ commit 時に設定一式を保持し、要求と応答の toggle をそれぞ�
 描画途中で色や座標が切り替わらない。busy 中に次の設定を書いても、保持済みの設定は変わらない。
 PLL のロック喪失時は両クロック領域の制御をリセットする。
 
-`make lcd-mmio-test` は非同期クロックでアドレスデコード、byte enable、busy、設定保持、
-フレーム境界での反映を検証する。`make lcd-soc-test` は実ファームウェアを動かし、
-UART コマンドの前後で黄色とマゼンタの矩形が LCD 出力に現れることを画素単位で検証する。
-両方とも `make all` と CI に含まれる。
+合成対象はすべて Veryl で記述する。MMIO は `lcd_mmio.veryl`、CPU と表示回路の接続は
+`lcd_system.veryl`、実機トップは `lcd_soc.veryl` にある。[Veryl の外部モジュール参照](https://doc.veryl-lang.org/book/05_language_reference/10_systemverilog_interoperation.html)
+を使った `$sv::rPLL` は Gowin の
+ハードウェアプリミティブへの参照であり、手書き SV のラッパーは使用しない。
+合成入力の SV はすべて `veryl build` による `target/` 以下の生成物である。
+`make lint` は `src/` と `fpga/` への `.sv` / `.v` の追加も検出する。
 
-2026-09-07: 統合後の `make all` と CI に合格。配置配線後の最大周波数は CPU 側
+テストベンチは既存の SV / C++ による独立した参照モデルを拡充した。
+
+| ターゲット | 検証内容 |
+|---|---|
+| `lcd-test` | 12 フレーム全画素、同期・DE・フレーム開始、画面端の 1 画素、全面描画、クリッピング、空・逆転座標、描画中のリセット |
+| `lcd-mmio-test` | クロック半周期 5/7、11/3、3/13 の 3 条件。それぞれ 112 件の byte enable 検証、16 回の設定一括反映、全予約ワード、busy 中の書き込み、未完了要求のリセットと再 commit |
+| `lcd-reset-test` | 非同期リセット、各クロック 2 エッジ後の解除、画素クロック停止・再開、繰り返しのロック喪失 |
+| `lcd-soc-test` | 実ファームウェアで 800 万 CPU サイクル。黄色と Z/r/g/b の色変更、c/m の表示モード変更、矩形の形状、タイマによる移動、フレーム途中の設定混在がないこと |
+
+すべて `make all` と CI に含まれる。`make veryl-test` は `src/*.veryl` を入力として
+既存の 7 件を検証する。デバイスライブラリを必要とする基板トップはその多重トップに含めず、
+上記の専用テストと実機用合成で検証する。
+
+2026-09-07 (Veryl 統一前の実機記録): 統合後の `make all` と CI に合格。配置配線後の最大周波数は CPU 側
 38.57 MHz、画素側 158.23 MHz で、27 MHz / 33 MHz の制約に合格した。
 実機 SRAM ロード後、COM4 の 5 秒間の検証で LCD 検出、描画反映応答、タイマ、
 `Z` 受信を確認した。利用者による目視でも、濃青の背景上でマゼンタの矩形が毎秒移動する
 統合版の表示が期待どおりであることを確認した。
 ビットストリーム SHA256: `9f398259e1270307651bea230cb9c916f446b82c31bb39d6fa2b06d6a22e155e`。
+
+2026-09-07: 合成対象の Veryl 統一後も `make all` に合格。上記の拡充したテストを含み、
+CPU 描画では 18 フレームを検証した。単体カラーバー版のビットストリーム生成も確認した。
 
 ### FPGA 例の制限
 

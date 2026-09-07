@@ -69,6 +69,9 @@ cov-check / cosim)。
 
 - 一時ファイル・ログは git ignore 済みの `logs/` `sim/` に置く
 - 生成 SV (`target/`) は成果物ではない。手編集しない
+- 合成対象 RTL は PLL 接続・基板トップを含め Veryl で実装する。`src/` と `fpga/` に
+  手書き SV / Verilog を追加しない。デバイスプリミティブは `$sv::` で参照する。
+  SV / C++ は検証用テストベンチで使用し、RTL を埋め込んで代用しない。
 - コミットは Conventional Commits
 - Verilator の最上位は `rv32ima_Soc` (`src/soc.veryl`)。CLINT と PLIC は RTL 側に
   あり、コアのメモリポートには現れない。テストベンチが供給するのは ROM / RAM /
@@ -81,7 +84,7 @@ cov-check / cosim)。
   `test_soc_decode` に倣って検査する
 - FPGA 専用の LCD は `FpgaSoc` の外部バスポートに接続する。Linux シミュレータには
   存在しないため DTS には追加しない。レジスタ仕様は README.md を参照する。
-  変更時は `make lcd-test lcd-mmio-test lcd-soc-test` を通し、クロック領域をまたぐ
+  変更時は `make lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test` を通し、クロック領域をまたぐ
   設定保持とフレーム境界での反映、CPU から LCD 出力までを検証する (`make all` に含む)。
 - `src/power_on_reset.veryl` の `init=0` 属性は Gowin 合成時に必須。初期値を
   セル既定に任せると `done` が初期値 1 の DFFS に写像され、起動リセットが出ない。

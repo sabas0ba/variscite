@@ -23,8 +23,8 @@
 #include <verilated.h>
 
 #ifdef LCD_SYSTEM
-#include "VTangLcdSystem.h"
-using FpgaTop = VTangLcdSystem;
+#include "Vrv32ima_TangLcdSystem.h"
+using FpgaTop = Vrv32ima_TangLcdSystem;
 #else
 #include "Vrv32ima_FpgaSoc.h"
 using FpgaTop = Vrv32ima_FpgaSoc;
@@ -159,6 +159,13 @@ int main(int argc, char** argv) {
     unsigned pixels = 0, yellow = 0, magenta = 0, dark = 0;
     bool saw_yellow = false, saw_magenta = false;
     unsigned frames = 0;
+    unsigned red = 0, green = 0, blue = 0;
+    bool saw_red = false, saw_green = false, saw_blue = false;
+    bool saw_command_bars = false, saw_return_rectangle = false, saw_motion = false;
+    unsigned command_stage = 0;
+    int rect_x = -1, previous_rect_x = -1;
+    bool rectangle_valid = true, bars_valid = true;
+    const uint16_t bar_colors[] = {0xffff,0xffe0,0x07ff,0x07e0,0xf81f,0xf800,0x001f,0};
 #endif
     auto clock_cycle = [&]() {
 #ifdef LCD_SYSTEM
@@ -170,18 +177,59 @@ int main(int argc, char** argv) {
             top->eval();
             if (!top->i_rst && pixel_clk && !last_pixel_clk) {
                 if (last_vs && !top->lcd_vs) {
+                    if(pixels != 0 && pixels != 800*480) {
+                        std::fprintf(stderr,"[tb] FAIL: active frame size=%u\n",pixels);
+                        return false;
+                    }
                     if (pixels == 800 * 480) {
                         frames++;
                         saw_yellow |= yellow == 120*120 && dark == 800*480-120*120;
                         saw_magenta |= magenta == 120*120 && dark == 800*480-120*120;
+                        const bool rectangle = dark == 800*480-120*120;
+                        const bool single_color = yellow == 120*120 || magenta == 120*120 ||
+                            red == 120*120 || green == 120*120 || blue == 120*120;
+                        if(!bars_valid && !(rectangle && single_color)) {
+                            std::fprintf(stderr,"[tb] FAIL: torn or invalid LCD frame\n");
+                            return false;
+                        }
+                        if(rectangle && (!rectangle_valid || rect_x < 40 || rect_x > 540 || (rect_x-40)%100 != 0)) {
+                            std::fprintf(stderr,"[tb] FAIL: rectangle geometry x=%d\n",rect_x);
+                            return false;
+                        }
+                        if(rectangle) {
+                            saw_motion |= previous_rect_x >= 0 && previous_rect_x != rect_x;
+                            previous_rect_x = rect_x;
+                        }
+                        saw_red |= rectangle && red == 120*120;
+                        saw_green |= rectangle && green == 120*120;
+                        saw_blue |= rectangle && blue == 120*120;
+                        saw_command_bars |= command_stage >= 4 && bars_valid;
+                        saw_return_rectangle |= command_stage >= 5 && rectangle && blue == 120*120;
                     }
                     pixels = yellow = magenta = dark = 0;
+                    red = green = blue = 0;
+                    rect_x = -1;
+                    rectangle_valid = bars_valid = true;
                 }
                 if (top->lcd_de) {
+                    const unsigned x = pixels % 800, y = pixels / 800;
+                    bars_valid &= top->lcd_rgb == bar_colors[x/100];
+                    if(top->lcd_rgb != 0x0010 && rect_x < 0) rect_x = static_cast<int>(x);
+                    if(rect_x >= 0) {
+                        const bool inside = x >= static_cast<unsigned>(rect_x) && x < static_cast<unsigned>(rect_x+120) && y >= 180 && y < 300;
+                        rectangle_valid &= inside == (top->lcd_rgb != 0x0010);
+                    }
                     pixels++;
                     yellow += top->lcd_rgb == 0xffe0;
                     magenta += top->lcd_rgb == 0xf81f;
                     dark += top->lcd_rgb == 0x0010;
+                    red += top->lcd_rgb == 0xf800;
+                    green += top->lcd_rgb == 0x07e0;
+                    blue += top->lcd_rgb == 0x001f;
+                }
+                if(!top->lcd_de && top->lcd_rgb != 0) {
+                    std::fprintf(stderr,"[tb] FAIL: nonzero RGB during blanking\n");
+                    return false;
                 }
                 last_vs = top->lcd_vs;
             }
@@ -193,10 +241,11 @@ int main(int argc, char** argv) {
         top->i_clk = 1;
         top->eval();
 #endif
+        return true;
     };
     top->i_uart_rx = 1;
     for (int i = 0; i < 8; i++) {
-        clock_cycle();
+        if(!clock_cycle()) return 1;
     }
     top->i_rst = 0;
 #ifdef LCD_SYSTEM
@@ -208,7 +257,7 @@ int main(int argc, char** argv) {
     for (uint64_t c = 0; c < max_cycles; c++) {
         top->i_uart_rx = injector.step() ? 1 : 0;
 
-        clock_cycle();
+        if(!clock_cycle()) return 1;
 
         if (top->o_retire) retired++;
 
@@ -229,6 +278,16 @@ int main(int argc, char** argv) {
             injector.send(send);
             sent = true;
         }
+#ifdef LCD_SYSTEM
+        // Advance only after a complete frame confirms the previous command.
+        if(sent && !injector.busy()) {
+            if(command_stage == 0 && saw_magenta) { injector.send("r"); command_stage=1; }
+            else if(command_stage == 1 && saw_red) { injector.send("g"); command_stage=2; }
+            else if(command_stage == 2 && saw_green) { injector.send("b"); command_stage=3; }
+            else if(command_stage == 3 && saw_blue) { injector.send("c"); command_stage=4; }
+            else if(command_stage == 4 && saw_command_bars) { injector.send("m"); command_stage=5; }
+        }
+#endif
     }
 
     std::printf("\n[tb] %llu cycles, %llu instructions retired\n",
@@ -248,11 +307,13 @@ int main(int argc, char** argv) {
         rc = 1;
     }
 #ifdef LCD_SYSTEM
-    if (!saw_yellow || !saw_magenta || frames < 3 || out.find("[lcd] timeout") != std::string::npos) {
+    if (!saw_yellow || !saw_magenta || !saw_red || !saw_green || !saw_blue ||
+        !saw_command_bars || !saw_return_rectangle || !saw_motion || frames < 9 ||
+        out.find("[lcd] timeout") != std::string::npos || out.find("[trap]") != std::string::npos) {
         std::printf("[tb] FAIL: LCD frames=%u yellow=%d magenta=%d\n", frames, saw_yellow, saw_magenta);
         rc = 1;
     } else {
-        std::printf("[tb] LCD: %u frames; CPU-drawn yellow and UART-selected magenta rectangles verified\n", frames);
+        std::printf("[tb] LCD: %u frames; yellow/Z/r/g/b colors, c/m mode switch, rectangle geometry and timer motion verified\n", frames);
     }
 #endif
     if (rc == 0) std::printf("[tb] PASS\n");

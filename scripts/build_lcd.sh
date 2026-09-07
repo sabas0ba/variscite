@@ -20,10 +20,12 @@ export PATH="$suite/bin:$PATH"
 out=sim/fpga/lcd
 mkdir -p "$out"
 veryl build > "$out/veryl.log" 2>&1
+# The PLL wrapper is also Veryl-generated; read_verilog preserves parameters
+# on the opaque rPLL primitive for synth_gowin's device library.
 yosys -m slang -p "
     read_slang --top rv32ima_TangLcdTiming target/tang_primer_20k/lcd_timing.sv
-    read_verilog fpga/tang_primer_20k/lcd_probe.sv
-    synth_gowin -top TangLcdProbe -json $out/lcd.json
+    read_verilog -sv target/tang_primer_20k/lcd_clock.sv target/tang_primer_20k/lcd_probe.sv
+    synth_gowin -top rv32ima_TangLcdProbe -json $out/lcd.json
 " > "$out/yosys.log" 2>&1
 nextpnr-himbaechel --device GW2A-LV18PG256C8/I7 --vopt family=GW2A-18C \
     --vopt cst=fpga/tang_primer_20k/lcd_probe.cst \

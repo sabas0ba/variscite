@@ -1,0 +1,67 @@
+/// Device PLL instantiation: 27 MHz input, 33 MHz RGB pixel clock.
+module TangLcdClock (
+    i_clk   : input  'cpu   clock,
+    o_clk   : output 'pixel clock,
+    o_locked: output 'async logic,
+) {
+    unsafe (cdc) {
+        inst pll: $sv::rPLL #(
+            FCLKIN   : "27"      ,
+            IDIV_SEL : 8         ,
+            FBDIV_SEL: 10        ,
+            ODIV_SEL : 16        ,
+            CLKFB_SEL: "internal",
+            DEVICE   : "GW2A-18C",
+        ) (
+            CLKIN   : i_clk   ,
+            CLKOUT  : o_clk   ,
+            LOCK    : o_locked,
+            RESET   : 1'b0    ,
+            RESET_P : 1'b0    ,
+            CLKFB   : 1'b0    ,
+            FBDSEL  : 6'b0    ,
+            IDSEL   : 6'b0    ,
+            ODSEL   : 6'b0    ,
+            PSDA    : 4'b0    ,
+            DUTYDA  : 4'b0    ,
+            FDLY    : 4'b0    ,
+            CLKOUTP : _       ,
+            CLKOUTD : _       ,
+            CLKOUTD3: _       ,
+        );
+    }
+}
+
+/// Common asynchronous reset assertion and per-domain synchronous release.
+module TangLcdReset (
+    i_cpu_clk    : input  'cpu   clock           ,
+    i_pixel_clk  : input  'pixel clock           ,
+    i_reset      : input  'async reset_async_high,
+    o_cpu_ready  : output 'cpu   logic           ,
+    o_pixel_ready: output 'pixel logic           ,
+) {
+    #[sv("init = 0")]
+    #[sv("async_reg = \"true\"")]
+    var cpu_ready: 'cpu logic<2>;
+    #[sv("init = 0")]
+    #[sv("async_reg = \"true\"")]
+    var pixel_ready: 'pixel logic<2>;
+    unsafe (cdc) {
+        always_ff (i_cpu_clk, i_reset) {
+            if_reset {
+                cpu_ready = 0;
+            } else {
+                cpu_ready = {cpu_ready[0], 1'b1};
+            }
+        }
+        always_ff (i_pixel_clk, i_reset) {
+            if_reset {
+                pixel_ready = 0;
+            } else {
+                pixel_ready = {pixel_ready[0], 1'b1};
+            }
+        }
+    }
+    assign o_cpu_ready   = cpu_ready[1];
+    assign o_pixel_ready = pixel_ready[1];
+}
