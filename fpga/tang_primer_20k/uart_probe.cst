@@ -1,0 +1,8 @@
+// Constraints for the bring-up probe (uart_probe.veryl). Same two pins as
+// tang_primer_20k.cst, without the receive line the probe does not use.
+
+IO_LOC  "i_clk" H11;
+IO_PORT "i_clk" IO_TYPE=LVCMOS33;
+
+IO_LOC  "o_uart_tx" M11;
+IO_PORT "o_uart_tx" IO_TYPE=LVCMOS33 DRIVE=8;

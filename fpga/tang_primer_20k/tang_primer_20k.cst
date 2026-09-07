@@ -1,0 +1,17 @@
+// Sipeed Tang Primer 20K, core board pins only (see top.veryl).
+//
+// H11 is the 27 MHz crystal. T13/M11 are the serial pair that leaves the core
+// board on the SODIMM connector (CARD1 pins 1 and 11) and reaches whichever
+// USB-serial bridge the dock carries, so the assignment does not depend on the
+// dock. M11 is driven by the FPGA. Cross-checked against Sipeed's own example
+// project (TangPrimer-20K-example) and the LiteX platform definition
+// (litex_boards/platforms/sipeed_tang_primer_20k.py).
+
+IO_LOC  "i_clk" H11;
+IO_PORT "i_clk" IO_TYPE=LVCMOS33;
+
+IO_LOC  "i_uart_rx" T13;
+IO_PORT "i_uart_rx" IO_TYPE=LVCMOS33 PULL_MODE=UP;
+
+IO_LOC  "o_uart_tx" M11;
+IO_PORT "o_uart_tx" IO_TYPE=LVCMOS33 DRIVE=8;

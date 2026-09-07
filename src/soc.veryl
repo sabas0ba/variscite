@@ -11,7 +11,11 @@
 ///
 /// Both devices answer combinationally in the cycle the core presents the
 /// request, matching the core's protocol (valid held until ready).
-module Soc (
+module Soc #(
+    /// Forwarded to Core; see there for what it costs and why a board build
+    /// might want fewer.
+    param PMP_ENTRIES: u32 = 16,
+) (
     i_clk: input clock,
     i_rst: input reset,
 
@@ -79,7 +83,9 @@ module Soc (
         }
     }
 
-    inst u_core: Core (
+    inst u_core: Core #(
+        PMP_ENTRIES: PMP_ENTRIES,
+    ) (
         i_clk: i_clk,
         i_rst: i_rst,
 

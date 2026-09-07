@@ -1,0 +1,54 @@
+/// Tang Primer 20K CPU at 27 MHz and LCD scanout at 33 MHz.
+module TangLcdSoc (
+    i_clk    : input  'cpu   clock   ,
+    i_uart_rx: input  'cpu   logic   ,
+    o_uart_tx: output 'cpu   logic   ,
+    lcd_dclk : output 'pixel clock   ,
+    lcd_hs   : output 'pixel logic   ,
+    lcd_vs   : output 'pixel logic   ,
+    lcd_de   : output 'pixel logic   ,
+    lcd_r    : output 'pixel logic<5>,
+    lcd_g    : output 'pixel logic<6>,
+    lcd_b    : output 'pixel logic<5>,
+) {
+    var pixel_clk  : 'pixel clock           ;
+    var locked     : 'async logic           ;
+    var por        : 'cpu   logic           ;
+    var lcd_reset  : 'async reset_async_high;
+    var cpu_ready  : 'cpu   logic           ;
+    var pixel_ready: 'pixel logic           ;
+    inst reset_gen: PowerOnReset (
+        i_clk     ,
+        o_rst: por,
+    );
+    inst clock_gen: TangLcdClock (
+        i_clk              ,
+        o_clk   : pixel_clk,
+        o_locked: locked   ,
+    );
+    unsafe (cdc) {
+        assign lcd_reset = (por || !locked) as reset_async_high;
+    }
+    inst reset_sync: TangLcdReset (
+        i_cpu_clk    : i_clk      ,
+        i_pixel_clk  : pixel_clk  ,
+        i_reset      : lcd_reset  ,
+        o_cpu_ready  : cpu_ready  ,
+        o_pixel_ready: pixel_ready,
+    );
+    assign lcd_dclk = pixel_clk;
+    inst system: TangLcdSystem (
+        i_clk                               ,
+        i_rst      : por as reset           ,
+        i_pixel_clk: pixel_clk              ,
+        i_pixel_rst: (!pixel_ready) as reset,
+        i_lcd_ready: cpu_ready              ,
+        i_uart_rx                           ,
+        o_uart_tx                           ,
+        o_retire   : _                      ,
+        lcd_hs                              ,
+        lcd_vs                              ,
+        lcd_de                              ,
+        lcd_rgb    : {lcd_r, lcd_g, lcd_b},
+    );
+}

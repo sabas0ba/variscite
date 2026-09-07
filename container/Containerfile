@@ -1,0 +1,56 @@
+# Build and verification environment for this repository.
+#
+# CI runs on ubuntu-24.04, so this image starts from the same distribution and
+# installs the toolchain with scripts/setup_toolchain.sh, which pins every
+# download by SHA256 or commit id. Running the script here rather than
+# duplicating its version table keeps one source of truth (README.md's table).
+#
+# The repository itself is not baked in; mount it at /work:
+#
+#   podman build -t variscite-dev -f container/Containerfile .
+#   podman run --rm -v .:/work:z variscite-dev make all
+#
+# Base image is pinned by digest. The apt packages are not version-pinned: they
+# follow the apt snapshot of the digest-pinned base image. Ubuntu drops older
+# versions from its mirrors on update, so pinning versions makes the build more
+# fragile rather than less.
+FROM docker.io/library/ubuntu:24.04@sha256:1e0a86e57d247923571b75e0aaf48a1449cf8c543d51fb3e07a4a7d7bfa79316
+
+# ca-certificates/curl/git/unzip fetch and unpack the pinned toolchain.
+# build-essential builds Spike, flex and the Verilator-generated C++.
+# device-tree-compiler is what Spike's configure looks for (setup_toolchain.sh
+# builds dtc from source only when the distribution has none).
+# bison/bc/libelf-dev/cpio are the kernel build's host requirements; flex comes
+# from the pinned source build in setup_toolchain.sh, not from apt.
+# libboost-*-dev are Spike's link-time dependencies.
+# python3 generates the firmware hex image (scripts/build_fw.sh).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends \
+      ca-certificates curl git unzip xz-utils \
+      build-essential pkg-config \
+      device-tree-compiler \
+      bison bc libelf-dev cpio \
+      libboost-regex-dev libboost-system-dev \
+      python3 \
+ && rm -rf /var/lib/apt/lists/*
+
+# Toolchain and the Linux source tree live in the image so that `podman run
+# --rm` needs no persistent volume. riscv-tests is cloned into the mounted
+# working tree instead (it belongs to the repository's third_party/), so it is
+# left to a run-time invocation of the same script.
+ENV PREFIX=/opt BINDIR=/usr/local/bin SRCDIR=/opt/src LINUX_SRC=/opt/src/linux
+COPY scripts/setup_toolchain.sh /tmp/setup_toolchain.sh
+RUN WITH_LINUX=1 /tmp/setup_toolchain.sh \
+ && rm -rf /opt/dl /tmp/setup_toolchain.sh
+
+# The bind-mounted repository is owned by a different uid than root inside the
+# container, so exempt the mount point from git's ownership check. riscv-tests
+# and its env submodule are separate repositories under the same mount and need
+# their own entries; setup_toolchain.sh checks out a pinned commit in each.
+RUN git config --system --add safe.directory /work  && git config --system --add safe.directory /work/third_party/riscv-tests  && git config --system --add safe.directory /work/third_party/riscv-tests/env
+
+# oss-cad-suite is deliberately kept off PATH: it ships its own python3 and
+# other host tools that would shadow the distribution's and break the kernel
+# build. setup_toolchain.sh symlinks only the verilator binaries into
+# /usr/local/bin, and scripts/build_fpga.sh finds yosys under /opt itself.
+WORKDIR /work

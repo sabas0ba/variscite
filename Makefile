@@ -9,12 +9,14 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
 
 .PHONY: all lint veryl-build veryl-test plic-multi-test tb tb-fast isa-build \
         run-isa cov-test coverage cov-check cosim linux-build linux-boot \
-        fpga-fw fpga-sim fpga-arty fpga-arty-prog clean
+        fpga-fw fpga-sim por-test lcd-test fpga-lcd fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
 all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
-     cosim fpga-sim
+     cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test
 
 lint:
+	@test -z "$$(find src fpga -type f \( -name '*.sv' -o -name '*.v' \))" || \
+	    { echo 'RTL sources under src/ and fpga/ must be Veryl' >&2; exit 1; }
 	veryl fmt --check
 	veryl check
 
@@ -23,7 +25,7 @@ veryl-build:
 
 veryl-test:
 	mkdir -p logs
-	veryl test 2>&1 | tee logs/veryl_test.log
+	set -o pipefail; veryl test src/*.veryl 2>&1 | tee logs/veryl_test.log
 
 # Built standalone with an explicit top: see the header of tb/tb_plic_multi.sv
 # for why this one cannot go through `veryl test`.
@@ -101,6 +103,41 @@ FPGA_RTL := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
 fpga-fw:
 	scripts/build_fw.sh
 
+por-test: veryl-build
+	bash scripts/test_por.sh
+
+lcd-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_lcd \
+	    -Mdir sim/obj_lcd -o tb_lcd target/tang_primer_20k/lcd_timing.sv tb/tb_lcd.sv
+	sim/obj_lcd/tb_lcd
+
+fpga-lcd:
+	bash scripts/build_lcd.sh
+
+.PHONY: lcd-mmio-test lcd-reset-test lcd-soc-test fpga-lcd-soc
+lcd-reset-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_lcd_reset \
+	    -Mdir sim/obj_lcd_reset -o tb_lcd_reset target/tang_primer_20k/lcd_clock.sv tb/tb_lcd_reset.sv
+	sim/obj_lcd_reset/tb_lcd_reset
+
+lcd-mmio-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_lcd_mmio \
+	    -Mdir sim/obj_lcd_mmio -o tb_lcd_mmio target/tang_primer_20k/lcd_mmio.sv tb/tb_lcd_mmio.sv
+	sim/obj_lcd_mmio/tb_lcd_mmio
+	sim/obj_lcd_mmio/tb_lcd_mmio +cpu_half=11 +pixel_half=3
+	sim/obj_lcd_mmio/tb_lcd_mmio +cpu_half=3 +pixel_half=13
+
+fpga-lcd-soc:
+	bash scripts/build_lcd_soc.sh
+
+lcd-soc-test: veryl-build fpga-fw
+	verilator --cc --exe --build -O2 --top-module rv32ima_TangLcdSystem \
+	    -GCLK_HZ=1000000 -GUART_DIV=2 -CFLAGS -DLCD_SYSTEM \
+	    -Mdir sim/obj_lcd_soc -o tb_lcd_soc $(FPGA_RTL) \
+	    target/tang_primer_20k/lcd_timing.sv target/tang_primer_20k/lcd_mmio.sv \
+	    target/tang_primer_20k/lcd_system.sv tb/tb_fpga.cpp
+	sim/obj_lcd_soc/tb_lcd_soc +cycles=8000000 +bitcycles=32 +send=Z +expect="[lcd] applied"
+
 # Board-independent check of the FPGA platform: the firmware runs on FpgaSoc
 # and the console is decoded off the serial line, so a broken UART, RAM or
 # boot stub fails here rather than on the bench. The clock and divisor are
@@ -113,6 +150,12 @@ fpga-sim: veryl-build fpga-fw
 	    $(FPGA_RTL) tb/tb_fpga.cpp
 	sim/obj_fpga/tb_fpga +cycles=4000000 +bitcycles=32 +send="Hi!" \
 	    +expect="[tick] 2"
+
+fpga-tang:
+	scripts/build_fpga.sh tang
+
+fpga-tang-prog:
+	scripts/build_fpga.sh tang --prog
 
 fpga-arty:
 	scripts/build_fpga.sh arty

@@ -1,0 +1,68 @@
+/// RGB565 color bars for the Sipeed 800x480 LCD timing profile.
+/// Horizontal: active 800, front 40, sync 128, back 88.
+/// Vertical: active 480, front 1, sync 3, back 21. Pixel clock: 33 MHz.
+module TangLcdTiming (
+    i_clk  : input  clock    ,
+    i_rst  : input  reset    ,
+    i_bars : input  logic    ,
+    i_bg   : input  logic<16>,
+    i_fg   : input  logic<16>,
+    i_x0   : input  logic<10>,
+    i_y0   : input  logic<9> ,
+    i_x1   : input  logic<10>,
+    i_y1   : input  logic<9> ,
+    o_frame: output logic    ,
+    o_hs   : output logic    ,
+    o_vs   : output logic    ,
+    o_de   : output logic    ,
+    o_rgb  : output logic<16>,
+) {
+    var x: logic<11>;
+    var y: logic<9> ;
+
+    always_ff {
+        if_reset {
+            x = 0;
+            y = 0;
+        } else if x == 11'd1055 {
+            x = 0;
+            y = if y == 9'd504 ? 9'd0 : y + 1;
+        } else {
+            x = x + 1;
+        }
+    }
+
+    assign o_hs    = !(x <: 11'd128);
+    assign o_vs    = !(y <: 9'd3);
+    assign o_de    = x >= 11'd216 && x <: 11'd1016 && y >= 9'd24 && y <: 9'd504;
+    assign o_frame = x == 0 && y == 0;
+    let active_x: logic<11> = x - 11'd216;
+    let active_y: logic<9>  = y - 9'd24;
+
+    // Eight 100-pixel bars: white, yellow, cyan, green, magenta, red, blue, black.
+    always_comb {
+        o_rgb = 16'h0000;
+        if o_de {
+            if !i_bars {
+                o_rgb = i_bg;
+                if active_x >= {1'b0, i_x0} && active_x <: {1'b0, i_x1} && active_y >= i_y0 && active_y <: i_y1 {
+                    o_rgb = i_fg;
+                }
+            } else if x <: 11'd316 {
+                o_rgb = 16'hffff;
+            } else if x <: 11'd416 {
+                o_rgb = 16'hffe0;
+            } else if x <: 11'd516 {
+                o_rgb = 16'h07ff;
+            } else if x <: 11'd616 {
+                o_rgb = 16'h07e0;
+            } else if x <: 11'd716 {
+                o_rgb = 16'hf81f;
+            } else if x <: 11'd816 {
+                o_rgb = 16'hf800;
+            } else if x <: 11'd916 {
+                o_rgb = 16'h001f;
+            }
+        }
+    }
+}

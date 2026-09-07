@@ -13,12 +13,12 @@ git clone variscite.bundle rv32ima_veryl
 cd rv32ima_veryl
 ```
 
-ツールチェーンと外部ソースは git 管理外である。以下で固定バージョンを導入する。
-`/opt` と `/usr/local/bin` に書き込み Spike をソースビルドするため、コンテナ内で
-実行すること。
+ツールチェーンと外部ソースは git 管理外である。`container/Containerfile` が
+`scripts/setup_toolchain.sh` を実行して固定バージョンを導入する。
 
 ```bash
-WITH_SOURCES=1 scripts/setup_toolchain.sh
+podman build -t variscite-dev -f container/Containerfile .
+podman run --rm -v "$PWD:/work" variscite-dev env WITH_TESTS=1 scripts/setup_toolchain.sh
 ```
 
 導入されるもの (バージョンと SHA256 は README.md の表と一致させること):
@@ -27,10 +27,19 @@ Veryl / Verilator (oss-cad-suite) / xPack riscv-none-elf-gcc / flex / Spike、
 
 ## 作業環境
 
+- **ビルドと検証はすべて `container/Containerfile` のコンテナ内で行う。** Windows
+  ホストでは Smart App Control が未署名バイナリ (veryl.exe、verilator、nextpnr) の
+  実行を止めるため、ホストで直接動かそうとしないこと。Windows からは
+  `scripts/dev.ps1 <command>` が中継する
+- 例外は基板への書き込みだけで、コンテナから USB デバイスに届かないため
+  `scripts/flash.ps1` と `scripts/uart-term.ps1` がホスト側で動く。これらが使う
+  Windows 版 oss-cad-suite は `scripts/setup-toolchain.ps1` が `tools/` に入れる
 - 検証済み環境は README.md 記載の固定バイナリ構成 (Veryl v0.20.3 / Verilator 5.051
   / xPack riscv-none-elf-gcc 15.2.0-1)。nix が利用可能な環境では `flake.nix` の
   devShell を用いる (未評価につき、初回利用時は動作確認から行うこと)
-- Linux ソースの位置は `LINUX_SRC` で指定する (既定 `~/src/linux`)
+- Linux ソースの位置は `LINUX_SRC` で指定する (コンテナ内では `/opt/src/linux`)
+- 作業ツリーは `.gitattributes` で LF に固定してある。CRLF が混ざるとコンテナ内で
+  shebang も make のレシピも壊れる。エディタやスクリプトで CR を書き込まないこと
 
 ## 変更後の検証
 
@@ -60,6 +69,9 @@ cov-check / cosim)。
 
 - 一時ファイル・ログは git ignore 済みの `logs/` `sim/` に置く
 - 生成 SV (`target/`) は成果物ではない。手編集しない
+- 合成対象 RTL は PLL 接続・基板トップを含め Veryl で実装する。`src/` と `fpga/` に
+  手書き SV / Verilog を追加しない。デバイスプリミティブは `$sv::` で参照する。
+  SV / C++ は検証用テストベンチで使用し、RTL を埋め込んで代用しない。
 - コミットは Conventional Commits
 - Verilator の最上位は `rv32ima_Soc` (`src/soc.veryl`)。CLINT と PLIC は RTL 側に
   あり、コアのメモリポートには現れない。テストベンチが供給するのは ROM / RAM /
@@ -70,16 +82,32 @@ cov-check / cosim)。
   レジスタレベルの検査は `tests/clint_plic_test.S` と `src/tests.veryl` の
   組込テストに、それぞれ追加する。窓の外へ素通しされることは
   `test_soc_decode` に倣って検査する
-- FPGA 例 (`fpga/`) はコアを変更せずに載せている。`src/uart.veryl` `src/ram.veryl`
+- FPGA 専用の LCD は `FpgaSoc` の外部バスポートに接続する。Linux シミュレータには
+  存在しないため DTS には追加しない。レジスタ仕様は README.md を参照する。
+  変更時は `make lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test` を通し、クロック領域をまたぐ
+  設定保持とフレーム境界での反映、CPU から LCD 出力までを検証する (`make all` に含む)。
+- `src/power_on_reset.veryl` の `init=0` 属性は Gowin 合成時に必須。初期値を
+  セル既定に任せると `done` が初期値 1 の DFFS に写像され、起動リセットが出ない。
+  変更時は `make por-test` で初期値展開後 RTL と合成後セルモデルを検証する
+  (`make all` に含む)。実機検証手順は README.md の `scripts/test-board.ps1` を参照する。
+- FPGA 例 (`fpga/`) は Tang Primer 20K と Arty A7-35 の 2 枚。ボード側の差は
+  パラメタだけで、コア自体はどちらも同じものが載る。`src/uart.veryl` `src/ram.veryl`
   `src/fpga_soc.veryl` はシミュレーション用テストベンチが C++ で持っていた周辺を
   RTL 化したもので、変更したら `make fpga-sim` を通すこと。これは実機に触らずに
   UART のボーレート生成・RAM・ブートスタブまで検査する唯一の手段である
+- ビットストリームまで生成できるのは Tang だけである (`make fpga-tang`)。Arty は
+  配置配線に openXC7 が要り、コンテナに入れていないため合成で止まる
 - FPGA 用 RTL は `make tb` のカバレッジ対象 (`$(RTL)`) に入れていない。入れると
   カバレッジ予算が変わるので、追加する場合は `scripts/cov_check.sh` も併せて直す
 - 生成 SV は yosys 標準フロントエンドでは読めない (Veryl が関数引数に
   `input var logic` を出すため)。合成は `yosys -m slang` + `read_slang` を使う
-- コアの M 拡張は除算を単一サイクルの組合せ回路で行い、これが FPGA でのクリティカル
-  パスかつ最大の面積要因である。多サイクル化すれば動作周波数と面積の両方が改善する
+- コアの M 拡張の除算は逐次 (復元法、33 サイクル、`State::divide`)。以前は単一
+  サイクルの組合せ回路で、FPGA でのクリティカルパスだったため置き換えた。乗算は
+  単一サイクルのままで、DSP に載るので問題にならない
+- FPGA での最大の面積要因は除算器ではなく **PMP** である。`pmp_entry` が 3 インスタンス
+  あり、各々が全エントリぶんの比較器と NAPOT マスク生成を持つ。`Core` の
+  `PMP_ENTRIES` (既定 16) で減らせる。実測は README.md の「面積を詰めた経緯」にある。
+  面積の主張をする前に必ず測ること。ここは一度、除算器を主因と誤認している
 - モジュールパラメータを上書きするテストベンチは `src/tests.veryl` に置かない。
   `veryl test` の多重トップ下では上書きが効かず、黙って既定値で通ってしまう。
   `tb/tb_plic_multi.sv` と `make plic-multi-test` のように単独ビルドする

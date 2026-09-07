@@ -1,0 +1,116 @@
+/// Bring-up probe for the Tang Primer 20K: sends 'U' forever and nothing else.
+///
+/// It exists to split a silent console into its two possible causes. If 'U'
+/// arrives, the crystal, the pin assignment and the dock's serial path are all
+/// good and the fault is inside the SoC or its memory image. If nothing
+/// arrives, the fault is before that.
+///
+/// 0x55 is chosen because it alternates every bit, so a wrong baud rate shows
+/// up as a specific wrong character rather than as plausible-looking noise.
+///
+/// Not part of any build target; synthesise it by hand when bringing up a
+/// board, with fpga/tang_primer_20k/uart_probe.cst.
+module TangUartProbe (
+    i_clk: input clock, // H11, 27 MHz
+
+    o_uart_tx: output logic, // M11
+) {
+
+    /// 27 MHz / 234 = 115385 baud, 0.16% over 115200.
+    const DIV: u32 = 234;
+
+    // No reset: like PowerOnReset, this relies on the flip-flops coming out of
+    // configuration at zero, which is what `started` detects.
+    var started: logic    ;
+    var cnt    : logic<8> ;
+    var idx    : logic<4> ;
+    var sr     : logic<10>;
+
+    always_ff (i_clk) {
+        if !started {
+            started = 1'b1;
+            cnt     = 8'h0;
+            idx     = 4'h0;
+            // {stop, 0x55, start}, shifted out least significant bit first.
+            sr = {1'b1, 8'h55, 1'b0};
+        } else if cnt == (DIV - 1) as 8 {
+            cnt = 8'h0;
+            if idx == 4'd9 {
+                idx = 4'h0;
+                sr  = {1'b1, 8'h55, 1'b0};
+            } else {
+                idx = idx + 1;
+                sr  = {1'b1, sr[9:1]};
+            }
+        } else {
+            cnt = cnt + 1;
+        }
+    }
+
+    // Idles high between frames because the shift register fills with ones.
+    assign o_uart_tx = if started ? sr[0] : 1'b1;
+}
+
+/// Companion to TangUartProbe: ties the receive pin straight to the transmit
+/// pin and uses no clock at all.
+///
+/// Between the two, a silent console is pinned down exactly. If typing echoes
+/// here, both pins and the dock's serial path are good, and TangUartProbe
+/// staying silent means the clock is not arriving. If typing does not echo, the
+/// pins or the path are wrong and the clock tells us nothing yet.
+///
+/// Synthesise with fpga/tang_primer_20k/loopback.cst.
+module TangLoopback (
+    i_uart_rx: input  logic, // T13
+    o_uart_tx: output logic, // M11
+) {
+    assign o_uart_tx = i_uart_rx;
+}
+
+/// Third probe: wires the clock pin to the transmit pin, nothing else.
+///
+/// A 27 MHz square wave is not a serial signal, so the host sees a continuous
+/// stream of framing errors and garbage bytes. That is the point: bytes of any
+/// kind mean the crystal is reaching H11, and a line that stays put means it is
+/// not. Neither flip-flops nor the clock network are involved, so this
+/// separates a dead clock from a design that is not running for some other
+/// reason.
+///
+/// i_clk is plain logic here rather than the clock type because it is only ever
+/// a wire.
+///
+/// Synthesise with fpga/tang_primer_20k/clkprobe.cst.
+module TangClockProbe (
+    i_clk    : input  logic, // H11
+    o_uart_tx: output logic, // M11
+) {
+    assign o_uart_tx = i_clk;
+}
+
+/// Fourth probe: divides the clock pin down and drives the transmit pin with
+/// the slowest bit of the counter.
+///
+/// TangClockProbe puts 27 MHz straight onto the serial line, which the host's
+/// receiver may simply not resolve - so a static line there does not prove the
+/// clock is dead. Here the line changes about twice a second instead. Each low
+/// half is a long run of zero bits, which the host reports as a burst of 0x00
+/// (or a break); each high half is idle. Bursts arriving in a slow rhythm mean
+/// the crystal is alive and flip-flops are running.
+///
+/// The counter has no reset and does not care where it starts.
+///
+/// Synthesise with fpga/tang_primer_20k/clkprobe.cst.
+module TangDivProbe (
+    i_clk: input clock, // H11, 27 MHz
+
+    o_uart_tx: output logic, // M11
+) {
+    /// 27 MHz / 2**24 is about 1.6 Hz, so each half lasts roughly 0.3 s.
+    var div: logic<24>;
+
+    always_ff (i_clk) {
+        div = div + 1;
+    }
+
+    assign o_uart_tx = div[23];
+}

@@ -1,0 +1,5 @@
+# Every build and check in this repository runs on Linux (the container defined
+# by container/Containerfile, and CI). CR breaks shebang lines, make's recipe
+# parsing, yosys's script reader and `veryl fmt --check`, so the working tree
+# keeps LF on Windows too, regardless of the user's core.autocrlf.
+* text=auto eol=lf

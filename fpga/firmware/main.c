@@ -124,6 +124,50 @@ static void set_mtimecmp(uint64_t v) {
 static volatile uint32_t ticks;
 static volatile uint32_t rx_count;
 
+// Board-local LCD peripheral. Other FPGA boards return zero for the ID.
+#define LCD_BASE 0x12000000u
+#define LCD_COMMIT (LCD_BASE + 0x1cu)
+#define LCD_ID (LCD_BASE + 0x20u)
+static uint32_t lcd_present;
+static uint32_t lcd_pending;
+static uint32_t lcd_pending_x;
+static uint64_t lcd_deadline;
+static volatile uint32_t lcd_dirty;
+static volatile uint32_t lcd_bars;
+static volatile uint32_t lcd_color = 0xffe0u;
+
+static void lcd_service(void) {
+    if (!lcd_present) return;
+    const uint32_t busy = mmio_r(LCD_COMMIT) & 1u;
+    if (lcd_pending) {
+        if (busy) {
+            if (read_mtime() >= lcd_deadline) {
+                puts_("[lcd] timeout\n");
+                lcd_present = 0;
+            }
+            return;
+        }
+        puts_("[lcd] applied x=");
+        put_dec(lcd_pending_x);
+        putc_('\n');
+        lcd_pending = 0;
+    }
+    if (busy || !lcd_dirty) return;
+    lcd_dirty = 0;
+    const uint32_t x = 40u + (ticks % 6u) * 100u;
+    mmio_w(LCD_BASE + 0x00, lcd_bars);
+    mmio_w(LCD_BASE + 0x04, 0x0010); // dark blue background
+    mmio_w(LCD_BASE + 0x08, lcd_color);
+    mmio_w(LCD_BASE + 0x0c, x);
+    mmio_w(LCD_BASE + 0x10, 180);
+    mmio_w(LCD_BASE + 0x14, x + 120);
+    mmio_w(LCD_BASE + 0x18, 300);
+    mmio_w(LCD_COMMIT, 1);
+    lcd_pending_x = x;
+    lcd_pending = 1;
+    lcd_deadline = read_mtime() + 2 * MTIME_HZ;
+}
+
 void trap_handler(uint32_t mcause, uint32_t mepc) {
     if ((mcause & 0x80000000u) == 0) {
         puts_("\n[trap] cause=");
@@ -138,6 +182,7 @@ void trap_handler(uint32_t mcause, uint32_t mepc) {
     switch (mcause & 0xffu) {
     case 7: // machine timer
         ticks++;
+        lcd_dirty = 1;
         set_mtimecmp(read_mtime() + MTIME_HZ);
         puts_("[tick] ");
         put_dec(ticks);
@@ -152,6 +197,16 @@ void trap_handler(uint32_t mcause, uint32_t mepc) {
             while (uart_r(UART_LSR) & 0x01u) {
                 const char c = (char)(uart_r(UART_RBR) & 0xffu);
                 rx_count++;
+                switch (c) {
+                case 'r': lcd_color = 0xf800; lcd_bars = 0; break;
+                case 'g': lcd_color = 0x07e0; lcd_bars = 0; break;
+                case 'b': lcd_color = 0x001f; lcd_bars = 0; break;
+                case 'Z': lcd_color = 0xf81f; lcd_bars = 0; break;
+                case 'c': lcd_bars = 1; break;
+                case 'm': lcd_bars = 0; break;
+                default: break;
+                }
+                lcd_dirty = 1;
                 puts_("[rx] ");
                 putc_(c);
                 puts_(" (");
@@ -186,6 +241,12 @@ int main(void) {
     put_hex(read_csr_mhartid());
     putc_('\n');
 
+    lcd_present = mmio_r(LCD_ID) == 0x4c434431u;
+    if (lcd_present) {
+        puts_("[lcd] ready: r/g/b color, c bars, m rectangle\n");
+        lcd_dirty = 1;
+    }
+
     // PLIC: let the UART through to this context.
     mmio_w(PLIC_PRIORITY + 4 * UART_IRQ, 1);
     mmio_w(PLIC_THRESHOLD, 0);
@@ -200,6 +261,7 @@ int main(void) {
     puts_("\ntimer and UART interrupts armed; type to echo\n\n");
 
     for (;;) {
+        lcd_service();
         asm volatile("wfi");
     }
 }

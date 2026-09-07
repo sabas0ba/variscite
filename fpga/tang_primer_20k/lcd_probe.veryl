@@ -1,0 +1,44 @@
+/// Standalone color bars using the same PLL and reset release as the SoC.
+module TangLcdProbe (
+    i_clk   : input  'cpu   clock   ,
+    lcd_dclk: output 'pixel clock   ,
+    lcd_hs  : output 'pixel logic   ,
+    lcd_vs  : output 'pixel logic   ,
+    lcd_de  : output 'pixel logic   ,
+    lcd_r   : output 'pixel logic<5>,
+    lcd_g   : output 'pixel logic<6>,
+    lcd_b   : output 'pixel logic<5>,
+) {
+    var pixel_clk  : 'pixel clock;
+    var locked     : 'async logic;
+    var pixel_ready: 'pixel logic;
+    inst clock_gen: TangLcdClock (
+        i_clk              ,
+        o_clk   : pixel_clk,
+        o_locked: locked   ,
+    );
+    inst reset_sync: TangLcdReset (
+        i_cpu_clk    : i_clk                        ,
+        i_pixel_clk  : pixel_clk                    ,
+        i_reset      : (!locked) as reset_async_high,
+        o_cpu_ready  : _                            ,
+        o_pixel_ready: pixel_ready                  ,
+    );
+    assign lcd_dclk = pixel_clk;
+    inst timing: TangLcdTiming (
+        i_clk  : pixel_clk              ,
+        i_rst  : (!pixel_ready) as reset,
+        i_bars : 1'b1                   ,
+        i_bg   : 16'b0                  ,
+        i_fg   : 16'b0                  ,
+        i_x0   : 10'b0                  ,
+        i_y0   : 9'b0                   ,
+        i_x1   : 10'b0                  ,
+        i_y1   : 9'b0                   ,
+        o_frame: _                      ,
+        o_hs   : lcd_hs                 ,
+        o_vs   : lcd_vs                 ,
+        o_de   : lcd_de                 ,
+        o_rgb  : {lcd_r, lcd_g, lcd_b},
+    );
+}
