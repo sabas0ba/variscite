@@ -1,0 +1,62 @@
+/// Structural clock check using actual HCLK consumers and DDR clock pads.
+/// This top has no DRAM controller and must never be programmed on the board.
+module TangDdrClockCheck (
+    i_clk      : input  'reference clock,
+    i_reset    : input  'async     logic,
+    i_stop     : input  'reference logic,
+    i_div_reset: input  'reference logic,
+    o_clock_p  : output 'fast      logic,
+    o_clock_n  : output 'fast      logic,
+    o_tick     : output 'ctrl      logic,
+    o_locked   : output 'async     logic,
+) {
+    var fast_clk    : 'fast  clock               ;
+    var ctrl_clk    : 'ctrl  clock               ;
+    var serial_clock: 'fast  logic               ;
+    var counter     : 'ctrl  logic           <16>;
+    var ctrl_reset  : 'async reset_async_high    ;
+    inst clocks: TangDdrClock (
+        i_clk                ,
+        i_reset              ,
+        i_stop               ,
+        i_div_reset          ,
+        o_locked             ,
+        o_fast     : fast_clk,
+        o_ctrl     : ctrl_clk,
+    );
+    unsafe (cdc) {
+        assign ctrl_reset = (i_reset || i_div_reset || !o_locked) as reset_async_high;
+        inst serializer: $sv::OSER8 (
+            PCLK : ctrl_clk    ,
+            FCLK : fast_clk    ,
+            RESET: ctrl_reset  ,
+            D0   : 1'b0        ,
+            D1   : 1'b1        ,
+            D2   : 1'b0        ,
+            D3   : 1'b1        ,
+            D4   : 1'b0        ,
+            D5   : 1'b1        ,
+            D6   : 1'b0        ,
+            D7   : 1'b1        ,
+            TX0  : 1'b0        ,
+            TX1  : 1'b0        ,
+            TX2  : 1'b0        ,
+            TX3  : 1'b0        ,
+            Q0   : serial_clock,
+            Q1   : _           ,
+        );
+        always_ff (ctrl_clk, ctrl_reset) {
+            if_reset {
+                counter = 0;
+            } else {
+                counter = (counter + 16'd1) as 16;
+            }
+        }
+    }
+    inst clock_pad: $sv::ELVDS_OBUF (
+        I : serial_clock,
+        O : o_clock_p   ,
+        OB: o_clock_n   ,
+    );
+    assign o_tick = counter[15];
+}

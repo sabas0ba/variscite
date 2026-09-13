@@ -12,7 +12,8 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
         fpga-fw fpga-sim por-test lcd-test fpga-lcd fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
 all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
-     cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test
+     cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test \
+     ddr3-startup-test ddr-word-cdc-test
 
 lint:
 	@test -z "$$(find src fpga -type f \( -name '*.sv' -o -name '*.v' \))" || \
@@ -93,6 +94,25 @@ coverage:
 	    logs/cov/*.dat 2>&1 | tee logs/cov/summary.txt
 
 # --- FPGA ports ----------------------------------------------------------
+.PHONY: ddr3-startup-test ddr-word-cdc-test
+ddr-word-cdc-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_word_cdc \
+	    -Mdir sim/obj_ddr_word_cdc -o tb_ddr_word_cdc \
+	    target/tang_primer_20k/ddr_word_cdc.sv tb/tb_ddr_word_cdc.sv
+	sim/obj_ddr_word_cdc/tb_ddr_word_cdc
+	sim/obj_ddr_word_cdc/tb_ddr_word_cdc +cpu_half=3 +mem_half=11
+	sim/obj_ddr_word_cdc/tb_ddr_word_cdc +cpu_half=13 +mem_half=2
+
+ddr3-startup-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr3_startup \
+	    -Mdir sim/obj_ddr3_startup -o tb_ddr3_startup \
+	    target/tang_primer_20k/ddr3_startup.sv tb/tb_ddr3_startup.sv
+	sim/obj_ddr3_startup/tb_ddr3_startup
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr3_startup \
+	    -GREAL_TIMING=1 -Mdir sim/obj_ddr3_startup_real -o tb_ddr3_startup \
+	    target/tang_primer_20k/ddr3_startup.sv tb/tb_ddr3_startup.sv
+	sim/obj_ddr3_startup_real/tb_ddr3_startup
+
 # The board top names sim/fpga/firmware.hex as RAM_INIT, and $$readmemh
 # resolves it against the working directory, so these run from the repo root.
 

@@ -1,0 +1,193 @@
+/// DDR3 power-up command sequencer. All delays count controller clocks.
+/// Defaults target a 99 MHz controller / 396 MHz DDR clock (4:1 PHY).
+/// Timing and mode values must be checked against the fitted memory device.
+/// Command acceptance means the PHY schedules the command with a fixed latency.
+/// ZQ_CYCLES includes the PHY's command launch latency, not just DRAM tZQinit.
+/// All delay parameters must be positive. MR0 must request DLL reset; MR1 must
+/// enable the DLL. These modes are checked when choosing the memory profile.
+module Ddr3Startup #(
+    param RESET_CYCLES  : u32       = 19800   ,
+    param RELEASE_CYCLES: u32       = 49500   ,
+    param XPR_CYCLES    : u32       = 40      ,
+    param MRD_CYCLES    : u32       = 2       ,
+    param MOD_CYCLES    : u32       = 4       ,
+    param ZQ_CYCLES     : u32       = 256     ,
+    param MR0           : logic<14> = 14'h0520,
+    param MR1           : logic<14> = 14'h0006,
+    param MR2           : logic<14> = 14'h0000,
+) (
+    i_clk: input clock,
+    i_rst: input reset,
+    /// Synchronous PHY readiness. Loss restarts the entire initialization.
+    i_enable   : input  logic,
+    i_cmd_ready: input  logic,
+    o_cmd_valid: output logic,
+    /// {RAS_n, CAS_n, WE_n}: MRS=000, ZQCL=110, NOP=111.
+    o_cmd    : output logic<3> ,
+    o_bank   : output logic<3> ,
+    o_addr   : output logic<14>,
+    o_reset_n: output logic    ,
+    o_cke    : output logic    ,
+    o_done   : output logic    ,
+) {
+    enum State: logic<4> {
+        reset_hold,
+        release_hold,
+        cke_wait,
+        mr2,
+        wait2,
+        mr3,
+        wait3,
+        mr1,
+        wait1,
+        mr0,
+        wait0,
+        zq,
+        zq_wait,
+        done,
+    }
+    var state  : State    ;
+    var elapsed: logic<32>;
+
+    always_ff {
+        if_reset {
+            state   = State::reset_hold;
+            elapsed = 0;
+        } else if !i_enable {
+            state   = State::reset_hold;
+            elapsed = 0;
+        } else {
+            case state {
+                State::reset_hold: {
+                    if elapsed + 1 >= RESET_CYCLES {
+                        state   = State::release_hold;
+                        elapsed = 0;
+                    } else {
+                        elapsed = elapsed + 1;
+                    }
+                }
+                State::release_hold: {
+                    if elapsed + 1 >= RELEASE_CYCLES {
+                        state   = State::cke_wait;
+                        elapsed = 0;
+                    } else {
+                        elapsed = elapsed + 1;
+                    }
+                }
+                State::cke_wait: {
+                    if elapsed + 1 >= XPR_CYCLES {
+                        state   = State::mr2;
+                        elapsed = 0;
+                    } else {
+                        elapsed = elapsed + 1;
+                    }
+                }
+                State::mr2  : if i_cmd_ready {
+                    state   = State::wait2;
+                    elapsed = 0;
+                }
+                State::mr3  : if i_cmd_ready {
+                    state   = State::wait3;
+                    elapsed = 0;
+                }
+                State::mr1  : if i_cmd_ready {
+                    state   = State::wait1;
+                    elapsed = 0;
+                }
+                State::mr0  : if i_cmd_ready {
+                    state   = State::wait0;
+                    elapsed = 0;
+                }
+                State::wait2: {
+                    if elapsed + 1 >= MRD_CYCLES {
+                        state = State::mr3;
+                    } else {
+                        elapsed = elapsed + 1;
+                    }
+                }
+                State::wait3: {
+                    if elapsed + 1 >= MRD_CYCLES {
+                        state = State::mr1;
+                    } else {
+                        elapsed = elapsed + 1;
+                    }
+                }
+                State::wait1: {
+                    if elapsed + 1 >= MRD_CYCLES {
+                        state = State::mr0;
+                    } else {
+                        elapsed = elapsed + 1;
+                    }
+                }
+                State::wait0: {
+                    if elapsed + 1 >= MOD_CYCLES {
+                        state = State::zq;
+                    } else {
+                        elapsed = elapsed + 1;
+                    }
+                }
+                State::zq     : if i_cmd_ready {
+                    state   = State::zq_wait;
+                    elapsed = 0;
+                }
+                State::zq_wait: {
+                    if elapsed + 1 >= ZQ_CYCLES {
+                        state = State::done;
+                    } else {
+                        elapsed = elapsed + 1;
+                    }
+                }
+                State::done: {}
+                default: {
+                    state   = State::reset_hold;
+                    elapsed = 0;
+                }
+            }
+        }
+    }
+
+    always_comb {
+        o_cmd_valid = 0;
+        o_cmd       = 3'b111;
+        o_bank      = 0;
+        o_addr      = 0;
+        o_reset_n   = i_enable && state != State::reset_hold;
+        o_cke       = o_reset_n && state != State::release_hold;
+        o_done      = i_enable && state == State::done;
+        if i_enable {
+            case state {
+                State::mr2: {
+                    o_cmd_valid = 1;
+                    o_cmd       = 0;
+                    o_bank      = 2;
+                    o_addr      = MR2;
+                }
+                State::mr3: {
+                    o_cmd_valid = 1;
+                    o_cmd       = 0;
+                    o_bank      = 3;
+                    o_addr      = 0;
+                }
+                State::mr1: {
+                    o_cmd_valid = 1;
+                    o_cmd       = 0;
+                    o_bank      = 1;
+                    o_addr      = MR1;
+                }
+                State::mr0: {
+                    o_cmd_valid = 1;
+                    o_cmd       = 0;
+                    o_bank      = 0;
+                    o_addr      = MR0;
+                }
+                State::zq: {
+                    o_cmd_valid = 1;
+                    o_cmd       = 3'b110;
+                    o_bank      = 0;
+                    o_addr      = 14'h0400;
+                }
+                default: {}
+            }
+        }
+    }
+}

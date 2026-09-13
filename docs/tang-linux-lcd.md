@@ -124,6 +124,48 @@ podman run --rm --pull never --network none -v "$PWD:/work" \
 実機用 PHY ではクロック生成、DDR3 ピン制約、2 レーンと 16 bit の接続、初期化と
 校正を実装し、実メモリの読み書き・refresh 試験を通す必要がある。
 
+## Linux 起動に向けた接続部の実装 (2026-09-13)
+
+DDR3 の実メモリ試験に先立ち、以下を独立した Veryl モジュールとして追加した。
+まだ既存 CPU トップへ組み込んでおらず、Linux の実機起動や DDR3 の読み書きが
+成立したことを示すものではない。
+
+| モジュール | 内容 | 検証 |
+|---|---|---|
+| `Ddr3Startup` | RESET 保持、RESET 解除後待ち、CKE、MR2→MR3→MR1→MR0、ZQCL、完了待ち | 短縮/実時間相当の 2 設定で各 9 回の初期化。コマンド受理待ち、途中リセット、PHY readiness 喪失を検査 |
+| `DdrWordCdc` | CPU 32 bit と DDR 128 bit バースト間のメールボックス CDC | 3 種類のクロック比で各 133 トランザクション。全 16 通りの byte mask と 4 word lane、遅延応答、同時応答、停止クロック中の共通リセットを検査 |
+| `TangDdrClock` | 27 MHz → PLL 396 MHz → DHCEN → CLKDIV /4 → 99 MHz | SERDES を負荷とする検証トップで GOWIN 合成・配置配線。派生クロック周期 2.525 ns / 10.101 ns の認識を確認 |
+
+```bash
+make ddr3-startup-test ddr-word-cdc-test
+bash scripts/check_ddr_clock.sh  # GOWIN 専用コンテナ
+```
+
+2 種類の RTL テストは `make all` と CI の `verify` に含める。
+クロック検証はベンダーツールを必要とするため CI の通常ジョブには含めない。
+クロック検証トップの基板制約は基準クロックと DDR 差動クロックだけであり、
+生成ビットストリームを実機へ書き込まない。396 MHz の外部メモリ I/O タイミングを
+保証する検査ではない。
+
+CDC の要求・応答ペイロードは、対応する toggle が同期先に届くまで保持する。
+リセットは必ず両クロック領域に共通の非同期リセットを与え、接続先の要求/応答処理も
+同時に中断する。解除はモジュール内で各クロックの 2 段 FF に同期する。
+片側だけのリセットには対応しない。1 要求につき応答は 1 回、
+CPU は `o_ready` を受け取るまで要求を保持する。
+DDR 側の書き込みは BL8 の 128 bit に対する 16 bit byte enable で表現するため、
+PHY 側で DDR3 DM のマスク極性へ反転する必要がある。32 bit 書き込みに
+read-modify-write は不要である。
+
+初期化シーケンサの既定値は 99 MHz の制御クロックを想定し、RESET を 200 µs、
+解除後を 500 µs 保持する。CL=6、CWL=5、WR=6、DLL 有効/リセットの設定は
+型番確定前の候補である。待ち時間と MR 値はパラメータ化した。
+`ZQ_CYCLES` にはコマンド受理から実際の DRAM コマンド発行までの PHY 遅延も含める。
+実機に適用する前に、搭載チップの型番・速度 grade・電圧とデータシートで確認する。
+
+未実装: 16 bit PHY、DLL 初期化、write leveling/read calibration、通常の DRAM
+コマンド発行と refresh、CPU トップへの統合、UART ブートローダ、LCD framebuffer。
+搭載 DDR3 の型番を利用者へ確認中であり、実機のメモリ初期化・書き込みは実施していない。
+
 ## 一次資料
 
 - [Sipeed Tang Primer 20K 仕様](https://en.wiki.sipeed.com/hardware/en/tang/tang-primer-20k/primer-20k.html)
@@ -134,3 +176,4 @@ podman run --rm --pull never --network none -v "$PWD:/work" \
 - [GOWIN 教育版と公開チェックサム](https://www.gowinsemi.com.cn/software/3)
 - GOWIN 同梱の一次資料: `/opt/gowin/IDE/simlib/gw2a/prim_sim.v` の DLL/DQS/SERDES 宣言
 - [Ubuntu Snapshot Service](https://snapshot.ubuntu.com/)
+- [Winbond W631GU6MB Rev. A03 データシート (メーカー文書、DigiKey 配布)](https://media.digikey.com/pdf/Data%20Sheets/Winbond%20PDFs/W631GU6MB_A03.pdf): 初期化の参照資料。実機の搭載型番をこの型番と断定していない。
