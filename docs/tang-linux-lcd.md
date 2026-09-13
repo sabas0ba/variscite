@@ -70,16 +70,59 @@ Yosys にプリミティブ宣言が存在することだけでは、nextpnr が
   ブート初期は UART earlycon、fbcon 初期化後に蓄積したカーネルログを LCD に表示する。
   カーネル開始前の表示はブートローダの進捗表示として別に扱う。
 
-## ツール選択が必要な項目
+## GOWIN EDA による配置配線の検証
 
-DQS を利用する DDR3 PHY の実装例は Gowin の配置配線ツールを使用している。
-まず公式 GOWIN EDA の Linux 版をプロジェクト専用コンテナで利用し、Veryl が生成した SV を
-入力して DDR3 の合成・配置を確認する案を候補とする。
-ホストへグローバルに導入せず、アーカイブのバージョンと SHA256 を固定する。
-配布アーカイブの取得・新規ツール導入は、利用者の依存追加に関する規約に従って事前確認する。
+2026-09-13、利用者の再開指示を受けて公式 Linux 教育版を専用コンテナに導入した。
+`ddr_gowin_probe.veryl` の DQS、DLL、OSER4_MEM、IDES4_MEM 各 1 個を接続した
+双方向 1 bit の回路について、合成・配置配線と資源の残存を確認した。
+DLLSTEP の定数接続は GOWIN が拒否するため、このプローブでは実際の DLL 出力を接続する。
+nextpnr 用の最小プローブとは構造が異なり、直接の同一回路比較ではない。
 
-オープンソースツールのみを継続する場合は、DQS/メモリ用 SERDES の対応拡張、または
-別 PHY の成立性検証が先行課題になる。現時点ではその実現性・実機タイミングは未確認。
+これは配置配線ツールの対応検査である。PCLK/FCLK は同一入力、基板ピンとタイミングは
+未制約であり、DDR3 の動作周波数、タイミング収束、校正、読み書きの成立を示さない。
+GOWIN は `run pnr` でビットストリームも生成するが、**このプローブは実機へ書き込まない**。
+実機のベアメタル LCD ビットストリームは変更していない。
+
+| 項目 | 固定値 |
+|---|---|
+| GOWIN EDA | V1.9.11.03 Education Linux |
+| 公式アーカイブ SHA256 | `6fd392f7473b24d847b6f8ebdc7a185c591826ba35d8d0e517961030d446f9f7` |
+| 公式公開 MD5 (取得時照合) | `d65912e3da9cdbebed92f0ccc5feb498` |
+| Ubuntu ランタイム snapshot | `20260901T000000Z` |
+| ランタイム依存 | `container/gowin-runtime.sha256` と `container/gowin-runtime.versions.tsv` の 56 パッケージ |
+| 検証済み専用イメージ ID | `sha256:1b9cfd5aefe08b418ea5f43f5f0cf7efbd1b20c551506deac8d691bba9f2a70b` |
+
+`container/Gowin.Containerfile` は既存の固定開発イメージを継承する。
+Ubuntu パッケージは `/opt/gowin-runtime` に展開し、GOWIN プロセスだけが参照する。
+Qt の `offscreen` 設定でディスプレイサーバーなしに CLI を起動する。
+ベンダー同梱の旧ライブラリと新しい fontconfig の混在を避けるため、ランタイムと
+Ubuntu 標準ライブラリを GOWIN 同梱ライブラリより先に探索する。
+ホストへのインストール、外部ソースの RTL への取り込みは行っていない。
+
+以下はリポジトリのルートで実行する Bash 表記。Windows では bind mount の `$PWD` を
+リポジトリの絶対パスに置き換える。取得手順にはネットワークと依存追加の許可が必要。
+教育版の利用条件は公式配布元で確認し、アーカイブと専用イメージは公開しない。
+
+```bash
+base=sha256:8ddc50649d4ae3fda9d5790f60ebeb7b8ee28a7dbd53f0547b4234945ffd6143
+podman run --rm --pull never -v "$PWD:/work" "$base" \
+  curl --fail --location --retry 2 \
+  --output logs/Gowin_V1.9.11.03_Education_Linux.tar.gz \
+  https://cdn.gowinsemi.com.cn/Gowin_V1.9.11.03_Education_Linux.tar.gz
+podman run --rm --pull never -v "$PWD:/work" "$base" \
+  bash scripts/fetch_gowin_runtime.sh
+podman build --pull=never --network=none \
+  --ignorefile container/gowin.containerignore \
+  -f container/Gowin.Containerfile -t localhost/variscite-gowin:1.9.11.03 .
+podman run --rm --pull never --network none -v "$PWD:/work" \
+  localhost/variscite-gowin:1.9.11.03 bash scripts/check_ddr_gowin.sh
+```
+
+結果は `sim/fpga/ddr_gowin/` の `veryl.log`、`gowin.log`、`impl/pnr/` に保存する。
+スクリプトは配置配線の完了、新しいレポート、4 種類の資源数を検査してから PASS を返す。
+クロック未制約の警告はこの構造検査の制限として残し、動作タイミングの合格とは扱わない。
+実機用 PHY ではクロック生成、DDR3 ピン制約、2 レーンと 16 bit の接続、初期化と
+校正を実装し、実メモリの読み書き・refresh 試験を通す必要がある。
 
 ## 一次資料
 
@@ -88,3 +131,6 @@ DQS を利用する DDR3 PHY の実装例は Gowin の配置配線ツールを�
 - [Tang Primer 20K 用 DDR3 コントローラ](https://github.com/nand2mario/ddr3-tang-primer-20k): Gowin ツールによる実装例。参照のみで、ソースは取り込んでいない。
 - Linux v6.12 のローカル資料: `/opt/src/linux/Documentation/devicetree/bindings/display/simple-framebuffer.yaml`
 - [GOWIN EDA 公式配布元](https://gowinsemi.com/en/support/home/)
+- [GOWIN 教育版と公開チェックサム](https://www.gowinsemi.com.cn/software/3)
+- GOWIN 同梱の一次資料: `/opt/gowin/IDE/simlib/gw2a/prim_sim.v` の DLL/DQS/SERDES 宣言
+- [Ubuntu Snapshot Service](https://snapshot.ubuntu.com/)
