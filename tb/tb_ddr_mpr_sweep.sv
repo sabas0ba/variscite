@@ -1,5 +1,5 @@
 module tb_ddr_mpr_sweep;
-    reg clk=0, rst=1, enable=0, respond=1;
+    reg clk=0, rst=1, enable=0, respond=1, first_only=0;
     reg [1:0] valid=0;
     reg [127:0] data=0;
     reg [127:0] pattern=0;
@@ -71,20 +71,23 @@ module tb_ddr_mpr_sweep;
             if (read_gate[3:0]!=0) begin
                 if (read_gate[3:0]!=4'hf || cmd_valid || hold_gate[0])
                     $fatal(1,"lane 0 gate shape");
-                if (respond && sel[2:0]==3'd2 && cycle-last_read==2) pending0=2;
+                if (respond && (!first_only || (reads-1)%3==0) &&
+                    sel[2:0]==3'd2 && cycle-last_read==2) pending0=2;
             end
             if (read_gate[7:4]!=0) begin
                 if (read_gate[7:4]!=4'hf || cmd_valid || hold_gate[1])
                     $fatal(1,"lane 1 gate shape");
-                if (respond && sel[5:3]==3'd3 && cycle-last_read==4) pending1=2;
+                if (respond && (!first_only || (reads-1)%3==0) &&
+                    sel[5:3]==3'd3 && cycle-last_read==4) pending1=2;
             end
             if (done && (cmd_valid || read_gate!=0 || hold_gate!=0))
                 $fatal(1,"activity after completion");
         end
     end
 
-    task automatic start_case(input bit with_response);
+    task automatic start_case(input bit with_response, input bit only_first);
         @(negedge clk); rst=1; enable=0; respond=with_response;
+        first_only=only_first;
         @(negedge clk); mrs_count=0; reads=0; last_read=-100; mrs_on=-100;
         rst=0; enable=1;
     endtask
@@ -96,29 +99,38 @@ module tb_ddr_mpr_sweep;
         $fatal(1,"MPR sweep timeout");
     endtask
     initial begin
-        start_case(1);
-        await_done(900);
+        start_case(1, 0);
+        await_done(2700);
         if (found!==2'b11 || phase0!==6'd2 || phase1!==6'd19 ||
-            mrs_count!=2 || reads<20 || reads>32 || sample0!=8'h01 || sample1!=8'h01 ||
+            mrs_count!=2 || reads<60 || reads>96 || sample0!=8'h01 || sample1!=8'h01 ||
             observed0!=8'haa || observed1!=8'haa)
             $fatal(1,"MPR lane phases/commands wrong");
 
         pattern = 0;
-        start_case(1);
-        await_done(900);
-        if (found!==2'b00 || valid_seen!==2'b11 || mrs_count!=2 || reads!=64 ||
+        start_case(1, 0);
+        await_done(2700);
+        if (found!==2'b00 || valid_seen!==2'b11 || mrs_count!=2 || reads!=192 ||
             observed0!=0 || observed1!=0)
             $fatal(1,"invalid MPR data was accepted");
 
-        start_case(0);
-        await_done(900);
-        if (found!==2'b00 || mrs_count!=2 || reads!=64)
+        for (int beat=0; beat<8; beat++) begin
+            pattern[16*beat]   = beat[0];
+            pattern[16*beat+8] = beat[0];
+        end
+        start_case(1, 1);
+        await_done(2700);
+        if (found!==2'b00 || valid_seen!==2'b11 || mrs_count!=2 || reads!=192)
+            $fatal(1,"one valid MPR READ was accepted without repetition");
+
+        start_case(0, 0);
+        await_done(2700);
+        if (found!==2'b00 || mrs_count!=2 || reads!=192)
             $fatal(1,"MPR timeout case wrong");
-        $display("DDR MPR sweep PASS: both lane patterns, MR3 timing, timeout");
+        $display("DDR MPR sweep PASS: repeated lane patterns, glitches rejected, MR3 timing");
         $finish;
     end
     initial begin
-        #30000;
+        #120000;
         $fatal(1,"global timeout");
     end
 endmodule
