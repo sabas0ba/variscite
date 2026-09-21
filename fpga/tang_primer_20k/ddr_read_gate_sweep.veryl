@@ -30,6 +30,8 @@ module DdrReadGateSweep #(
     o_valid_seen: output logic<2> ,
     o_sample0   : output logic<8> ,
     o_sample1   : output logic<8> ,
+    o_pattern0  : output logic<8> ,
+    o_pattern1  : output logic<8> ,
     o_phase0    : output logic<6> ,
     o_phase1    : output logic<6> ,
 ) {
@@ -56,6 +58,8 @@ module DdrReadGateSweep #(
     var valid_seen: logic<2>;
     var sample0   : logic<8>;
     var sample1   : logic<8>;
+    var pattern0  : logic<8>;
+    var pattern1  : logic<8>;
     var phase0    : logic<6>;
     var phase1    : logic<6>;
     // MPR drives the fixed 0,1,0,1,... sequence on DQ0 and DQ8.
@@ -83,6 +87,8 @@ module DdrReadGateSweep #(
             valid_seen = 0;
             sample0    = 0;
             sample1    = 0;
+            pattern0   = 0;
+            pattern1   = 0;
             phase0     = 0;
             phase1     = 0;
         } else if !i_enable {
@@ -95,6 +101,8 @@ module DdrReadGateSweep #(
             valid_seen = 0;
             sample0    = 0;
             sample1    = 0;
+            pattern0   = 0;
+            pattern1   = 0;
             phase0     = 0;
             phase1     = 0;
         } else {
@@ -137,6 +145,12 @@ module DdrReadGateSweep #(
                         | i_data[95:88] | i_data[111:104] | i_data[127:120];
                     burst_seen = burst_seen | i_burst;
                     valid_seen = valid_seen | i_valid;
+                    if i_valid[0] {
+                        pattern0 = lower_pattern;
+                    }
+                    if i_valid[1] {
+                        pattern1 = upper_pattern;
+                    }
                     if elapsed == 11 {
                         if !found[0] && observed[0] {
                             found[0] = 1'b1;
@@ -235,6 +249,8 @@ module DdrReadGateSweep #(
     assign o_valid_seen = valid_seen;
     assign o_sample0    = sample0;
     assign o_sample1    = sample1;
+    assign o_pattern0   = pattern0;
+    assign o_pattern1   = pattern1;
     assign o_phase0     = phase0;
     assign o_phase1     = phase1;
 }

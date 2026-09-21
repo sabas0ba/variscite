@@ -131,6 +131,8 @@ module TangDdrInitProbe #(
     var sweep_found     : 'ctrl      logic           <2>  ;
     var sweep_burst_seen: 'ctrl      logic           <2>  ;
     var sweep_valid_seen: 'ctrl      logic           <2>  ;
+    var sweep_pattern0  : 'ctrl      logic           <8>  ;
+    var sweep_pattern1  : 'ctrl      logic           <8>  ;
     var phy_burst       : 'ctrl      logic           <2>  ;
     var phy_valid       : 'ctrl      logic           <2>  ;
     var phy_data        : 'ctrl      logic           <128>;
@@ -138,10 +140,10 @@ module TangDdrInitProbe #(
     var found_pipe      : 'reference logic           <2>  ;
     var burst_pipe      : 'reference logic           <2>  ;
     var valid_pipe      : 'reference logic           <2>  ;
-    var phase0_meta     : 'reference logic           <8>  ;
-    var phase0_ref      : 'reference logic           <8>  ;
-    var phase1_meta     : 'reference logic           <8>  ;
-    var phase1_ref      : 'reference logic           <8>  ;
+    var pattern0_meta   : 'reference logic           <8>  ;
+    var pattern0_ref    : 'reference logic           <8>  ;
+    var pattern1_meta   : 'reference logic           <8>  ;
+    var pattern1_ref    : 'reference logic           <8>  ;
     let mpr_debug       : 'reference logic                 = RUN_MPR != 0;
     let use_sweep       : 'ctrl      logic                 = RUN_READ_SWEEP != 0 || RUN_MPR != 0;
     let use_mpr         : 'ctrl      logic                 = RUN_MPR != 0;
@@ -224,6 +226,8 @@ module TangDdrInitProbe #(
         o_valid_seen: sweep_valid_seen ,
         o_sample0   : _                ,
         o_sample1   : _                ,
+        o_pattern0  : sweep_pattern0   ,
+        o_pattern1  : sweep_pattern1   ,
         o_phase0    : _                ,
         o_phase1    : _                ,
     );
@@ -271,25 +275,25 @@ module TangDdrInitProbe #(
         );
         always_ff (i_clk, ref_reset) {
             if_reset {
-                status_pipe = 0;
-                sweep_pipe  = 0;
-                found_pipe  = 0;
-                burst_pipe  = 0;
-                valid_pipe  = 0;
-                phase0_meta = 0;
-                phase0_ref  = 0;
-                phase1_meta = 0;
-                phase1_ref  = 0;
+                status_pipe   = 0;
+                sweep_pipe    = 0;
+                found_pipe    = 0;
+                burst_pipe    = 0;
+                valid_pipe    = 0;
+                pattern0_meta = 0;
+                pattern0_ref  = 0;
+                pattern1_meta = 0;
+                pattern1_ref  = 0;
             } else {
-                status_pipe = {status_pipe[0], done};
-                sweep_pipe  = {sweep_pipe[0], sweep_done};
-                found_pipe  = {found_pipe[0], sweep_found == 2'b11};
-                burst_pipe  = {burst_pipe[0], sweep_burst_seen == 2'b11};
-                valid_pipe  = {valid_pipe[0], sweep_valid_seen == 2'b11};
-                phase0_meta = {6'b0, sweep_valid_seen};
-                phase0_ref  = phase0_meta;
-                phase1_meta = {6'b0, sweep_burst_seen};
-                phase1_ref  = phase1_meta;
+                status_pipe   = {status_pipe[0], done};
+                sweep_pipe    = {sweep_pipe[0], sweep_done};
+                found_pipe    = {found_pipe[0], sweep_found == 2'b11};
+                burst_pipe    = {burst_pipe[0], sweep_burst_seen == 2'b11};
+                valid_pipe    = {valid_pipe[0], sweep_valid_seen == 2'b11};
+                pattern0_meta = sweep_pattern0;
+                pattern0_ref  = pattern0_meta;
+                pattern1_meta = sweep_pattern1;
+                pattern1_ref  = pattern1_meta;
             }
         }
         assign status = if !pll_locked ?
@@ -311,12 +315,12 @@ module TangDdrInitProbe #(
         ;
     }
     inst uart: TangDdrStatusUart (
-        i_clk                     ,
-        i_rst         : ref_reset ,
-        i_status      : status    ,
-        i_debug_enable: mpr_debug ,
-        i_debug0      : phase0_ref,
-        i_debug1      : phase1_ref,
-        o_tx          : o_uart_tx ,
+        i_clk                       ,
+        i_rst         : ref_reset   ,
+        i_status      : status      ,
+        i_debug_enable: mpr_debug   ,
+        i_debug0      : pattern0_ref,
+        i_debug1      : pattern1_ref,
+        o_tx          : o_uart_tx   ,
     );
 }

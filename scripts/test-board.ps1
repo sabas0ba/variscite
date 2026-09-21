@@ -96,7 +96,7 @@ try {
                 -not $probe.Contains('E')
         }
         DdrMpr {
-            # Each report is a status character and two hexadecimal lane masks.
+            # Each report is a status character and two hexadecimal MPR data bytes.
             $frames = @([regex]::Matches($received, '[PLIRMEVB][0-9A-F]{4}') |
                 Select-Object -Last 3)
             $passed = $frames.Count -eq 3 -and

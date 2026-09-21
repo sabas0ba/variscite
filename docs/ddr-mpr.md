@@ -12,8 +12,9 @@ RTL は Veryl、テストベンチは SystemVerilog。`make ddr-mpr-test` は
 MR3 の切替えと待ち時間、両レーンの個別位相、誤パターンの拒否、
 無応答時の 64 通り完走を確認する。合成・配置配線は固定 Gowin コンテナで
 `bash scripts/build_ddr_mpr.sh` を実行する。UART のフレームは状態文字と
-4 桁の 16 進数で、前半 2 桁が観測済み `RVALID` レーン mask、
-後半 2 桁が `RBURST` レーン mask を示す。`M` は両レーンでパターンを
+4 桁の 16 進数で、前半 2 桁が直近の lane 0 DQ0 の 8 beat、
+後半 2 桁が lane 1 DQ8 の 8 beat を示す。`RVALID` を観測しないレーンは
+`00` のままである。`M` は両レーンでパターンを
 観測したこと、`V` は `RVALID` が両レーンにあるがパターン不一致、
 `E` は受信できなかったことを示す。
 
@@ -27,12 +28,33 @@ SHA256 `d6b5e0fdd0e9f6172716e1ea1815a6ec9cb40eadb73e80a5c835efe87971ab72`
 SHA256 `6edb31134bc24cd8e657c4846950f716e8e566e40fa9e40923224d882de3da47`
 で `G` を検出したが、これは DQS ゲート検出のみを意味する。
 
+同日の追加比較では、32 通り版 SHA256
+`b97d515ade3f24610d9b7febdeffb9af18b6bb0423fafa642bf02d339dc6d0ba`
+を同一 bitstream のまま 2 回ロードし、`M0303` と `V0303` を得た。
+この比較版の 4 桁はパターンではなく、`RVALID` と `RBURST` のレーン mask。
+両回とも両レーンの DQS バーストと `RVALID` はあったが、パターン照合の結果が
+変動した。
+
+DQ0/DQ8 の 8 beat を表示する比較用 32 通り版 SHA256
+`976b501b94186f91f2b0515bc2cf74b1b6b3710730077947704b2d24220efc2d`
+では、同一 bitstream の 2 回のロードで `V80AA` と `V0A80` となった。
+期待値 `AA` または `55` に対して受信値そのものが変動している。
+変更を 64 通りへ戻して再構築した SHA256
+`906b563bb81fd54f1524a394bf24b9773b3b649fee94454ad655066cfa8d1d38`
+では `E0000` だった。これらはいずれも各試験後の LCD 復元が成功した。
+Gowin の公式 PHY 資料は各サンプリング点で反復してデータを読み、連続する
+正しいサンプリング点の中央を選ぶ方法を説明している。現在の 1 点 1 READ の
+判定だけでは、その再現性とデータアイ幅を確認できない。
+
 実機診断は `scripts/test-ddr-init-board.ps1 -Mode DdrMpr` で実施する。
 このスクリプトは結果にかかわらず検証済み LCD サンプルを復元する。
 今回の試験でも復元と LCD UART 検査は通過した。ログは
 `logs/board/20260921-182326-DdrMpr-*`、
 `logs/board/20260921-182434-DdrMpr-*`、
-`logs/board/20260921-182711-DdrRead-*` に保存される。
+`logs/board/20260921-182711-DdrRead-*`、
+`logs/board/20260921-223810-DdrMpr-*`、
+`logs/board/20260921-223857-DdrMpr-*`、
+`logs/board/20260921-224014-DdrMpr-*` に保存される。
 
 次は MPR コマンドと READ ゲートの基板上タイミングを観測し、
 両レーンの DQ データアイを安定して選ぶ。その後に DDR アレイの
@@ -42,4 +64,5 @@ SHA256 `6edb31134bc24cd8e657c4846950f716e8e566e40fa9e40923224d882de3da47`
 
 - [JEDEC JESD79-3F, 4.10 Multi Purpose Register](https://e2echina.ti.com/cfs-file/__key/telligent-evolution-components-attachments/00-120-01-00-00-26-20-93/JESD79_2D00_3F.pdf): MR3、READ アドレス、パターン、tMOD、tMPRR。
 - [Gowin FPGA Primitive](https://www.gowinsemi.com/upload/database_doc/39/document/5bfcff2ce0b72.pdf): DQS、IDES8_MEM の端子仕様。
+- [Gowin DDR3 PHY Interface IP User Guide, 3.2.5 EYE SCAN](https://www.gowinsemi.com/upload/database_doc/2819/document/660baf95016e1.pdf): 反復読出しと連続する正常サンプリング点の中央の選択。
 - [SK hynix H5TQ1G63EFR Rev. 1.1](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf): 搭載 DRAM の仕様。

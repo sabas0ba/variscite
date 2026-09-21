@@ -11,6 +11,7 @@ module tb_ddr_mpr_sweep;
     wire [1:0] hold_gate, found, valid_seen;
     wire [5:0] phase0, phase1;
     wire [7:0] sample0, sample1;
+    wire [7:0] observed0, observed1;
     integer cycle=0, last_read=-100, mrs_on=-100, reads=0, mrs_count=0;
     integer pending0=0, pending1=0;
     always #5 clk=~clk;
@@ -21,6 +22,7 @@ module tb_ddr_mpr_sweep;
         .o_read(read_gate), .o_sel(sel), .o_hold(hold_gate),
         .o_done(done), .o_found(found), .o_burst_seen(), .o_valid_seen(valid_seen),
         .o_sample0(sample0), .o_sample1(sample1),
+        .o_pattern0(observed0), .o_pattern1(observed1),
         .o_phase0(phase0), .o_phase1(phase1)
     );
 
@@ -97,13 +99,15 @@ module tb_ddr_mpr_sweep;
         start_case(1);
         await_done(900);
         if (found!==2'b11 || phase0!==6'd2 || phase1!==6'd19 ||
-            mrs_count!=2 || reads<20 || reads>32 || sample0!=8'h01 || sample1!=8'h01)
+            mrs_count!=2 || reads<20 || reads>32 || sample0!=8'h01 || sample1!=8'h01 ||
+            observed0!=8'haa || observed1!=8'haa)
             $fatal(1,"MPR lane phases/commands wrong");
 
         pattern = 0;
         start_case(1);
         await_done(900);
-        if (found!==2'b00 || valid_seen!==2'b11 || mrs_count!=2 || reads!=64)
+        if (found!==2'b00 || valid_seen!==2'b11 || mrs_count!=2 || reads!=64 ||
+            observed0!=0 || observed1!=0)
             $fatal(1,"invalid MPR data was accepted");
 
         start_case(0);

@@ -17,7 +17,7 @@ module tb_ddr_read_gate_sweep;
         .o_cmd_valid(cmd_valid), .o_cmd(cmd), .o_addr(addr), .o_bank(bank),
         .o_read(read_gate), .o_sel(sel), .o_hold(hold_gate),
         .o_done(done), .o_found(found), .o_burst_seen(), .o_valid_seen(),
-        .o_sample0(), .o_sample1(),
+        .o_sample0(), .o_sample1(), .o_pattern0(), .o_pattern1(),
         .o_phase0(phase0), .o_phase1(phase1)
     );
 
