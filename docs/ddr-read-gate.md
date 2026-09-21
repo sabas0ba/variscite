@@ -8,6 +8,12 @@ RTL は Veryl の `fpga/tang_primer_20k/ddr_read_gate_sweep.veryl` と `ddr_read
 
 2026-09-21、`ddr_read.fs` SHA256 `8c8d9d5eadb15c19edeaaeab0ef928c1d32395fa59d2102d66644b546eb0f298` を接続中の Tang Primer 20K に SRAM ロードした。COM4 / 115200 baud の 4 秒取得で、直前の LCD デモから残った出力の末尾に `P` と `G` の連続を確認した。2 回目の自動判定は合格した。生ログと判定 JSON は `logs/board/20260921-170427-DdrRead-*` にある。試験後、既知の LCD デモ SHA256 `40bac365ce8f971d240ac5aa6a2e4c69c1fff5579c6dbbb2afe4f97662b9eb0a` を復帰させ、UART 動作判定が通った。
 
+CL=6/AL=0 の診断コマンドを serializer slot 2 に配置した再試験でも、
+SHA256 `5994f6c407814272765311a7ed795d730f26f873af5248864a719465e910befe`
+で `G` と LCD 復元を確認した。ログは `logs/board/20260921-230233-DdrRead-*`。
+このスロットは [Gowin DDR3 PHY Interface IP User Guide の READ タイミング例](https://www.gowinsemi.com/upload/database_doc/2819/document/660baf95016e1.pdf)
+を参考にした。カスタム PHY での最適スロットを証明するものではない。
+
 再試験には、まず固定済み Gowin コンテナで `bash scripts/build_ddr_read.sh` を実行し、Windows ホストで以下を実行する。
 
 ```powershell

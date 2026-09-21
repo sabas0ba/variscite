@@ -50,6 +50,19 @@ DQ0/DQ8 の 8 beat を表示する比較用 32 通り版 SHA256
 `c2661a52851e4caae6872cfd92d8ae61b655a904d2fc3ebe28fc8735a2d94b9b`
 も `E0000` だった。反復判定は偶然の一致を防ぐが、DQS が受信できない構成を
 修復するものではない。どちらの試験後も LCD 復元は成功した。
+
+次に診断コマンドを serializer slot 0 から slot 2 へ移した。
+CL=6/AL=0 の READ を slot 2 に置く [Gowin のタイミング例](https://www.gowinsemi.com/upload/database_doc/2819/document/660baf95016e1.pdf)
+が根拠だが、これはベンダー PHY IP の例であり、このカスタム PHY の校正値ではない。
+slot 2 の比較版 SHA256
+`c1550be057a76d93a4116e49b0584d1876bd92b3c91509fe51977d5eb7e97e77`
+を同一 bitstream のまま 3 回ロードすると `M`, `V80AA`, `M` だった。
+配置を整理した最終版 SHA256
+`991a0f4855e894731213e32491f298eaf966fda0f72493d591bc3bbd589f0aff`
+は 2 回とも `V80AA` または `V0A80` で、安定受信には至っていない。
+`M` の後続 4 桁も最後の `RVALID` の値であり、合格判定に使った 3 回の
+サンプルを表すわけではない。slot 2 は DQS の観測を改善したが、
+データアイ校正が必要である。各試験後の LCD 復元は成功した。
 Gowin の公式 PHY 資料は各サンプリング点で反復してデータを読み、連続する
 正しいサンプリング点の中央を選ぶ方法を説明している。現在の 1 点 1 READ の
 判定だけでは、その再現性とデータアイ幅を確認できない。
@@ -64,7 +77,12 @@ Gowin の公式 PHY 資料は各サンプリング点で反復してデータを
 `logs/board/20260921-223857-DdrMpr-*`、
 `logs/board/20260921-224014-DdrMpr-*`、
 `logs/board/20260921-224714-DdrMpr-*`、
-`logs/board/20260921-224834-DdrMpr-*` に保存される。
+`logs/board/20260921-224834-DdrMpr-*`、
+`logs/board/20260921-225331-DdrMpr-*`、
+`logs/board/20260921-225416-DdrMpr-*`、
+`logs/board/20260921-225454-DdrMpr-*`、
+`logs/board/20260921-230027-DdrMpr-*`、
+`logs/board/20260921-230107-DdrMpr-*` に保存される。
 
 次は MPR コマンドと READ ゲートの基板上タイミングを観測し、
 両レーンの DQ データアイを安定して選ぶ。その後に DDR アレイの

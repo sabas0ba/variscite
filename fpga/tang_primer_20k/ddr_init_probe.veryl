@@ -147,11 +147,22 @@ module TangDdrInitProbe #(
     let mpr_debug       : 'reference logic                 = RUN_MPR != 0;
     let use_sweep       : 'ctrl      logic                 = RUN_READ_SWEEP != 0 || RUN_MPR != 0;
     let use_mpr         : 'ctrl      logic                 = RUN_MPR != 0;
-    let phy_cmd_valid   : 'ctrl      logic                 = if use_sweep && done ? sweep_valid : cmd_valid;
-    let phy_cmd         : 'ctrl      logic           <3>   = if use_sweep && done ? sweep_cmd : cmd;
-    let phy_bank        : 'ctrl      logic           <3>   = if use_sweep && done ? sweep_bank : bank;
-    let phy_addr        : 'ctrl      logic           <14>  = if use_sweep && done ? sweep_addr : addr;
+    let sweep_active    : 'ctrl      logic                 = use_sweep && done;
+    let phy_cmd_valid   : 'ctrl      logic                 = if sweep_active ? sweep_valid : cmd_valid;
+    let phy_cmd         : 'ctrl      logic           <3>   = if sweep_active ? sweep_cmd : cmd;
+    let phy_bank        : 'ctrl      logic           <3>   = if sweep_active ? sweep_bank : bank;
+    let phy_addr        : 'ctrl      logic           <14>  = if sweep_active ? sweep_addr : addr;
     let phy_cke         : 'ctrl      logic                 = cke && !(use_sweep && sweep_done);
+    // At CL=6/AL=0, the Gowin PHY timing example launches READ in slot 2.
+    // Keep the startup sequencer in slot 0; shift diagnostic commands together.
+    let phy_addr_slots: 'ctrl logic<56> = if sweep_active ?
+        {14'b0, 1'b0, phy_addr[12:0], 28'b0}
+    :
+        {42'b0, 1'b0, phy_addr[12:0]}
+    ;
+    let phy_bank_slots: 'ctrl logic<12> = if sweep_active ? {3'b0, phy_bank, 6'b0} : {9'b0, phy_bank};
+    let phy_cmd_slots : 'ctrl logic<12> = if sweep_active ? {3'b111, phy_cmd, 6'b111_111} : {9'b111_111_111, phy_cmd};
+    let phy_cs_slots  : 'ctrl logic<4>  = if phy_cmd_valid ? (if sweep_active ? 4'b1011 : 4'b1110) : 4'b1111;
 
     inst por_gen: PowerOnReset (
         i_clk     ,
@@ -238,10 +249,10 @@ module TangDdrInitProbe #(
             i_reset      : phy_reset                            ,
             i_dll_step   : dll_step                             ,
             i_mem_reset_n: reset_n && !(use_sweep && sweep_done),
-            i_addr       : {42'b0, 1'b0, phy_addr[12:0]},
-            i_bank       : {9'b0, phy_bank},
-            i_cmd        : {9'b111_111_111, phy_cmd},
-            i_cs_n       : if phy_cmd_valid ? 4'b1110 : 4'b1111,
+            i_addr       : phy_addr_slots                       ,
+            i_bank       : phy_bank_slots                       ,
+            i_cmd        : phy_cmd_slots                        ,
+            i_cs_n       : phy_cs_slots                         ,
             i_cke        : {phy_cke, phy_cke, phy_cke, phy_cke},
             i_odt        : 4'b0                                 ,
             i_hold       : if use_sweep ? sweep_hold : 2'b0,
