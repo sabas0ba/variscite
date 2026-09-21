@@ -220,6 +220,8 @@ DQS/READ ゲートの実機検出結果は [DDR3 読出し DQS ゲート検証](
 MPR の既知パターンによる DQ 受信診断と配置依存の実機結果は
 [DDR3 MPR 読出し診断](ddr-mpr.md) に記録した。MPR の安定受信と
 DRAM アレイの読み書きは未達成であり、Linux 用 RAM としては使用できない。
+RVALID と DQ の前後 1 controller cycle の比較は
+[DDR3 MPR サイクル位置診断](ddr-mpr-align.md) に記録した。
 
 ## 一次資料
 

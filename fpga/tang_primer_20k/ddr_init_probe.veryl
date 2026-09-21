@@ -92,6 +92,7 @@ module TangDdrInitProbe #(
     param RUN_READ_SWEEP: u32 = 0,
     param RUN_MPR       : u32 = 0,
     param RUN_MPR_DELAY : u32 = 0,
+    param RUN_MPR_ALIGN : u32 = 0,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -147,6 +148,8 @@ module TangDdrInitProbe #(
     var sweep_delay_ready : 'ctrl      logic                ;
     var sweep_pass_delay0 : 'ctrl      logic           <8>  ;
     var sweep_pass_delay1 : 'ctrl      logic           <8>  ;
+    var sweep_align_pass0 : 'ctrl      logic           <3>  ;
+    var sweep_align_pass1 : 'ctrl      logic           <3>  ;
     var delay_rloadn      : 'ctrl      logic                ;
     var delay_rmove       : 'ctrl      logic                ;
     var delay_rdir        : 'ctrl      logic                ;
@@ -165,10 +168,10 @@ module TangDdrInitProbe #(
     var raw0_ref          : 'reference logic           <8>  ;
     var raw1_meta         : 'reference logic           <8>  ;
     var raw1_ref          : 'reference logic           <8>  ;
-    let mpr_debug         : 'reference logic                 = RUN_MPR != 0 || RUN_MPR_DELAY != 0;
-    let use_sweep         : 'ctrl      logic                 = RUN_READ_SWEEP != 0 || RUN_MPR != 0 || RUN_MPR_DELAY
-        != 0;
-    let use_mpr           : 'ctrl      logic                 = RUN_MPR != 0 || RUN_MPR_DELAY != 0;
+    let mpr_debug         : 'reference logic                 = RUN_MPR != 0 || RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0;
+    let use_sweep         : 'ctrl      logic                 = RUN_READ_SWEEP != 0 || RUN_MPR != 0 || RUN_MPR_DELAY != 0
+        || RUN_MPR_ALIGN != 0;
+    let use_mpr           : 'ctrl      logic                 = RUN_MPR != 0 || RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0;
     let sweep_active      : 'ctrl      logic                 = use_sweep && done;
     let phy_cmd_valid     : 'ctrl      logic                 = if sweep_active ? sweep_valid : cmd_valid;
     let phy_cmd           : 'ctrl      logic           <3>   = if sweep_active ? sweep_cmd : cmd;
@@ -238,8 +241,9 @@ module TangDdrInitProbe #(
         o_done     : done         ,
     );
     inst sweep: DdrReadGateSweep #(
-        MPR_MODE  : if RUN_MPR_DELAY != 0 ? 1 : RUN_MPR,
-        DELAY_MODE: RUN_MPR_DELAY                      ,
+        MPR_MODE  : if RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0 ? 1 : RUN_MPR,
+        DELAY_MODE: if RUN_MPR_ALIGN != 0 ? 1 : RUN_MPR_DELAY,
+        ALIGN_MODE: RUN_MPR_ALIGN                                            ,
     ) (
         i_clk         : ctrl_clk          ,
         i_rst         : ready_reset       ,
@@ -268,16 +272,18 @@ module TangDdrInitProbe #(
         o_delay_target: sweep_delay_target,
         o_pass_delay0 : sweep_pass_delay0 ,
         o_pass_delay1 : sweep_pass_delay1 ,
+        o_align_pass0 : sweep_align_pass0 ,
+        o_align_pass1 : sweep_align_pass1 ,
     );
     inst delay_stepper: DdrReadDelayStepper (
-        i_clk   : ctrl_clk                          ,
-        i_rst   : ready_reset                       ,
-        i_enable: sweep_active && RUN_MPR_DELAY != 0,
-        i_target: sweep_delay_target                ,
-        o_rloadn: delay_rloadn                      ,
-        o_rmove : delay_rmove                       ,
-        o_rdir  : delay_rdir                        ,
-        o_ready : sweep_delay_ready                 ,
+        i_clk   : ctrl_clk                                                  ,
+        i_rst   : ready_reset                                               ,
+        i_enable: sweep_active && (RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0),
+        i_target: sweep_delay_target                                        ,
+        o_rloadn: delay_rloadn                                              ,
+        o_rmove : delay_rmove                                               ,
+        o_rdir  : delay_rdir                                                ,
+        o_ready : sweep_delay_ready                                         ,
     );
     unsafe (cdc) {
         inst phy: TangDdrPhyIo (
@@ -345,9 +351,21 @@ module TangDdrInitProbe #(
                 found_pipe    = {found_pipe[0], sweep_found == 2'b11};
                 burst_pipe    = {burst_pipe[0], sweep_burst_seen == 2'b11};
                 valid_pipe    = {valid_pipe[0], sweep_valid_seen == 2'b11};
-                pattern0_meta = if RUN_MPR_DELAY != 0 ? sweep_pass_delay0 : sweep_pattern0;
+                pattern0_meta = if RUN_MPR_ALIGN != 0 ?
+                    {5'b0, sweep_align_pass0}
+                : if RUN_MPR_DELAY != 0 ?
+                    sweep_pass_delay0
+                :
+                    sweep_pattern0
+                ;
                 pattern0_ref  = pattern0_meta;
-                pattern1_meta = if RUN_MPR_DELAY != 0 ? sweep_pass_delay1 : sweep_pattern1;
+                pattern1_meta = if RUN_MPR_ALIGN != 0 ?
+                    {5'b0, sweep_align_pass1}
+                : if RUN_MPR_DELAY != 0 ?
+                    sweep_pass_delay1
+                :
+                    sweep_pattern1
+                ;
                 pattern1_ref  = pattern1_meta;
                 raw0_meta     = sweep_pattern0;
                 raw0_ref      = raw0_meta;
@@ -374,15 +392,15 @@ module TangDdrInitProbe #(
         ;
     }
     inst uart: TangDdrStatusUart (
-        i_clk                             ,
-        i_rst         : ref_reset         ,
-        i_status      : status            ,
-        i_debug_enable: mpr_debug         ,
-        i_debug_extra : RUN_MPR_DELAY != 0,
-        i_debug0      : pattern0_ref      ,
-        i_debug1      : pattern1_ref      ,
-        i_debug2      : raw0_ref          ,
-        i_debug3      : raw1_ref          ,
-        o_tx          : o_uart_tx         ,
+        i_clk                                                   ,
+        i_rst         : ref_reset                               ,
+        i_status      : status                                  ,
+        i_debug_enable: mpr_debug                               ,
+        i_debug_extra : RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0,
+        i_debug0      : pattern0_ref                            ,
+        i_debug1      : pattern1_ref                            ,
+        i_debug2      : raw0_ref                                ,
+        i_debug3      : raw1_ref                                ,
+        o_tx          : o_uart_tx                               ,
     );
 }

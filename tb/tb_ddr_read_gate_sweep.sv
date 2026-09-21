@@ -19,7 +19,8 @@ module tb_ddr_read_gate_sweep;
         .o_done(done), .o_found(found), .o_burst_seen(), .o_valid_seen(),
         .o_sample0(), .o_sample1(), .o_pattern0(), .o_pattern1(),
         .o_phase0(phase0), .o_phase1(phase1),
-        .o_delay_target(), .o_pass_delay0(), .o_pass_delay1()
+        .o_delay_target(), .o_pass_delay0(), .o_pass_delay1(),
+        .o_align_pass0(), .o_align_pass1()
     );
 
     // The mock DRAM returns a lane-specific DQS burst only at the chosen gate

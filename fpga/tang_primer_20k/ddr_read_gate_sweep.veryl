@@ -10,9 +10,12 @@
 /// calibration before use as a memory controller.
 /// DELAY_MODE repeats the 64 MPR combinations at eight receive-delay offsets
 /// and records the offsets that pass all three reads for each byte lane.
+/// ALIGN_MODE compares the preceding, current and following controller cycles
+/// against each RVALID assertion. Its masks use bits 0, 1 and 2 respectively.
 module DdrReadGateSweep #(
     param MPR_MODE  : u32 = 0,
     param DELAY_MODE: u32 = 0,
+    param ALIGN_MODE: u32 = 0,
 ) (
     i_clk        : input  clock     ,
     i_rst        : input  reset     ,
@@ -42,6 +45,8 @@ module DdrReadGateSweep #(
     o_delay_target: output logic<5> ,
     o_pass_delay0 : output logic<8> ,
     o_pass_delay1 : output logic<8> ,
+    o_align_pass0 : output logic<3> ,
+    o_align_pass1 : output logic<3> ,
 ) {
     enum State: logic<4> {
         idle,
@@ -58,78 +63,113 @@ module DdrReadGateSweep #(
         mrs_off_wait,
         done,
     }
-    var state      : State   ;
-    var elapsed    : logic<4>;
-    var phase      : logic<6>;
-    var delay_index: logic<3>;
-    var seen       : logic<2>;
-    var repeat_idx : logic<2>;
-    var repeat_ok  : logic<2>;
-    var found      : logic<2>;
-    var burst_seen : logic<2>;
-    var valid_seen : logic<2>;
-    var sample0    : logic<8>;
-    var sample1    : logic<8>;
-    var pattern0   : logic<8>;
-    var pattern1   : logic<8>;
-    var phase0     : logic<6>;
-    var phase1     : logic<6>;
-    var pass_delay0: logic<8>;
-    var pass_delay1: logic<8>;
+    var state          : State   ;
+    var elapsed        : logic<4>;
+    var phase          : logic<6>;
+    var delay_index    : logic<3>;
+    var seen           : logic<2>;
+    var repeat_idx     : logic<2>;
+    var repeat_ok      : logic<2>;
+    var found          : logic<2>;
+    var burst_seen     : logic<2>;
+    var valid_seen     : logic<2>;
+    var sample0        : logic<8>;
+    var sample1        : logic<8>;
+    var pattern0       : logic<8>;
+    var pattern1       : logic<8>;
+    var phase0         : logic<6>;
+    var phase1         : logic<6>;
+    var pass_delay0    : logic<8>;
+    var pass_delay1    : logic<8>;
+    var align_seen     : logic<6>;
+    var align_repeat_ok: logic<6>;
+    var align_pass0    : logic<3>;
+    var align_pass1    : logic<3>;
+    var previous_lower : logic<8>;
+    var previous_upper : logic<8>;
+    var previous_valid : logic<2>;
     // MPR drives the fixed 0,1,0,1,... sequence on DQ0 and DQ8.
     // Either byte ordering is accepted here; alignment is checked later.
-    let lower_pattern: logic<8> = {
+    let lower_pattern  : logic<8> = {
         i_data[112], i_data[96], i_data[80], i_data[64], i_data[48], i_data[32], i_data[16], i_data[0]
     };
-    let upper_pattern: logic<8> = {
+    let upper_pattern  : logic<8> = {
         i_data[120], i_data[104], i_data[88], i_data[72], i_data[56], i_data[40], i_data[24], i_data[8]
     };
-    let data_good    : logic<2> = {
+    let data_good      : logic<2> = {
         i_valid[1] && (upper_pattern == 8'haa || upper_pattern == 8'h55),
         i_valid[0] && (lower_pattern == 8'haa || lower_pattern == 8'h55),
     };
-    let observed     : logic<2> = seen | (if MPR_MODE != 0 ? data_good : i_burst);
-    let qualified    : logic<2> = if MPR_MODE != 0 ? repeat_ok & observed : observed;
+    let observed       : logic<2> = seen | (if MPR_MODE != 0 ? data_good : i_burst);
+    let align_observed : logic<6> = align_seen
+        | {
+            previous_valid[1] && (upper_pattern == 8'haa || upper_pattern == 8'h55), data_good[1],
+            i_valid[1] && (previous_upper == 8'haa || previous_upper == 8'h55),
+            previous_valid[0] && (lower_pattern == 8'haa || lower_pattern == 8'h55), data_good[0],
+            i_valid[0] && (previous_lower == 8'haa || previous_lower == 8'h55),
+        };
+    let align_qualified: logic<6> = align_repeat_ok & align_observed;
+    let qualified      : logic<2> = if ALIGN_MODE != 0 ?
+        {|align_qualified[5:3], |align_qualified[2:0]}
+    : if MPR_MODE != 0 ?
+        repeat_ok & observed
+    :
+        observed
+    ;
 
     always_ff {
         if_reset {
-            state       = State::idle;
-            elapsed     = 0;
-            phase       = 0;
-            delay_index = 0;
-            seen        = 0;
-            repeat_idx  = 0;
-            repeat_ok   = 2'b11;
-            found       = 0;
-            burst_seen  = 0;
-            valid_seen  = 0;
-            sample0     = 0;
-            sample1     = 0;
-            pattern0    = 0;
-            pattern1    = 0;
-            phase0      = 0;
-            phase1      = 0;
-            pass_delay0 = 0;
-            pass_delay1 = 0;
+            state           = State::idle;
+            elapsed         = 0;
+            phase           = 0;
+            delay_index     = 0;
+            seen            = 0;
+            repeat_idx      = 0;
+            repeat_ok       = 2'b11;
+            found           = 0;
+            burst_seen      = 0;
+            valid_seen      = 0;
+            sample0         = 0;
+            sample1         = 0;
+            pattern0        = 0;
+            pattern1        = 0;
+            phase0          = 0;
+            phase1          = 0;
+            pass_delay0     = 0;
+            pass_delay1     = 0;
+            align_seen      = 0;
+            align_repeat_ok = 6'b111111;
+            align_pass0     = 0;
+            align_pass1     = 0;
+            previous_lower  = 0;
+            previous_upper  = 0;
+            previous_valid  = 0;
         } else if !i_enable {
-            state       = State::idle;
-            elapsed     = 0;
-            phase       = 0;
-            delay_index = 0;
-            seen        = 0;
-            repeat_idx  = 0;
-            repeat_ok   = 2'b11;
-            found       = 0;
-            burst_seen  = 0;
-            valid_seen  = 0;
-            sample0     = 0;
-            sample1     = 0;
-            pattern0    = 0;
-            pattern1    = 0;
-            phase0      = 0;
-            phase1      = 0;
-            pass_delay0 = 0;
-            pass_delay1 = 0;
+            state           = State::idle;
+            elapsed         = 0;
+            phase           = 0;
+            delay_index     = 0;
+            seen            = 0;
+            repeat_idx      = 0;
+            repeat_ok       = 2'b11;
+            found           = 0;
+            burst_seen      = 0;
+            valid_seen      = 0;
+            sample0         = 0;
+            sample1         = 0;
+            pattern0        = 0;
+            pattern1        = 0;
+            phase0          = 0;
+            phase1          = 0;
+            pass_delay0     = 0;
+            pass_delay1     = 0;
+            align_seen      = 0;
+            align_repeat_ok = 6'b111111;
+            align_pass0     = 0;
+            align_pass1     = 0;
+            previous_lower  = 0;
+            previous_upper  = 0;
+            previous_valid  = 0;
         } else {
             case state {
                 State::idle: {
@@ -163,18 +203,26 @@ module DdrReadGateSweep #(
                     }
                 }
                 State::read_cmd: {
-                    elapsed = 0;
-                    seen    = 0;
-                    state   = State::sample;
+                    elapsed        = 0;
+                    seen           = 0;
+                    align_seen     = 0;
+                    previous_lower = 0;
+                    previous_upper = 0;
+                    previous_valid = 0;
+                    state          = State::sample;
                 }
                 State::sample: {
-                    seen       = observed;
-                    sample0    = sample0 | i_data[7:0] | i_data[23:16] | i_data[39:32] | i_data[55:48] | i_data[71:64]
-                        | i_data[87:80] | i_data[103:96] | i_data[119:112];
-                    sample1    = sample1 | i_data[15:8] | i_data[31:24] | i_data[47:40] | i_data[63:56] | i_data[79:72]
-                        | i_data[95:88] | i_data[111:104] | i_data[127:120];
-                    burst_seen = burst_seen | i_burst;
-                    valid_seen = valid_seen | i_valid;
+                    seen           = observed;
+                    align_seen     = align_observed;
+                    previous_lower = lower_pattern;
+                    previous_upper = upper_pattern;
+                    previous_valid = i_valid;
+                    sample0        = sample0 | i_data[7:0] | i_data[23:16] | i_data[39:32] | i_data[55:48]
+                        | i_data[71:64] | i_data[87:80] | i_data[103:96] | i_data[119:112];
+                    sample1        = sample1 | i_data[15:8] | i_data[31:24] | i_data[47:40] | i_data[63:56]
+                        | i_data[79:72] | i_data[95:88] | i_data[111:104] | i_data[127:120];
+                    burst_seen     = burst_seen | i_burst;
+                    valid_seen     = valid_seen | i_valid;
                     if i_valid[0] {
                         pattern0 = lower_pattern;
                     }
@@ -183,10 +231,15 @@ module DdrReadGateSweep #(
                     }
                     if elapsed == 11 {
                         if MPR_MODE != 0 && repeat_idx != 2 {
-                            repeat_ok  = repeat_ok & observed;
-                            repeat_idx = repeat_idx + 2'd1;
-                            state      = State::read_cmd;
+                            repeat_ok       = repeat_ok & observed;
+                            align_repeat_ok = align_repeat_ok & align_observed;
+                            repeat_idx      = repeat_idx + 2'd1;
+                            state           = State::read_cmd;
                         } else {
+                            if ALIGN_MODE != 0 {
+                                align_pass0 = align_pass0 | align_qualified[2:0];
+                                align_pass1 = align_pass1 | align_qualified[5:3];
+                            }
                             if DELAY_MODE != 0 {
                                 if qualified[0] {
                                     pass_delay0 = pass_delay0 | (8'b1 << delay_index);
@@ -203,8 +256,9 @@ module DdrReadGateSweep #(
                                 found[1] = 1'b1;
                                 phase1   = phase;
                             }
-                            repeat_idx = 0;
-                            repeat_ok  = 2'b11;
+                            repeat_idx      = 0;
+                            repeat_ok       = 2'b11;
+                            align_repeat_ok = 6'b111111;
                             if DELAY_MODE != 0 && phase == 6'd63 && delay_index != 3'd7 {
                                 delay_index = delay_index + 3'd1;
                                 phase       = 0;
@@ -310,4 +364,6 @@ module DdrReadGateSweep #(
     assign o_delay_target = if DELAY_MODE != 0 ? {delay_index, 2'b00} : 5'b0;
     assign o_pass_delay0  = pass_delay0;
     assign o_pass_delay1  = pass_delay1;
+    assign o_align_pass0  = align_pass0;
+    assign o_align_pass1  = align_pass1;
 }

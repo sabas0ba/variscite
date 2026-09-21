@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -24,6 +24,7 @@ $images = @{
     DdrRead = 'sim/fpga/ddr_read/impl/pnr/ddr_read.fs'
     DdrMpr = 'sim/fpga/ddr_mpr/impl/pnr/ddr_mpr.fs'
     DdrMprDelay = 'sim/fpga/ddr_mpr_delay/impl/pnr/ddr_mpr_delay.fs'
+    DdrMprAlign = 'sim/fpga/ddr_mpr_align/impl/pnr/ddr_mpr_align.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -105,6 +106,13 @@ try {
         }
         DdrMprDelay {
             # Status, two lane pass masks, then two raw lane patterns.
+            $frames = @([regex]::Matches($received, '[PLIRMEVB][0-9A-F]{8}') |
+                Select-Object -Last 3)
+            $passed = $frames.Count -eq 3 -and
+                @($frames | Where-Object { $_.Value[0] -ne 'M' }).Count -eq 0
+        }
+        DdrMprAlign {
+            # Status, two lane alignment masks, then two raw lane patterns.
             $frames = @([regex]::Matches($received, '[PLIRMEVB][0-9A-F]{8}') |
                 Select-Object -Last 3)
             $passed = $frames.Count -eq 3 -and

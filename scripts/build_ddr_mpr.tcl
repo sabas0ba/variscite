@@ -10,6 +10,7 @@ add_file -type verilog [file join $root target tang_primer_20k ddr_read_delay_st
 add_file -type verilog [file join $root target tang_primer_20k ddr_init_probe.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_mpr_probe.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_mpr_delay_probe.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_mpr_align_probe.sv]
 add_file -type cst [file join $out "$::env(DDR_MPR_NAME).cst"]
 add_file -type sdc [file join $root fpga tang_primer_20k ddr_read_probe.sdc]
 set_option -top_module $::env(DDR_MPR_TOP)

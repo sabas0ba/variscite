@@ -41,7 +41,7 @@ module tb_ddr_mpr_delay_sweep;
         .o_sample0(), .o_sample1(), .o_pattern0(), .o_pattern1(),
         .o_phase0(phase0), .o_phase1(phase1),
         .o_delay_target(delay_target), .o_pass_delay0(pass0),
-        .o_pass_delay1(pass1)
+        .o_pass_delay1(pass1), .o_align_pass0(), .o_align_pass1()
     );
 
     initial begin

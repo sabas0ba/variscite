@@ -3,7 +3,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_MPR_DELAY:-0}" == 1 ]]; then
+if [[ "${DDR_MPR_ALIGN:-0}" == 1 ]]; then
+    name=ddr_mpr_align
+    top=rv32ima_TangDdrMprAlignProbe
+elif [[ "${DDR_MPR_DELAY:-0}" == 1 ]]; then
     name=ddr_mpr_delay
     top=rv32ima_TangDdrMprDelayProbe
 else

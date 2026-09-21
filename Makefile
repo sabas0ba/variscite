@@ -94,7 +94,7 @@ coverage:
 	    logs/cov/*.dat 2>&1 | tee logs/cov/summary.txt
 
 # --- FPGA ports ----------------------------------------------------------
-.PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test
+.PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-status-uart-test
 ddr-status-uart-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_status_uart \
 	    -Mdir sim/obj_ddr_status_uart -o tb_ddr_status_uart \
@@ -107,6 +107,13 @@ ddr-mpr-delay-test: veryl-build
 	    target/tang_primer_20k/ddr_read_delay_stepper.sv \
 	    target/tang_primer_20k/ddr_read_gate_sweep.sv tb/tb_ddr_mpr_delay_sweep.sv
 	sim/obj_ddr_mpr_delay_sweep/tb_ddr_mpr_delay_sweep
+
+ddr-mpr-align-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mpr_align_sweep \
+	    -Mdir sim/obj_ddr_mpr_align_sweep -o tb_ddr_mpr_align_sweep \
+	    target/tang_primer_20k/ddr_read_delay_stepper.sv \
+	    target/tang_primer_20k/ddr_read_gate_sweep.sv tb/tb_ddr_mpr_align_sweep.sv
+	sim/obj_ddr_mpr_align_sweep/tb_ddr_mpr_align_sweep
 
 ddr-mpr-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mpr_sweep \
