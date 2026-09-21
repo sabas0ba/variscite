@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -22,6 +22,7 @@ $images = @{
     LcdSoc = 'sim/fpga/lcd_soc/soc.fs'
     DdrInit = 'sim/fpga/ddr_init/impl/pnr/ddr_init.fs'
     DdrRead = 'sim/fpga/ddr_read/impl/pnr/ddr_read.fs'
+    DdrMpr = 'sim/fpga/ddr_mpr/impl/pnr/ddr_mpr.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -45,8 +46,23 @@ try {
     }
     $serial.Open()
     $serial.DiscardInBuffer()
-    & $loader -b tangprimer20k $bitstream 2>&1 | Tee-Object -FilePath "$prefix-load.log"
-    if ($LASTEXITCODE -ne 0) { throw 'SRAM loading failed' }
+    for ($attempt = 1; $attempt -le 2; $attempt++) {
+        # PowerShell 5 treats a native process's stderr as a terminating error
+        # under Stop, even when the process exit code can be retried.
+        $ErrorActionPreference = 'Continue'
+        try {
+            & $loader -b tangprimer20k $bitstream 2>&1 |
+                Tee-Object -FilePath "$prefix-load.log" -Append
+        } finally {
+            $ErrorActionPreference = 'Stop'
+        }
+        if ($LASTEXITCODE -eq 0) { break }
+        $loadLog = Get-Content -Raw "$prefix-load.log"
+        if ($attempt -ne 1 -or $loadLog -notmatch 'FTDI reset error') {
+            throw 'SRAM loading failed'
+        }
+        Start-Sleep -Milliseconds 500
+    }
     # Keep startup bytes for the SoC banner; probes need no startup capture.
     if ($Mode -notin @('Soc', 'LcdSoc')) { $serial.DiscardInBuffer() }
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
@@ -78,6 +94,13 @@ try {
             $probe = [regex]::Match($received, '[PLIRGE]+$').Value
             $passed = ([regex]::Matches($probe, 'G')).Count -ge 5 -and
                 -not $probe.Contains('E')
+        }
+        DdrMpr {
+            # Each report is a status character and two hexadecimal lane masks.
+            $frames = @([regex]::Matches($received, '[PLIRMEVB][0-9A-F]{4}') |
+                Select-Object -Last 3)
+            $passed = $frames.Count -eq 3 -and
+                @($frames | Where-Object { $_.Value[0] -ne 'M' }).Count -eq 0
         }
         { $_ -in @('Soc', 'LcdSoc') } {
             # Ignore output from the old SRAM image before the new boot banner.

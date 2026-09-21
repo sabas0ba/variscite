@@ -13,7 +13,7 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
 
 all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
      cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test \
-     ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test
+     ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test
 
 lint:
 	@test -z "$$(find src fpga -type f \( -name '*.sv' -o -name '*.v' \))" || \
@@ -94,7 +94,13 @@ coverage:
 	    logs/cov/*.dat 2>&1 | tee logs/cov/summary.txt
 
 # --- FPGA ports ----------------------------------------------------------
-.PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test
+.PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test
+ddr-mpr-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mpr_sweep \
+	    -Mdir sim/obj_ddr_mpr_sweep -o tb_ddr_mpr_sweep \
+	    target/tang_primer_20k/ddr_read_gate_sweep.sv tb/tb_ddr_mpr_sweep.sv
+	sim/obj_ddr_mpr_sweep/tb_ddr_mpr_sweep
+
 ddr-read-gate-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_read_gate_sweep \
 	    -Mdir sim/obj_ddr_read_gate_sweep -o tb_ddr_read_gate_sweep \

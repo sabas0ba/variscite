@@ -7,15 +7,18 @@ module tb_ddr_read_gate_sweep;
     wire [7:0] read_gate;
     wire [5:0] sel;
     wire [1:0] hold_gate, found;
-    wire [4:0] phase0, phase1;
+    wire [5:0] phase0, phase1;
     integer cycle=0, last_read=-100, reads=0, acts=0, pres=0;
     integer pending0=0, pending1=0;
     always #5 clk=~clk;
     rv32ima_DdrReadGateSweep dut (
         .i_clk(clk), .i_rst(rst), .i_enable(enable), .i_burst(burst),
+        .i_valid(2'b0), .i_data(128'b0),
         .o_cmd_valid(cmd_valid), .o_cmd(cmd), .o_addr(addr), .o_bank(bank),
         .o_read(read_gate), .o_sel(sel), .o_hold(hold_gate),
-        .o_done(done), .o_found(found), .o_phase0(phase0), .o_phase1(phase1)
+        .o_done(done), .o_found(found), .o_burst_seen(), .o_valid_seen(),
+        .o_sample0(), .o_sample1(),
+        .o_phase0(phase0), .o_phase1(phase1)
     );
 
     // The mock DRAM returns a lane-specific DQS burst only at the chosen gate
@@ -86,7 +89,7 @@ module tb_ddr_read_gate_sweep;
     initial begin
         start_case(1);
         await_done(500);
-        if (found!==2'b11 || phase0!==5'd2 || phase1!==5'd19)
+        if (found!==2'b11 || phase0!==6'd2 || phase1!==6'd19)
             $fatal(1,"lane phases wrong: found=%b phase0=%d phase1=%d",found,phase0,phase1);
         if (acts!=1 || pres!=1 || reads<20 || reads>32)
             $fatal(1,"unexpected command counts on success");

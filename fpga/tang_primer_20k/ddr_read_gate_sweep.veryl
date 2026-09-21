@@ -1,68 +1,106 @@
 /// Probe the two DDR3 DQS receive gates independently using READ bursts.
-/// A READ is issued every 13 controller clocks while bank 0, row 0 is open.
-/// All 32 phase/position combinations are scanned in under 430 clocks,
-/// below one 7.8 us refresh interval at 99 MHz. The bank is precharged before
-/// completion; callers must then resume refresh or reset the DRAM.
+/// A READ is issued every 13 controller clocks. Normal mode scans all 32
+/// phase/position combinations while bank 0, row 0 is open. MPR mode scans 64
+/// combinations with all banks precharged, adds MR3 enable/disable, and checks
+/// the fixed DQ0/DQ8 pattern instead of accepting RBURST alone. The full MPR
+/// sweep can exceed one 7.8 us refresh interval; the diagnostic caller resets
+/// the DRAM when it finishes.
 /// RBURST proves DQS detection only. The returned phases require data-eye
 /// calibration before use as a memory controller.
-module DdrReadGateSweep (
-    i_clk      : input  clock   ,
-    i_rst      : input  reset   ,
-    i_enable   : input  logic   ,
-    i_burst    : input  logic<2>,
-    o_cmd_valid: output logic   ,
+module DdrReadGateSweep #(
+    param MPR_MODE: u32 = 0,
+) (
+    i_clk      : input  clock     ,
+    i_rst      : input  reset     ,
+    i_enable   : input  logic     ,
+    i_burst    : input  logic<2>  ,
+    i_valid    : input  logic<2>  ,
+    i_data     : input  logic<128>,
+    o_cmd_valid: output logic     ,
     /// {RAS_n, CAS_n, WE_n}: ACT=011, READ=101, PRE=010.
-    o_cmd   : output logic<3> ,
-    o_addr  : output logic<14>,
-    o_bank  : output logic<3> ,
-    o_read  : output logic<8> ,
-    o_sel   : output logic<6> ,
-    o_hold  : output logic<2> ,
-    o_done  : output logic    ,
-    o_found : output logic<2> ,
-    o_phase0: output logic<5> ,
-    o_phase1: output logic<5> ,
+    o_cmd       : output logic<3> ,
+    o_addr      : output logic<14>,
+    o_bank      : output logic<3> ,
+    o_read      : output logic<8> ,
+    o_sel       : output logic<6> ,
+    o_hold      : output logic<2> ,
+    o_done      : output logic    ,
+    o_found     : output logic<2> ,
+    o_burst_seen: output logic<2> ,
+    o_valid_seen: output logic<2> ,
+    o_sample0   : output logic<8> ,
+    o_sample1   : output logic<8> ,
+    o_phase0    : output logic<6> ,
+    o_phase1    : output logic<6> ,
 ) {
-    enum State: logic<3> {
+    enum State: logic<4> {
         idle,
         activate,
         act_wait,
+        mrs,
+        mrs_wait,
         read_cmd,
         sample,
         precharge,
         pre_wait,
+        mrs_off,
+        mrs_off_wait,
         done,
     }
-    var state   : State   ;
-    var elapsed : logic<4>;
-    var phase   : logic<5>;
-    var seen    : logic<2>;
-    var found   : logic<2>;
-    var phase0  : logic<5>;
-    var phase1  : logic<5>;
-    let observed: logic<2> = seen | i_burst;
+    var state     : State   ;
+    var elapsed   : logic<4>;
+    var phase     : logic<6>;
+    var seen      : logic<2>;
+    var found     : logic<2>;
+    var burst_seen: logic<2>;
+    var valid_seen: logic<2>;
+    var sample0   : logic<8>;
+    var sample1   : logic<8>;
+    var phase0    : logic<6>;
+    var phase1    : logic<6>;
+    // MPR drives the fixed 0,1,0,1,... sequence on DQ0 and DQ8.
+    // Either byte ordering is accepted here; alignment is checked later.
+    let lower_pattern: logic<8> = {
+        i_data[112], i_data[96], i_data[80], i_data[64], i_data[48], i_data[32], i_data[16], i_data[0]
+    };
+    let upper_pattern: logic<8> = {
+        i_data[120], i_data[104], i_data[88], i_data[72], i_data[56], i_data[40], i_data[24], i_data[8]
+    };
+    let data_good    : logic<2> = {
+        i_valid[1] && (upper_pattern == 8'haa || upper_pattern == 8'h55),
+        i_valid[0] && (lower_pattern == 8'haa || lower_pattern == 8'h55),
+    };
+    let observed     : logic<2> = seen | (if MPR_MODE != 0 ? data_good : i_burst);
 
     always_ff {
         if_reset {
-            state   = State::idle;
-            elapsed = 0;
-            phase   = 0;
-            seen    = 0;
-            found   = 0;
-            phase0  = 0;
-            phase1  = 0;
+            state      = State::idle;
+            elapsed    = 0;
+            phase      = 0;
+            seen       = 0;
+            found      = 0;
+            burst_seen = 0;
+            valid_seen = 0;
+            sample0    = 0;
+            sample1    = 0;
+            phase0     = 0;
+            phase1     = 0;
         } else if !i_enable {
-            state   = State::idle;
-            elapsed = 0;
-            phase   = 0;
-            seen    = 0;
-            found   = 0;
-            phase0  = 0;
-            phase1  = 0;
+            state      = State::idle;
+            elapsed    = 0;
+            phase      = 0;
+            seen       = 0;
+            found      = 0;
+            burst_seen = 0;
+            valid_seen = 0;
+            sample0    = 0;
+            sample1    = 0;
+            phase0     = 0;
+            phase1     = 0;
         } else {
             case state {
                 State::idle: {
-                    state = State::activate;
+                    state = if MPR_MODE != 0 ? State::mrs : State::activate;
                 }
                 State::activate: {
                     elapsed = 0;
@@ -75,13 +113,30 @@ module DdrReadGateSweep (
                         elapsed = elapsed + 4'd1;
                     }
                 }
+                State::mrs: {
+                    elapsed = 0;
+                    state   = State::mrs_wait;
+                }
+                State::mrs_wait: {
+                    if elapsed == 11 {
+                        state = State::read_cmd;
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
                 State::read_cmd: {
                     elapsed = 0;
                     seen    = 0;
                     state   = State::sample;
                 }
                 State::sample: {
-                    seen = observed;
+                    seen       = observed;
+                    sample0    = sample0 | i_data[7:0] | i_data[23:16] | i_data[39:32] | i_data[55:48] | i_data[71:64]
+                        | i_data[87:80] | i_data[103:96] | i_data[119:112];
+                    sample1    = sample1 | i_data[15:8] | i_data[31:24] | i_data[47:40] | i_data[63:56] | i_data[79:72]
+                        | i_data[95:88] | i_data[111:104] | i_data[127:120];
+                    burst_seen = burst_seen | i_burst;
+                    valid_seen = valid_seen | i_valid;
                     if elapsed == 11 {
                         if !found[0] && observed[0] {
                             found[0] = 1'b1;
@@ -91,10 +146,10 @@ module DdrReadGateSweep (
                             found[1] = 1'b1;
                             phase1   = phase;
                         }
-                        if (found | observed) == 2'b11 || phase == 5'd31 {
-                            state = State::precharge;
+                        if (found | observed) == 2'b11 || phase == (if MPR_MODE != 0 ? 6'd63 : 6'd31) {
+                            state = if MPR_MODE != 0 ? State::mrs_off : State::precharge;
                         } else {
-                            phase = phase + 5'd1;
+                            phase = phase + 6'd1;
                             state = State::read_cmd;
                         }
                     } else {
@@ -112,7 +167,22 @@ module DdrReadGateSweep (
                         elapsed = elapsed + 4'd1;
                     }
                 }
+                State::mrs_off: {
+                    elapsed = 0;
+                    state   = State::mrs_off_wait;
+                }
+                State::mrs_off_wait: {
+                    if elapsed == 11 {
+                        state = State::done;
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
                 State::done: {}
+                default: {
+                    state   = State::idle;
+                    elapsed = 0;
+                }
             }
         }
     }
@@ -125,6 +195,12 @@ module DdrReadGateSweep (
         o_sel       = {if found[1] ? phase1[2:0] : phase[2:0], if found[0] ? phase0[2:0] : phase[2:0]};
         o_hold      = 2'b0;
         case state {
+            State::mrs: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b000;
+                o_bank      = 3'b011;
+                o_addr      = 14'h0004;
+            }
             State::activate: {
                 o_cmd_valid = 1'b1;
                 o_cmd       = 3'b011;
@@ -132,10 +208,11 @@ module DdrReadGateSweep (
             State::read_cmd: {
                 o_cmd_valid = 1'b1;
                 o_cmd       = 3'b101;
+                o_addr      = if MPR_MODE != 0 ? 14'h1000 : 14'h0000;
                 o_hold      = ~found;
             }
             State::sample: {
-                if elapsed == ({2'b0, phase[4:3]} + 4'd1) {
+                if elapsed == ({1'b0, phase[5:3]} + 4'd1) {
                     o_read = {if found[1] ? 4'h0 : 4'hf, if found[0] ? 4'h0 : 4'hf};
                 }
             }
@@ -144,11 +221,20 @@ module DdrReadGateSweep (
                 o_cmd       = 3'b010;
                 o_addr      = 14'h0400;
             }
+            State::mrs_off: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b000;
+                o_bank      = 3'b011;
+            }
             default: {}
         }
     }
-    assign o_done   = state == State::done;
-    assign o_found  = found;
-    assign o_phase0 = phase0;
-    assign o_phase1 = phase1;
+    assign o_done       = state == State::done;
+    assign o_found      = found;
+    assign o_burst_seen = burst_seen;
+    assign o_valid_seen = valid_seen;
+    assign o_sample0    = sample0;
+    assign o_sample1    = sample1;
+    assign o_phase0     = phase0;
+    assign o_phase1     = phase1;
 }

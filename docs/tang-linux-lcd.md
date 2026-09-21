@@ -217,6 +217,10 @@ scripts/test-ddr-init-board.ps1 -Suite C:/Users/sabas/repos/hello_veryl/tools/os
 
 DQS/READ ゲートの実機検出結果は [DDR3 読出し DQS ゲート検証](ddr-read-gate.md) に記録した。次は DQ データアイ、write leveling、実メモリの読み書き、refresh を確認する。
 
+MPR の既知パターンによる DQ 受信診断と配置依存の実機結果は
+[DDR3 MPR 読出し診断](ddr-mpr.md) に記録した。MPR の安定受信と
+DRAM アレイの読み書きは未達成であり、Linux 用 RAM としては使用できない。
+
 ## 一次資料
 
 - [Sipeed Tang Primer 20K 仕様](https://en.wiki.sipeed.com/hardware/en/tang/tang-primer-20k/primer-20k.html)

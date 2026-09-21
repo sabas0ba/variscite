@@ -1,41 +1,69 @@
 /// Repeated diagnostic byte: P=PLL pending, L=DLL pending,
 /// I=DRAM initialization pending, R=initialization commands completed,
-/// G=both read DQS gates detected, E=read DQS gate timeout.
+/// G=both read DQS gates detected, M=MPR DQ pattern captured,
+/// V=MPR RVALID without a matching pattern, B=RBURST without RVALID,
+/// E=read DQS gate or MPR pattern timeout.
 module TangDdrStatusUart (
-    i_clk   : input  'reference clock   ,
-    i_rst   : input  'reference reset   ,
-    i_status: input  'reference logic<3>,
-    o_tx    : output 'reference logic   ,
+    i_clk         : input  'reference clock   ,
+    i_rst         : input  'reference reset   ,
+    i_status      : input  'reference logic<4>,
+    i_debug_enable: input  'reference logic   ,
+    i_debug0      : input  'reference logic<8>,
+    i_debug1      : input  'reference logic<8>,
+    o_tx          : output 'reference logic   ,
 ) {
-    const BIT_CYCLES: logic<8>  = 234;
-    var   gap       : 'reference logic<22>;
-    var   bit_time  : 'reference logic<8> ;
-    var   bits      : 'reference logic<4> ;
-    var   shift     : 'reference logic<10>;
-    var   data      : 'reference logic<8> ;
+    const BIT_CYCLES   : logic<8>  = 234;
+    var   gap          : 'reference logic<22>;
+    var   bit_time     : 'reference logic<8> ;
+    var   bits         : 'reference logic<4> ;
+    var   shift        : 'reference logic<10>;
+    var   data         : 'reference logic<8> ;
+    var   status_data  : 'reference logic<8> ;
+    var   debug_nibble : 'reference logic<4> ;
+    var   report_index : 'reference logic<3> ;
+    let   decimal_digit: 'reference logic     = debug_nibble <: 4'd10;
+    let   debug_ascii  : 'reference logic<8>  = if decimal_digit ?
+        8'h30 + {4'b0, debug_nibble}
+    :
+        8'h37 + {4'b0, debug_nibble}
+    ;
 
     always_comb {
         case i_status {
-            3'd0   : data = 8'h50; // P
-            3'd1   : data = 8'h4c; // L
-            3'd2   : data = 8'h49; // I
-            3'd3   : data = 8'h52; // R
-            3'd4   : data = 8'h47; // G: both DQS gates detected
-            default: data = 8'h45; // E: DQS gate timeout
+            4'd0   : status_data = 8'h50; // P
+            4'd1   : status_data = 8'h4c; // L
+            4'd2   : status_data = 8'h49; // I
+            4'd3   : status_data = 8'h52; // R
+            4'd4   : status_data = 8'h47; // G: both DQS gates detected
+            4'd6   : status_data = 8'h4d; // M: both MPR DQ patterns captured
+            4'd7   : status_data = 8'h42; // B: RBURST but no RVALID
+            4'd8   : status_data = 8'h56; // V: RVALID but no MPR pattern
+            default: status_data = 8'h45; // E: DQS gate timeout
         }
+        case report_index {
+            3'd1   : debug_nibble = i_debug0[7:4];
+            3'd2   : debug_nibble = i_debug0[3:0];
+            3'd3   : debug_nibble = i_debug1[7:4];
+            default: debug_nibble = i_debug1[3:0];
+        }
+        data = if i_debug_enable && report_index != 0 ? debug_ascii : status_data;
     }
     always_ff (i_clk, i_rst) {
         if_reset {
-            gap      = 0;
-            bit_time = 0;
-            bits     = 0;
-            shift    = 10'h3ff;
+            gap          = 0;
+            bit_time     = 0;
+            bits         = 0;
+            shift        = 10'h3ff;
+            report_index = 0;
         } else if bits == 0 {
             gap = (gap + 22'd1) as 22;
             if gap == 0 {
                 shift    = {1'b1, data, 1'b0};
                 bits     = 4'd10;
                 bit_time = 0;
+                if i_debug_enable {
+                    report_index = if report_index == 4 ? 0 : report_index + 3'd1;
+                }
             }
         } else if bit_time == BIT_CYCLES - 1 {
             bit_time = 0;
@@ -49,9 +77,11 @@ module TangDdrStatusUart (
 }
 
 /// JEDEC power-up probe. RUN_READ_SWEEP also issues ACT/READ/PRE and detects
-/// DQS bursts. It does not verify returned data or write timing.
+/// DQS bursts. RUN_MPR checks the fixed MPR read pattern on DQ0 and DQ8.
+/// Neither mode verifies write timing or RAM retention.
 module TangDdrInitProbe #(
     param RUN_READ_SWEEP: u32 = 0,
+    param RUN_MPR       : u32 = 0,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -71,43 +101,55 @@ module TangDdrInitProbe #(
     ddr_clk_p  : output 'fast      logic        ,
     ddr_clk_n  : output 'fast      logic        ,
 ) {
-    var por          : 'reference logic               ;
-    var fast_clk     : 'fast      clock               ;
-    var ctrl_clk     : 'ctrl      clock               ;
-    var pll_locked   : 'async     logic               ;
-    var dll_locked   : 'async     logic               ;
-    var dll_step     : 'async     logic           <8> ;
-    var phy_reset    : 'async     reset_async_high    ;
-    var ready_pipe   : 'ctrl      logic           <2> ;
-    var ready_reset  : 'ctrl      reset               ;
-    var cmd_valid    : 'ctrl      logic               ;
-    var cmd          : 'ctrl      logic           <3> ;
-    var bank         : 'ctrl      logic           <3> ;
-    var addr         : 'ctrl      logic           <14>;
-    var reset_n      : 'ctrl      logic               ;
-    var cke          : 'ctrl      logic               ;
-    var done         : 'ctrl      logic               ;
-    var status_pipe  : 'reference logic           <2> ;
-    var status       : 'reference logic           <3> ;
-    var ref_reset    : 'reference reset               ;
-    var sweep_valid  : 'ctrl      logic               ;
-    var sweep_cmd    : 'ctrl      logic           <3> ;
-    var sweep_bank   : 'ctrl      logic           <3> ;
-    var sweep_addr   : 'ctrl      logic           <14>;
-    var sweep_read   : 'ctrl      logic           <8> ;
-    var sweep_sel    : 'ctrl      logic           <6> ;
-    var sweep_hold   : 'ctrl      logic           <2> ;
-    var sweep_done   : 'ctrl      logic               ;
-    var sweep_found  : 'ctrl      logic           <2> ;
-    var phy_burst    : 'ctrl      logic           <2> ;
-    var sweep_pipe   : 'reference logic           <2> ;
-    var found_pipe   : 'reference logic           <2> ;
-    let use_sweep    : 'ctrl      logic                = RUN_READ_SWEEP != 0;
-    let phy_cmd_valid: 'ctrl      logic                = if use_sweep && done ? sweep_valid : cmd_valid;
-    let phy_cmd      : 'ctrl      logic           <3>  = if use_sweep && done ? sweep_cmd : cmd;
-    let phy_bank     : 'ctrl      logic           <3>  = if use_sweep && done ? sweep_bank : bank;
-    let phy_addr     : 'ctrl      logic           <14> = if use_sweep && done ? sweep_addr : addr;
-    let phy_cke      : 'ctrl      logic                = cke && !(use_sweep && sweep_done);
+    var por             : 'reference logic                ;
+    var fast_clk        : 'fast      clock                ;
+    var ctrl_clk        : 'ctrl      clock                ;
+    var pll_locked      : 'async     logic                ;
+    var dll_locked      : 'async     logic                ;
+    var dll_step        : 'async     logic           <8>  ;
+    var phy_reset       : 'async     reset_async_high     ;
+    var ready_pipe      : 'ctrl      logic           <2>  ;
+    var ready_reset     : 'ctrl      reset                ;
+    var cmd_valid       : 'ctrl      logic                ;
+    var cmd             : 'ctrl      logic           <3>  ;
+    var bank            : 'ctrl      logic           <3>  ;
+    var addr            : 'ctrl      logic           <14> ;
+    var reset_n         : 'ctrl      logic                ;
+    var cke             : 'ctrl      logic                ;
+    var done            : 'ctrl      logic                ;
+    var status_pipe     : 'reference logic           <2>  ;
+    var status          : 'reference logic           <4>  ;
+    var ref_reset       : 'reference reset                ;
+    var sweep_valid     : 'ctrl      logic                ;
+    var sweep_cmd       : 'ctrl      logic           <3>  ;
+    var sweep_bank      : 'ctrl      logic           <3>  ;
+    var sweep_addr      : 'ctrl      logic           <14> ;
+    var sweep_read      : 'ctrl      logic           <8>  ;
+    var sweep_sel       : 'ctrl      logic           <6>  ;
+    var sweep_hold      : 'ctrl      logic           <2>  ;
+    var sweep_done      : 'ctrl      logic                ;
+    var sweep_found     : 'ctrl      logic           <2>  ;
+    var sweep_burst_seen: 'ctrl      logic           <2>  ;
+    var sweep_valid_seen: 'ctrl      logic           <2>  ;
+    var phy_burst       : 'ctrl      logic           <2>  ;
+    var phy_valid       : 'ctrl      logic           <2>  ;
+    var phy_data        : 'ctrl      logic           <128>;
+    var sweep_pipe      : 'reference logic           <2>  ;
+    var found_pipe      : 'reference logic           <2>  ;
+    var burst_pipe      : 'reference logic           <2>  ;
+    var valid_pipe      : 'reference logic           <2>  ;
+    var phase0_meta     : 'reference logic           <8>  ;
+    var phase0_ref      : 'reference logic           <8>  ;
+    var phase1_meta     : 'reference logic           <8>  ;
+    var phase1_ref      : 'reference logic           <8>  ;
+    let mpr_debug       : 'reference logic                 = RUN_MPR != 0;
+    let use_sweep       : 'ctrl      logic                 = RUN_READ_SWEEP != 0 || RUN_MPR != 0;
+    let use_mpr         : 'ctrl      logic                 = RUN_MPR != 0;
+    let phy_cmd_valid   : 'ctrl      logic                 = if use_sweep && done ? sweep_valid : cmd_valid;
+    let phy_cmd         : 'ctrl      logic           <3>   = if use_sweep && done ? sweep_cmd : cmd;
+    let phy_bank        : 'ctrl      logic           <3>   = if use_sweep && done ? sweep_bank : bank;
+    let phy_addr        : 'ctrl      logic           <14>  = if use_sweep && done ? sweep_addr : addr;
+    let phy_cke         : 'ctrl      logic                 = cke && !(use_sweep && sweep_done);
 
     inst por_gen: PowerOnReset (
         i_clk     ,
@@ -160,22 +202,30 @@ module TangDdrInitProbe #(
         o_cke      : cke          ,
         o_done     : done         ,
     );
-    inst sweep: DdrReadGateSweep (
-        i_clk      : ctrl_clk         ,
-        i_rst      : ready_reset      ,
-        i_enable   : done && use_sweep,
-        i_burst    : phy_burst        ,
-        o_cmd_valid: sweep_valid      ,
-        o_cmd      : sweep_cmd        ,
-        o_addr     : sweep_addr       ,
-        o_bank     : sweep_bank       ,
-        o_read     : sweep_read       ,
-        o_sel      : sweep_sel        ,
-        o_hold     : sweep_hold       ,
-        o_done     : sweep_done       ,
-        o_found    : sweep_found      ,
-        o_phase0   : _                ,
-        o_phase1   : _                ,
+    inst sweep: DdrReadGateSweep #(
+        MPR_MODE: RUN_MPR,
+    ) (
+        i_clk       : ctrl_clk         ,
+        i_rst       : ready_reset      ,
+        i_enable    : done && use_sweep,
+        i_burst     : phy_burst        ,
+        i_valid     : phy_valid        ,
+        i_data      : phy_data         ,
+        o_cmd_valid : sweep_valid      ,
+        o_cmd       : sweep_cmd        ,
+        o_addr      : sweep_addr       ,
+        o_bank      : sweep_bank       ,
+        o_read      : sweep_read       ,
+        o_sel       : sweep_sel        ,
+        o_hold      : sweep_hold       ,
+        o_done      : sweep_done       ,
+        o_found     : sweep_found      ,
+        o_burst_seen: sweep_burst_seen ,
+        o_valid_seen: sweep_valid_seen ,
+        o_sample0   : _                ,
+        o_sample1   : _                ,
+        o_phase0    : _                ,
+        o_phase1    : _                ,
     );
     unsafe (cdc) {
         inst phy: TangDdrPhyIo (
@@ -199,10 +249,10 @@ module TangDdrInitProbe #(
             i_dq_enable  : 4'b0                                 ,
             i_dqs_enable : 4'b0                                 ,
             i_dqs_pattern: 8'b0                                 ,
-            o_data       : _                                    ,
+            o_data       : phy_data                             ,
             o_raw        : _                                    ,
             o_burst      : phy_burst                            ,
-            o_valid      : _                                    ,
+            o_valid      : phy_valid                            ,
             ddr_dq                                              ,
             ddr_dqs_p                                           ,
             ddr_dqs_n                                           ,
@@ -224,30 +274,49 @@ module TangDdrInitProbe #(
                 status_pipe = 0;
                 sweep_pipe  = 0;
                 found_pipe  = 0;
+                burst_pipe  = 0;
+                valid_pipe  = 0;
+                phase0_meta = 0;
+                phase0_ref  = 0;
+                phase1_meta = 0;
+                phase1_ref  = 0;
             } else {
                 status_pipe = {status_pipe[0], done};
                 sweep_pipe  = {sweep_pipe[0], sweep_done};
                 found_pipe  = {found_pipe[0], sweep_found == 2'b11};
+                burst_pipe  = {burst_pipe[0], sweep_burst_seen == 2'b11};
+                valid_pipe  = {valid_pipe[0], sweep_valid_seen == 2'b11};
+                phase0_meta = {6'b0, sweep_valid_seen};
+                phase0_ref  = phase0_meta;
+                phase1_meta = {6'b0, sweep_burst_seen};
+                phase1_ref  = phase1_meta;
             }
         }
         assign status = if !pll_locked ?
-            3'd0
+            4'd0
         : if !dll_locked ?
-            3'd1
+            4'd1
         : if !status_pipe[1] ?
-            3'd2
+            4'd2
         : if !use_sweep || !sweep_pipe[1] ?
-            3'd3
+            4'd3
         : if found_pipe[1] ?
-            3'd4
+            (if use_mpr ? 4'd6 : 4'd4)
+        : if use_mpr && valid_pipe[1] ?
+            4'd8
+        : if use_mpr && burst_pipe[1] ?
+            4'd7
         :
-            3'd5
+            4'd5
         ;
     }
     inst uart: TangDdrStatusUart (
-        i_clk              ,
-        i_rst   : ref_reset,
-        i_status: status   ,
-        o_tx    : o_uart_tx,
+        i_clk                     ,
+        i_rst         : ref_reset ,
+        i_status      : status    ,
+        i_debug_enable: mpr_debug ,
+        i_debug0      : phase0_ref,
+        i_debug1      : phase1_ref,
+        o_tx          : o_uart_tx ,
     );
 }
