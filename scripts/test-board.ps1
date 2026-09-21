@@ -93,9 +93,11 @@ try {
             $passed = ([regex]::Matches($probe, 'R')).Count -ge 5
         }
         DdrRead {
-            $probe = [regex]::Match($received, '[PLIRGE]+$').Value
-            $passed = ([regex]::Matches($probe, 'G')).Count -ge 5 -and
-                -not $probe.Contains('E')
+            # Each report is a status and the two selected gate phases.
+            $frames = @([regex]::Matches($received, '[PLIRGE][0-3][0-9A-F][0-3][0-9A-F]') |
+                Select-Object -Last 3)
+            $passed = $frames.Count -eq 3 -and
+                @($frames | Where-Object { $_.Value[0] -ne 'G' }).Count -eq 0
         }
         DdrMpr {
             # Each report is a status and four hexadecimal MPR data digits.

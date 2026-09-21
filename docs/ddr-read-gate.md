@@ -22,3 +22,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-ddr-init-bo
 ```
 
 次段階は、受信した DQ のデータアイ調整、書込みタイミング調整、書込み読戻しとアドレス alias、refresh 保持試験である。現時点では DDR3 を Linux の RAM として利用できない。
+
+アレイ書込み・読戻し診断で使うゲート設定を観測できるよう、UART を `SLLUU` の 5 文字フレームに変更した。`S` は従来の状態、`LL` と `UU` はそれぞれ lane 0/1 で最初に `RBURST` を検出した 6-bit phase の 16 進数表示である。`G` は DQS の検出のみを示し、DQ データの正しさは示さない。
+
+2026-09-22 の再試験では bitstream SHA256 `5ba918eae8267a6e88e5ac4b88b3daff4c7b90d0934bebe48adcb435f42a069f` を同一基板へ 4 回ロードした。定常フレームは順に `G0004`、`G0004`、`G0004`、`G0000` だった。lane 0 の最初の検出 phase は `00`、lane 1 は `04` または `00` で、再ロード間に変動した。4 回とも診断 UART と LCD サンプル復元の判定は通過した。生ログは `logs/board/20260922-005556-DdrRead-*`、`005613`、`005642`、`005659` にある。この phase は `RBURST` の最初の検出位置であり、データアイや DRAM アレイ読出しの合格位置ではない。

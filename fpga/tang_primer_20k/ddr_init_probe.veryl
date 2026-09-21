@@ -144,6 +144,8 @@ module TangDdrInitProbe #(
     var sweep_valid_seen  : 'ctrl      logic           <2>  ;
     var sweep_pattern0    : 'ctrl      logic           <8>  ;
     var sweep_pattern1    : 'ctrl      logic           <8>  ;
+    var sweep_phase0      : 'ctrl      logic           <6>  ;
+    var sweep_phase1      : 'ctrl      logic           <6>  ;
     var sweep_delay_target: 'ctrl      logic           <5>  ;
     var sweep_delay_ready : 'ctrl      logic                ;
     var sweep_pass_delay0 : 'ctrl      logic           <8>  ;
@@ -168,7 +170,8 @@ module TangDdrInitProbe #(
     var raw0_ref          : 'reference logic           <8>  ;
     var raw1_meta         : 'reference logic           <8>  ;
     var raw1_ref          : 'reference logic           <8>  ;
-    let mpr_debug         : 'reference logic                 = RUN_MPR != 0 || RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0;
+    let mpr_debug         : 'reference logic                 = RUN_READ_SWEEP != 0 || RUN_MPR != 0 || RUN_MPR_DELAY != 0
+        || RUN_MPR_ALIGN != 0;
     let use_sweep         : 'ctrl      logic                 = RUN_READ_SWEEP != 0 || RUN_MPR != 0 || RUN_MPR_DELAY != 0
         || RUN_MPR_ALIGN != 0;
     let use_mpr           : 'ctrl      logic                 = RUN_MPR != 0 || RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0;
@@ -267,8 +270,8 @@ module TangDdrInitProbe #(
         o_sample1     : _                 ,
         o_pattern0    : sweep_pattern0    ,
         o_pattern1    : sweep_pattern1    ,
-        o_phase0      : _                 ,
-        o_phase1      : _                 ,
+        o_phase0      : sweep_phase0      ,
+        o_phase1      : sweep_phase1      ,
         o_delay_target: sweep_delay_target,
         o_pass_delay0 : sweep_pass_delay0 ,
         o_pass_delay1 : sweep_pass_delay1 ,
@@ -351,7 +354,9 @@ module TangDdrInitProbe #(
                 found_pipe    = {found_pipe[0], sweep_found == 2'b11};
                 burst_pipe    = {burst_pipe[0], sweep_burst_seen == 2'b11};
                 valid_pipe    = {valid_pipe[0], sweep_valid_seen == 2'b11};
-                pattern0_meta = if RUN_MPR_ALIGN != 0 ?
+                pattern0_meta = if RUN_READ_SWEEP != 0 ?
+                    {2'b0, sweep_phase0}
+                : if RUN_MPR_ALIGN != 0 ?
                     {5'b0, sweep_align_pass0}
                 : if RUN_MPR_DELAY != 0 ?
                     sweep_pass_delay0
@@ -359,7 +364,9 @@ module TangDdrInitProbe #(
                     sweep_pattern0
                 ;
                 pattern0_ref  = pattern0_meta;
-                pattern1_meta = if RUN_MPR_ALIGN != 0 ?
+                pattern1_meta = if RUN_READ_SWEEP != 0 ?
+                    {2'b0, sweep_phase1}
+                : if RUN_MPR_ALIGN != 0 ?
                     {5'b0, sweep_align_pass1}
                 : if RUN_MPR_DELAY != 0 ?
                     sweep_pass_delay1
