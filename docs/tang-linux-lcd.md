@@ -215,7 +215,7 @@ SHA256 `ff4506d300ce092e6c171ae7aa966518fdc7122218df2f31f41cb56feccada44`
 scripts/test-ddr-init-board.ps1 -Suite C:/Users/sabas/repos/hello_veryl/tools/oss-cad-suite -Port COM4
 ```
 
-次は DQS/READ ゲートの校正、write leveling、実メモリの読み書き、refresh を確認する。
+DQS/READ ゲートの実機検出結果は [DDR3 読出し DQS ゲート検証](ddr-read-gate.md) に記録した。次は DQ データアイ、write leveling、実メモリの読み書き、refresh を確認する。
 
 ## 一次資料
 
