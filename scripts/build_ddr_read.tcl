@@ -7,10 +7,11 @@ add_file -type verilog [file join $root target tang_primer_20k ddr3_startup.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_phy_io.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_read_gate_sweep.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_init_probe.sv]
-add_file -type cst [file join $out ddr_init.cst]
-add_file -type sdc [file join $root fpga tang_primer_20k ddr_init_probe.sdc]
-set_option -top_module rv32ima_TangDdrInitProbe
+add_file -type verilog [file join $root target tang_primer_20k ddr_read_probe.sv]
+add_file -type cst [file join $out ddr_read.cst]
+add_file -type sdc [file join $root fpga tang_primer_20k ddr_read_probe.sdc]
+set_option -top_module rv32ima_TangDdrReadProbe
 set_option -verilog_std sysv2017
-set_option -output_base_name ddr_init
+set_option -output_base_name ddr_read
 run syn
 run pnr

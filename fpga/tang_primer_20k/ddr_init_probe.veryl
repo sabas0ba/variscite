@@ -1,9 +1,10 @@
 /// Repeated diagnostic byte: P=PLL pending, L=DLL pending,
-/// I=DRAM initialization pending, R=initialization commands completed.
+/// I=DRAM initialization pending, R=initialization commands completed,
+/// G=both read DQS gates detected, E=read DQS gate timeout.
 module TangDdrStatusUart (
     i_clk   : input  'reference clock   ,
     i_rst   : input  'reference reset   ,
-    i_status: input  'reference logic<2>,
+    i_status: input  'reference logic<3>,
     o_tx    : output 'reference logic   ,
 ) {
     const BIT_CYCLES: logic<8>  = 234;
@@ -15,10 +16,12 @@ module TangDdrStatusUart (
 
     always_comb {
         case i_status {
-            2'd0   : data = 8'h50; // P
-            2'd1   : data = 8'h4c; // L
-            2'd2   : data = 8'h49; // I
-            default: data = 8'h52; // R
+            3'd0   : data = 8'h50; // P
+            3'd1   : data = 8'h4c; // L
+            3'd2   : data = 8'h49; // I
+            3'd3   : data = 8'h52; // R
+            3'd4   : data = 8'h47; // G: both DQS gates detected
+            default: data = 8'h45; // E: DQS gate timeout
         }
     }
     always_ff (i_clk, i_rst) {
@@ -45,9 +48,11 @@ module TangDdrStatusUart (
     assign o_tx = if bits != 0 ? shift[0] : 1'b1;
 }
 
-/// Initialization-only hardware probe. This issues JEDEC power-up commands;
-/// it neither reads nor writes DRAM and cannot establish memory correctness.
-module TangDdrInitProbe (
+/// JEDEC power-up probe. RUN_READ_SWEEP also issues ACT/READ/PRE and detects
+/// DQS bursts. It does not verify returned data or write timing.
+module TangDdrInitProbe #(
+    param RUN_READ_SWEEP: u32 = 0,
+) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
     ddr_dq     : inout  'async     tri logic<16>,
@@ -66,25 +71,43 @@ module TangDdrInitProbe (
     ddr_clk_p  : output 'fast      logic        ,
     ddr_clk_n  : output 'fast      logic        ,
 ) {
-    var por        : 'reference logic               ;
-    var fast_clk   : 'fast      clock               ;
-    var ctrl_clk   : 'ctrl      clock               ;
-    var pll_locked : 'async     logic               ;
-    var dll_locked : 'async     logic               ;
-    var dll_step   : 'async     logic           <8> ;
-    var phy_reset  : 'async     reset_async_high    ;
-    var ready_pipe : 'ctrl      logic           <2> ;
-    var ready_reset: 'ctrl      reset               ;
-    var cmd_valid  : 'ctrl      logic               ;
-    var cmd        : 'ctrl      logic           <3> ;
-    var bank       : 'ctrl      logic           <3> ;
-    var addr       : 'ctrl      logic           <14>;
-    var reset_n    : 'ctrl      logic               ;
-    var cke        : 'ctrl      logic               ;
-    var done       : 'ctrl      logic               ;
-    var status_pipe: 'reference logic           <2> ;
-    var status     : 'reference logic           <2> ;
-    var ref_reset  : 'reference reset               ;
+    var por          : 'reference logic               ;
+    var fast_clk     : 'fast      clock               ;
+    var ctrl_clk     : 'ctrl      clock               ;
+    var pll_locked   : 'async     logic               ;
+    var dll_locked   : 'async     logic               ;
+    var dll_step     : 'async     logic           <8> ;
+    var phy_reset    : 'async     reset_async_high    ;
+    var ready_pipe   : 'ctrl      logic           <2> ;
+    var ready_reset  : 'ctrl      reset               ;
+    var cmd_valid    : 'ctrl      logic               ;
+    var cmd          : 'ctrl      logic           <3> ;
+    var bank         : 'ctrl      logic           <3> ;
+    var addr         : 'ctrl      logic           <14>;
+    var reset_n      : 'ctrl      logic               ;
+    var cke          : 'ctrl      logic               ;
+    var done         : 'ctrl      logic               ;
+    var status_pipe  : 'reference logic           <2> ;
+    var status       : 'reference logic           <3> ;
+    var ref_reset    : 'reference reset               ;
+    var sweep_valid  : 'ctrl      logic               ;
+    var sweep_cmd    : 'ctrl      logic           <3> ;
+    var sweep_bank   : 'ctrl      logic           <3> ;
+    var sweep_addr   : 'ctrl      logic           <14>;
+    var sweep_read   : 'ctrl      logic           <8> ;
+    var sweep_sel    : 'ctrl      logic           <6> ;
+    var sweep_hold   : 'ctrl      logic           <2> ;
+    var sweep_done   : 'ctrl      logic               ;
+    var sweep_found  : 'ctrl      logic           <2> ;
+    var phy_burst    : 'ctrl      logic           <2> ;
+    var sweep_pipe   : 'reference logic           <2> ;
+    var found_pipe   : 'reference logic           <2> ;
+    let use_sweep    : 'ctrl      logic                = RUN_READ_SWEEP != 0;
+    let phy_cmd_valid: 'ctrl      logic                = if use_sweep && done ? sweep_valid : cmd_valid;
+    let phy_cmd      : 'ctrl      logic           <3>  = if use_sweep && done ? sweep_cmd : cmd;
+    let phy_bank     : 'ctrl      logic           <3>  = if use_sweep && done ? sweep_bank : bank;
+    let phy_addr     : 'ctrl      logic           <14> = if use_sweep && done ? sweep_addr : addr;
+    let phy_cke      : 'ctrl      logic                = cke && !(use_sweep && sweep_done);
 
     inst por_gen: PowerOnReset (
         i_clk     ,
@@ -137,56 +160,89 @@ module TangDdrInitProbe (
         o_cke      : cke          ,
         o_done     : done         ,
     );
+    inst sweep: DdrReadGateSweep (
+        i_clk      : ctrl_clk         ,
+        i_rst      : ready_reset      ,
+        i_enable   : done && use_sweep,
+        i_burst    : phy_burst        ,
+        o_cmd_valid: sweep_valid      ,
+        o_cmd      : sweep_cmd        ,
+        o_addr     : sweep_addr       ,
+        o_bank     : sweep_bank       ,
+        o_read     : sweep_read       ,
+        o_sel      : sweep_sel        ,
+        o_hold     : sweep_hold       ,
+        o_done     : sweep_done       ,
+        o_found    : sweep_found      ,
+        o_phase0   : _                ,
+        o_phase1   : _                ,
+    );
     unsafe (cdc) {
         inst phy: TangDdrPhyIo (
-            i_clk        : ctrl_clk                        ,
-            i_fast       : fast_clk                        ,
-            i_reset      : phy_reset                       ,
-            i_dll_step   : dll_step                        ,
-            i_mem_reset_n: reset_n                         ,
-            i_addr       : {42'b0, 1'b0, addr[12:0]},
-            i_bank       : {9'b0, bank},
-            i_cmd        : {9'b111_111_111, cmd},
-            i_cs_n       : if cmd_valid ? 4'b1110 : 4'b1111,
-            i_cke        : {cke, cke, cke, cke},
-            i_odt        : 4'b0                            ,
-            i_hold       : 2'b0                            ,
-            i_read       : 8'b0                            ,
-            i_read_sel   : 6'b0                            ,
-            i_write_step : 16'b0                           ,
-            i_data       : 128'b0                          ,
-            i_mask       : 16'hffff                        ,
-            i_dq_enable  : 4'b0                            ,
-            i_dqs_enable : 4'b0                            ,
-            i_dqs_pattern: 8'b0                            ,
-            o_data       : _                               ,
-            o_raw        : _                               ,
-            o_burst      : _                               ,
-            o_valid      : _                               ,
-            ddr_dq                                         ,
-            ddr_dqs_p                                      ,
-            ddr_dqs_n                                      ,
-            ddr_dm                                         ,
-            ddr_addr                                       ,
-            ddr_bank                                       ,
-            ddr_ras_n                                      ,
-            ddr_cas_n                                      ,
-            ddr_we_n                                       ,
-            ddr_cs_n                                       ,
-            ddr_cke                                        ,
-            ddr_odt                                        ,
-            ddr_reset_n                                    ,
-            ddr_clk_p                                      ,
-            ddr_clk_n                                      ,
+            i_clk        : ctrl_clk                             ,
+            i_fast       : fast_clk                             ,
+            i_reset      : phy_reset                            ,
+            i_dll_step   : dll_step                             ,
+            i_mem_reset_n: reset_n && !(use_sweep && sweep_done),
+            i_addr       : {42'b0, 1'b0, phy_addr[12:0]},
+            i_bank       : {9'b0, phy_bank},
+            i_cmd        : {9'b111_111_111, phy_cmd},
+            i_cs_n       : if phy_cmd_valid ? 4'b1110 : 4'b1111,
+            i_cke        : {phy_cke, phy_cke, phy_cke, phy_cke},
+            i_odt        : 4'b0                                 ,
+            i_hold       : if use_sweep ? sweep_hold : 2'b0,
+            i_read       : if use_sweep ? sweep_read : 8'b0,
+            i_read_sel   : if use_sweep ? sweep_sel : 6'b0,
+            i_write_step : 16'b0                                ,
+            i_data       : 128'b0                               ,
+            i_mask       : 16'hffff                             ,
+            i_dq_enable  : 4'b0                                 ,
+            i_dqs_enable : 4'b0                                 ,
+            i_dqs_pattern: 8'b0                                 ,
+            o_data       : _                                    ,
+            o_raw        : _                                    ,
+            o_burst      : phy_burst                            ,
+            o_valid      : _                                    ,
+            ddr_dq                                              ,
+            ddr_dqs_p                                           ,
+            ddr_dqs_n                                           ,
+            ddr_dm                                              ,
+            ddr_addr                                            ,
+            ddr_bank                                            ,
+            ddr_ras_n                                           ,
+            ddr_cas_n                                           ,
+            ddr_we_n                                            ,
+            ddr_cs_n                                            ,
+            ddr_cke                                             ,
+            ddr_odt                                             ,
+            ddr_reset_n                                         ,
+            ddr_clk_p                                           ,
+            ddr_clk_n                                           ,
         );
         always_ff (i_clk, ref_reset) {
             if_reset {
                 status_pipe = 0;
+                sweep_pipe  = 0;
+                found_pipe  = 0;
             } else {
                 status_pipe = {status_pipe[0], done};
+                sweep_pipe  = {sweep_pipe[0], sweep_done};
+                found_pipe  = {found_pipe[0], sweep_found == 2'b11};
             }
         }
-        assign status = if !pll_locked ? 2'd0 : if !dll_locked ? 2'd1 : if !status_pipe[1] ? 2'd2 : 2'd3;
+        assign status = if !pll_locked ?
+            3'd0
+        : if !dll_locked ?
+            3'd1
+        : if !status_pipe[1] ?
+            3'd2
+        : if !use_sweep || !sweep_pipe[1] ?
+            3'd3
+        : if found_pipe[1] ?
+            3'd4
+        :
+            3'd5
+        ;
     }
     inst uart: TangDdrStatusUart (
         i_clk              ,

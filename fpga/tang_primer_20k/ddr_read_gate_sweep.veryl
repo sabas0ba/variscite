@@ -1,0 +1,154 @@
+/// Probe the two DDR3 DQS receive gates independently using READ bursts.
+/// A READ is issued every 13 controller clocks while bank 0, row 0 is open.
+/// All 32 phase/position combinations are scanned in under 430 clocks,
+/// below one 7.8 us refresh interval at 99 MHz. The bank is precharged before
+/// completion; callers must then resume refresh or reset the DRAM.
+/// RBURST proves DQS detection only. The returned phases require data-eye
+/// calibration before use as a memory controller.
+module DdrReadGateSweep (
+    i_clk      : input  clock   ,
+    i_rst      : input  reset   ,
+    i_enable   : input  logic   ,
+    i_burst    : input  logic<2>,
+    o_cmd_valid: output logic   ,
+    /// {RAS_n, CAS_n, WE_n}: ACT=011, READ=101, PRE=010.
+    o_cmd   : output logic<3> ,
+    o_addr  : output logic<14>,
+    o_bank  : output logic<3> ,
+    o_read  : output logic<8> ,
+    o_sel   : output logic<6> ,
+    o_hold  : output logic<2> ,
+    o_done  : output logic    ,
+    o_found : output logic<2> ,
+    o_phase0: output logic<5> ,
+    o_phase1: output logic<5> ,
+) {
+    enum State: logic<3> {
+        idle,
+        activate,
+        act_wait,
+        read_cmd,
+        sample,
+        precharge,
+        pre_wait,
+        done,
+    }
+    var state   : State   ;
+    var elapsed : logic<4>;
+    var phase   : logic<5>;
+    var seen    : logic<2>;
+    var found   : logic<2>;
+    var phase0  : logic<5>;
+    var phase1  : logic<5>;
+    let observed: logic<2> = seen | i_burst;
+
+    always_ff {
+        if_reset {
+            state   = State::idle;
+            elapsed = 0;
+            phase   = 0;
+            seen    = 0;
+            found   = 0;
+            phase0  = 0;
+            phase1  = 0;
+        } else if !i_enable {
+            state   = State::idle;
+            elapsed = 0;
+            phase   = 0;
+            seen    = 0;
+            found   = 0;
+            phase0  = 0;
+            phase1  = 0;
+        } else {
+            case state {
+                State::idle: {
+                    state = State::activate;
+                }
+                State::activate: {
+                    elapsed = 0;
+                    state   = State::act_wait;
+                }
+                State::act_wait: {
+                    if elapsed == 1 {
+                        state = State::read_cmd;
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::read_cmd: {
+                    elapsed = 0;
+                    seen    = 0;
+                    state   = State::sample;
+                }
+                State::sample: {
+                    seen = observed;
+                    if elapsed == 11 {
+                        if !found[0] && observed[0] {
+                            found[0] = 1'b1;
+                            phase0   = phase;
+                        }
+                        if !found[1] && observed[1] {
+                            found[1] = 1'b1;
+                            phase1   = phase;
+                        }
+                        if (found | observed) == 2'b11 || phase == 5'd31 {
+                            state = State::precharge;
+                        } else {
+                            phase = phase + 5'd1;
+                            state = State::read_cmd;
+                        }
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::precharge: {
+                    elapsed = 0;
+                    state   = State::pre_wait;
+                }
+                State::pre_wait: {
+                    if elapsed == 2 {
+                        state = State::done;
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::done: {}
+            }
+        }
+    }
+    always_comb {
+        o_cmd_valid = 1'b0;
+        o_cmd       = 3'b111;
+        o_addr      = 14'b0;
+        o_bank      = 3'b0;
+        o_read      = 8'b0;
+        o_sel       = {if found[1] ? phase1[2:0] : phase[2:0], if found[0] ? phase0[2:0] : phase[2:0]};
+        o_hold      = 2'b0;
+        case state {
+            State::activate: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b011;
+            }
+            State::read_cmd: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b101;
+                o_hold      = ~found;
+            }
+            State::sample: {
+                if elapsed == ({2'b0, phase[4:3]} + 4'd1) {
+                    o_read = {if found[1] ? 4'h0 : 4'hf, if found[0] ? 4'h0 : 4'hf};
+                }
+            }
+            State::precharge: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b010;
+                o_addr      = 14'h0400;
+            }
+            default: {}
+        }
+    }
+    assign o_done   = state == State::done;
+    assign o_found  = found;
+    assign o_phase0 = phase0;
+    assign o_phase1 = phase1;
+}

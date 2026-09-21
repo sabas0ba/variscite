@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -21,6 +21,7 @@ $images = @{
     Soc = 'sim/fpga/tang/soc.fs'
     LcdSoc = 'sim/fpga/lcd_soc/soc.fs'
     DdrInit = 'sim/fpga/ddr_init/impl/pnr/ddr_init.fs'
+    DdrRead = 'sim/fpga/ddr_read/impl/pnr/ddr_read.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -69,8 +70,14 @@ try {
         UartProbe { $passed = $bytes.Length -ge 100 -and $received -cmatch '^U+$' }
         Loopback { $passed = $received -ceq 'Tang20K-loopback-55AA' }
         DdrInit {
-            $passed = $received -cmatch '^[PLIR]+$' -and
-                ([regex]::Matches($received, 'R')).Count -ge 5
+            # The old SRAM image can transmit while the new image is loading.
+            $probe = [regex]::Match($received, '[PLIR]+$').Value
+            $passed = ([regex]::Matches($probe, 'R')).Count -ge 5
+        }
+        DdrRead {
+            $probe = [regex]::Match($received, '[PLIRGE]+$').Value
+            $passed = ([regex]::Matches($probe, 'G')).Count -ge 5 -and
+                -not $probe.Contains('E')
         }
         { $_ -in @('Soc', 'LcdSoc') } {
             # Ignore output from the old SRAM image before the new boot banner.

@@ -1,0 +1,18 @@
+# Tang Primer 20K DDR3 読出し DQS ゲート検証
+
+対象は基板上の SK hynix H5TQ1G63EFR-PBC (x16, 128 MiB) である。Linux 起動に必要な DDR3 読み書き検証のうち、ここでは READ に対する DQS バースト検出だけを扱う。
+
+`DdrReadGateSweep` は JEDEC 初期化完了後に bank 0 / row 0 を ACT し、各バイトレーンの DQS 受信選択位相と READ ゲート位置を 32 通り走査する。READ 間隔は 13 個の 99 MHz コントローラクロックで、全走査は 430 クロック未満である。最後に PRE を発行し、診断が終わると DRAM RESET をアサートする。`RBURST` を観測したレーンを独立して記録する。`G` は両レーンを検出したこと、`E` は少なくとも一方が未検出であることを UART に繰り返し送る。どちらもデータ値の正しさを示さない。
+
+RTL は Veryl の `fpga/tang_primer_20k/ddr_read_gate_sweep.veryl` と `ddr_read_probe.veryl` に置く。SystemVerilog はテストベンチだけに使用する。`make ddr-read-gate-test` は別々のレーン位相、32 通りのタイムアウト、enable 喪失、ACT/READ/PRE の順序を確認する。`scripts/build_ddr_read.sh` は固定済み Gowin コンテナで合成と配置配線を行い、DDR ピン、PLL/DLL/DQS 個数、クロック周期、内部セットアップ・ホールドを検査する。DQS プリミティブの HOLD 入力には内部の高速クロック同期段があるため、この 2 ピンだけを STA のコントローラクロック起点の経路から除外する。外部 DDR3 の入出力タイミングは別途測定を要する。
+
+2026-09-21、`ddr_read.fs` SHA256 `8c8d9d5eadb15c19edeaaeab0ef928c1d32395fa59d2102d66644b546eb0f298` を接続中の Tang Primer 20K に SRAM ロードした。COM4 / 115200 baud の 4 秒取得で、直前の LCD デモから残った出力の末尾に `P` と `G` の連続を確認した。2 回目の自動判定は合格した。生ログと判定 JSON は `logs/board/20260921-170427-DdrRead-*` にある。試験後、既知の LCD デモ SHA256 `40bac365ce8f971d240ac5aa6a2e4c69c1fff5579c6dbbb2afe4f97662b9eb0a` を復帰させ、UART 動作判定が通った。
+
+再試験には、まず固定済み Gowin コンテナで `bash scripts/build_ddr_read.sh` を実行し、Windows ホストで以下を実行する。
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/test-ddr-init-board.ps1 `
+  -Suite C:/Users/sabas/repos/hello_veryl/tools/oss-cad-suite -Port COM4 -Mode DdrRead
+```
+
+次段階は、受信した DQ のデータアイ調整、書込みタイミング調整、書込み読戻しとアドレス alias、refresh 保持試験である。現時点では DDR3 を Linux の RAM として利用できない。
