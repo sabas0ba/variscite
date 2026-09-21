@@ -1,0 +1,2 @@
+IO_LOC "o_uart_tx" M11;
+IO_PORT "o_uart_tx" IO_TYPE=LVCMOS33 DRIVE=8;

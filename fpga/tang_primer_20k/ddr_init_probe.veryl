@@ -1,0 +1,197 @@
+/// Repeated diagnostic byte: P=PLL pending, L=DLL pending,
+/// I=DRAM initialization pending, R=initialization commands completed.
+module TangDdrStatusUart (
+    i_clk   : input  'reference clock   ,
+    i_rst   : input  'reference reset   ,
+    i_status: input  'reference logic<2>,
+    o_tx    : output 'reference logic   ,
+) {
+    const BIT_CYCLES: logic<8>  = 234;
+    var   gap       : 'reference logic<22>;
+    var   bit_time  : 'reference logic<8> ;
+    var   bits      : 'reference logic<4> ;
+    var   shift     : 'reference logic<10>;
+    var   data      : 'reference logic<8> ;
+
+    always_comb {
+        case i_status {
+            2'd0   : data = 8'h50; // P
+            2'd1   : data = 8'h4c; // L
+            2'd2   : data = 8'h49; // I
+            default: data = 8'h52; // R
+        }
+    }
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            gap      = 0;
+            bit_time = 0;
+            bits     = 0;
+            shift    = 10'h3ff;
+        } else if bits == 0 {
+            gap = (gap + 22'd1) as 22;
+            if gap == 0 {
+                shift    = {1'b1, data, 1'b0};
+                bits     = 4'd10;
+                bit_time = 0;
+            }
+        } else if bit_time == BIT_CYCLES - 1 {
+            bit_time = 0;
+            shift    = {1'b1, shift[9:1]};
+            bits     = (bits - 4'd1) as 4;
+        } else {
+            bit_time = (bit_time + 8'd1) as 8;
+        }
+    }
+    assign o_tx = if bits != 0 ? shift[0] : 1'b1;
+}
+
+/// Initialization-only hardware probe. This issues JEDEC power-up commands;
+/// it neither reads nor writes DRAM and cannot establish memory correctness.
+module TangDdrInitProbe (
+    i_clk      : input  'reference clock        ,
+    o_uart_tx  : output 'reference logic        ,
+    ddr_dq     : inout  'async     tri logic<16>,
+    ddr_dqs_p  : inout  'async     tri logic<2> ,
+    ddr_dqs_n  : inout  'async     tri logic<2> ,
+    ddr_dm     : output 'fast      logic    <2> ,
+    ddr_addr   : output 'fast      logic    <14>,
+    ddr_bank   : output 'fast      logic    <3> ,
+    ddr_ras_n  : output 'fast      logic        ,
+    ddr_cas_n  : output 'fast      logic        ,
+    ddr_we_n   : output 'fast      logic        ,
+    ddr_cs_n   : output 'fast      logic        ,
+    ddr_cke    : output 'fast      logic        ,
+    ddr_odt    : output 'fast      logic        ,
+    ddr_reset_n: output 'ctrl      logic        ,
+    ddr_clk_p  : output 'fast      logic        ,
+    ddr_clk_n  : output 'fast      logic        ,
+) {
+    var por        : 'reference logic               ;
+    var fast_clk   : 'fast      clock               ;
+    var ctrl_clk   : 'ctrl      clock               ;
+    var pll_locked : 'async     logic               ;
+    var dll_locked : 'async     logic               ;
+    var dll_step   : 'async     logic           <8> ;
+    var phy_reset  : 'async     reset_async_high    ;
+    var ready_pipe : 'ctrl      logic           <2> ;
+    var ready_reset: 'ctrl      reset               ;
+    var cmd_valid  : 'ctrl      logic               ;
+    var cmd        : 'ctrl      logic           <3> ;
+    var bank       : 'ctrl      logic           <3> ;
+    var addr       : 'ctrl      logic           <14>;
+    var reset_n    : 'ctrl      logic               ;
+    var cke        : 'ctrl      logic               ;
+    var done       : 'ctrl      logic               ;
+    var status_pipe: 'reference logic           <2> ;
+    var status     : 'reference logic           <2> ;
+    var ref_reset  : 'reference reset               ;
+
+    inst por_gen: PowerOnReset (
+        i_clk     ,
+        o_rst: por,
+    );
+    unsafe (cdc) {
+        inst clocks: TangDdrClock (
+            i_clk                  ,
+            i_reset    : por       ,
+            i_stop     : 1'b0      ,
+            i_div_reset: 1'b0      ,
+            o_fast     : fast_clk  ,
+            o_ctrl     : ctrl_clk  ,
+            o_locked   : pll_locked,
+        );
+    }
+    unsafe (cdc) {
+        assign ref_reset = por as reset;
+        assign phy_reset = (por || !pll_locked || !dll_locked) as reset_async_high;
+        inst dll: $sv::DLL #(
+            SCAL_EN : "true",
+            CODESCAL: "101" ,
+        ) (
+            CLKIN   : fast_clk          ,
+            STOP    : 1'b0              ,
+            UPDNCNTL: 1'b0              ,
+            RESET   : por || !pll_locked,
+            STEP    : dll_step          ,
+            LOCK    : dll_locked        ,
+        );
+        always_ff (ctrl_clk, phy_reset) {
+            if_reset {
+                ready_pipe = 0;
+            } else {
+                ready_pipe = {ready_pipe[0], 1'b1};
+            }
+        }
+        assign ready_reset = !ready_pipe[1] as reset;
+    }
+    inst startup: Ddr3Startup (
+        i_clk      : ctrl_clk     ,
+        i_rst      : ready_reset  ,
+        i_enable   : ready_pipe[1],
+        i_cmd_ready: 1'b1         ,
+        o_cmd_valid: cmd_valid    ,
+        o_cmd      : cmd          ,
+        o_bank     : bank         ,
+        o_addr     : addr         ,
+        o_reset_n  : reset_n      ,
+        o_cke      : cke          ,
+        o_done     : done         ,
+    );
+    unsafe (cdc) {
+        inst phy: TangDdrPhyIo (
+            i_clk        : ctrl_clk                        ,
+            i_fast       : fast_clk                        ,
+            i_reset      : phy_reset                       ,
+            i_dll_step   : dll_step                        ,
+            i_mem_reset_n: reset_n                         ,
+            i_addr       : {42'b0, 1'b0, addr[12:0]},
+            i_bank       : {9'b0, bank},
+            i_cmd        : {9'b111_111_111, cmd},
+            i_cs_n       : if cmd_valid ? 4'b1110 : 4'b1111,
+            i_cke        : {cke, cke, cke, cke},
+            i_odt        : 4'b0                            ,
+            i_hold       : 2'b0                            ,
+            i_read       : 8'b0                            ,
+            i_read_sel   : 6'b0                            ,
+            i_write_step : 16'b0                           ,
+            i_data       : 128'b0                          ,
+            i_mask       : 16'hffff                        ,
+            i_dq_enable  : 4'b0                            ,
+            i_dqs_enable : 4'b0                            ,
+            i_dqs_pattern: 8'b0                            ,
+            o_data       : _                               ,
+            o_raw        : _                               ,
+            o_burst      : _                               ,
+            o_valid      : _                               ,
+            ddr_dq                                         ,
+            ddr_dqs_p                                      ,
+            ddr_dqs_n                                      ,
+            ddr_dm                                         ,
+            ddr_addr                                       ,
+            ddr_bank                                       ,
+            ddr_ras_n                                      ,
+            ddr_cas_n                                      ,
+            ddr_we_n                                       ,
+            ddr_cs_n                                       ,
+            ddr_cke                                        ,
+            ddr_odt                                        ,
+            ddr_reset_n                                    ,
+            ddr_clk_p                                      ,
+            ddr_clk_n                                      ,
+        );
+        always_ff (i_clk, ref_reset) {
+            if_reset {
+                status_pipe = 0;
+            } else {
+                status_pipe = {status_pipe[0], done};
+            }
+        }
+        assign status = if !pll_locked ? 2'd0 : if !dll_locked ? 2'd1 : if !status_pipe[1] ? 2'd2 : 2'd3;
+    }
+    inst uart: TangDdrStatusUart (
+        i_clk              ,
+        i_rst   : ref_reset,
+        i_status: status   ,
+        o_tx    : o_uart_tx,
+    );
+}

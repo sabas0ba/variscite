@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -20,6 +20,7 @@ $images = @{
     Loopback = 'sim/fpga/probe/loopback.fs'
     Soc = 'sim/fpga/tang/soc.fs'
     LcdSoc = 'sim/fpga/lcd_soc/soc.fs'
+    DdrInit = 'sim/fpga/ddr_init/impl/pnr/ddr_init.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -67,6 +68,10 @@ try {
     switch ($Mode) {
         UartProbe { $passed = $bytes.Length -ge 100 -and $received -cmatch '^U+$' }
         Loopback { $passed = $received -ceq 'Tang20K-loopback-55AA' }
+        DdrInit {
+            $passed = $received -cmatch '^[PLIR]+$' -and
+                ([regex]::Matches($received, 'R')).Count -ge 5
+        }
         { $_ -in @('Soc', 'LcdSoc') } {
             # Ignore output from the old SRAM image before the new boot banner.
             # Keep the unmodified bytes in the capture file for diagnosis.

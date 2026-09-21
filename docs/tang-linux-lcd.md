@@ -158,13 +158,64 @@ read-modify-write は不要である。
 
 初期化シーケンサの既定値は 99 MHz の制御クロックを想定し、RESET を 200 µs、
 解除後を 500 µs 保持する。CL=6、CWL=5、WR=6、DLL 有効/リセットの設定は
-型番確定前の候補である。待ち時間と MR 値はパラメータ化した。
+搭載チップ H5TQ1G63EFR-PBC の 396 MHz 動作範囲を満たす。
+待ち時間と MR 値はパラメータ化した。
 `ZQ_CYCLES` にはコマンド受理から実際の DRAM コマンド発行までの PHY 遅延も含める。
-実機に適用する前に、搭載チップの型番・速度 grade・電圧とデータシートで確認する。
+実機に適用する前に、PHY 側の発行レイテンシと校正を含む実動作を確認する。
 
-未実装: 16 bit PHY、DLL 初期化、write leveling/read calibration、通常の DRAM
+未実装: DLL 初期化、write leveling/read calibration、通常の DRAM
 コマンド発行と refresh、CPU トップへの統合、UART ブートローダ、LCD framebuffer。
-搭載 DDR3 の型番を利用者へ確認中であり、実機のメモリ初期化・書き込みは実施していない。
+実機のメモリ初期化・書き込みは実施していない。
+
+## 搭載 DDR3 と x16 PHY の構造検査 (2026-09-21)
+
+利用者が基板上の刻印 `SK Hynix H5TQ1G63EFR PBC` を確認した。
+[SK hynix H5TQ1G63EFR Rev. 1.1](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf)
+によると、1 Gbit = 128 MiB、64M×16、8 バンク、行 13 bit、列 10 bit、1.5 V である。
+PBC は DDR3-1600 の速度 grade。396 MHz の CK (DDR3-792) では CL=6、CWL=5 を使用できる。
+接続済み A13 はこの x16 チップでは NC なので、実際のコントローラでは 0 に固定する。
+
+`TangDdrPhyIo` は CA/CK の OSER8、DQ/DM/DQS の OSER8_MEM、DQ の IDES8_MEM、
+2 個の DQS、および SSTL15 の I/O buffer を Veryl からインスタンス化する。
+CPU 側を 99 MHz、メモリ CK を 396 MHz とする 4:1 構成で、BL8 を 128 bit として扱う。
+書き込み DM は active-high mask、DQ/DQS の出力 enable は active-high で受ける。
+
+`TangDdrPhyCheck` は全ピンを
+[Sipeed の基板制約](https://github.com/sipeed/TangPrimer-20K-example/blob/main/Litex/sipeed_tang_primer_20k/src/sipeed_tang_primer_20k.cst)
+に配置した構造検査専用トップ。DQ の内部 VREF と DDR バンクの 1.5 V を指定する。
+DLL は 396 MHz の高速クロックを入力とする。GOWIN V1.9.11.03 で合成・配置配線し、
+DLL 1、DQS 2、IDES8_MEM 16、OSER8_MEM 20、OSER8 24 の残存を検査した。
+STA は派生クロックを 396/99 MHz と認識し、トップ内の解析済み経路に setup/hold 違反はない。
+外部 DDR3 の setup/hold、read eye、write leveling はこの構造検査で判定していない。
+検査ビットストリームは任意の DDR コマンドを出すため、**実機へ書き込まない**。
+
+```bash
+podman run --rm --pull never --network none -v "$PWD:/work" \
+  sha256:1b9cfd5aefe08b418ea5f43f5f0cf7efbd1b20c551506deac8d691bba9f2a70b \
+  bash /work/scripts/check_ddr_phy.sh
+```
+
+### 初期化専用トップの実機確認
+
+`TangDdrInitProbe` は接続した 16 bit PHY から RESET、CKE、MR2→MR3→MR1→MR0、
+ZQCL を発行する。PLL/DLL ロックとシーケンサ完了状態を UART に送信する。
+`P` は PLL 待ち、`L` は DLL 待ち、`I` は初期化中、`R` はコマンドシーケンス完了を表す。
+DQ/DQS は出力無効で、メモリの書き込み・読み出しは行わない。
+
+2026-09-21 に `scripts/build_ddr_init.sh` で生成した SRAM イメージ
+SHA256 `ff4506d300ce092e6c171ae7aa966518fdc7122218df2f31f41cb56feccada44`
+を実機へ一時書き込みした。COM4/115200 baud の 4 秒間で `R` を 25 回連続受信した。
+これは FPGA 内の PLL/DLL ロックと初期化シーケンサ進行を示す。DDR3 側からの
+応答を含まないため、実メモリの初期化成功や読み書き可能性は未判定である。
+検査後は検証済み LCD サンプル SHA256
+`40bac365ce8f971d240ac5aa6a2e4c69c1fff5579c6dbbb2afe4f97662b9eb0a`
+を復元し、LCD サンプルの UART 回帰検査も通過した。
+
+```powershell
+scripts/test-ddr-init-board.ps1 -Suite C:/Users/sabas/repos/hello_veryl/tools/oss-cad-suite -Port COM4
+```
+
+次は DQS/READ ゲートの校正、write leveling、実メモリの読み書き、refresh を確認する。
 
 ## 一次資料
 
@@ -177,3 +228,5 @@ read-modify-write は不要である。
 - GOWIN 同梱の一次資料: `/opt/gowin/IDE/simlib/gw2a/prim_sim.v` の DLL/DQS/SERDES 宣言
 - [Ubuntu Snapshot Service](https://snapshot.ubuntu.com/)
 - [Winbond W631GU6MB Rev. A03 データシート (メーカー文書、DigiKey 配布)](https://media.digikey.com/pdf/Data%20Sheets/Winbond%20PDFs/W631GU6MB_A03.pdf): 初期化の参照資料。実機の搭載型番をこの型番と断定していない。
+- [SK hynix H5TQ1G63EFR Rev. 1.1](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf): 実際の搭載チップの容量、アドレス構成、速度 grade、MR 条件。
+- [Sipeed Tang Primer 20K DDR ピン制約](https://github.com/sipeed/TangPrimer-20K-example/blob/main/Litex/sipeed_tang_primer_20k/src/sipeed_tang_primer_20k.cst): ピン、SSTL15、DQ 内部 VREF。
