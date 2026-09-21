@@ -96,9 +96,16 @@ try {
             $passed = ([regex]::Matches($probe, 'G')).Count -ge 5 -and
                 -not $probe.Contains('E')
         }
-        { $_ -in @('DdrMpr', 'DdrMprDelay') } {
-            # Each report is a status and four hex digits: MPR bytes or lane pass masks.
+        DdrMpr {
+            # Each report is a status and four hexadecimal MPR data digits.
             $frames = @([regex]::Matches($received, '[PLIRMEVB][0-9A-F]{4}') |
+                Select-Object -Last 3)
+            $passed = $frames.Count -eq 3 -and
+                @($frames | Where-Object { $_.Value[0] -ne 'M' }).Count -eq 0
+        }
+        DdrMprDelay {
+            # Status, two lane pass masks, then two raw lane patterns.
+            $frames = @([regex]::Matches($received, '[PLIRMEVB][0-9A-F]{8}') |
                 Select-Object -Last 3)
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'M' }).Count -eq 0

@@ -3,26 +3,31 @@
 /// G=both read DQS gates detected, M=MPR DQ pattern captured,
 /// V=MPR RVALID without a matching pattern, B=RBURST without RVALID,
 /// E=read DQS gate or MPR pattern timeout.
-module TangDdrStatusUart (
+module TangDdrStatusUart #(
+    param GAP_BITS: u32 = 22,
+) (
     i_clk         : input  'reference clock   ,
     i_rst         : input  'reference reset   ,
     i_status      : input  'reference logic<4>,
     i_debug_enable: input  'reference logic   ,
+    i_debug_extra : input  'reference logic   ,
     i_debug0      : input  'reference logic<8>,
     i_debug1      : input  'reference logic<8>,
+    i_debug2      : input  'reference logic<8>,
+    i_debug3      : input  'reference logic<8>,
     o_tx          : output 'reference logic   ,
 ) {
-    const BIT_CYCLES   : logic<8>  = 234;
-    var   gap          : 'reference logic<22>;
-    var   bit_time     : 'reference logic<8> ;
-    var   bits         : 'reference logic<4> ;
-    var   shift        : 'reference logic<10>;
-    var   data         : 'reference logic<8> ;
-    var   status_data  : 'reference logic<8> ;
-    var   debug_nibble : 'reference logic<4> ;
-    var   report_index : 'reference logic<3> ;
-    let   decimal_digit: 'reference logic     = debug_nibble <: 4'd10;
-    let   debug_ascii  : 'reference logic<8>  = if decimal_digit ?
+    const BIT_CYCLES   : logic<8>        = 234;
+    var   gap          : 'reference logic<GAP_BITS>;
+    var   bit_time     : 'reference logic<8>       ;
+    var   bits         : 'reference logic<4>       ;
+    var   shift        : 'reference logic<10>      ;
+    var   data         : 'reference logic<8>       ;
+    var   status_data  : 'reference logic<8>       ;
+    var   debug_nibble : 'reference logic<4>       ;
+    var   report_index : 'reference logic<4>       ;
+    let   decimal_digit: 'reference logic           = debug_nibble <: 4'd10;
+    let   debug_ascii  : 'reference logic<8>        = if decimal_digit ?
         8'h30 + {4'b0, debug_nibble}
     :
         8'h37 + {4'b0, debug_nibble}
@@ -41,10 +46,14 @@ module TangDdrStatusUart (
             default: status_data = 8'h45; // E: DQS gate timeout
         }
         case report_index {
-            3'd1   : debug_nibble = i_debug0[7:4];
-            3'd2   : debug_nibble = i_debug0[3:0];
-            3'd3   : debug_nibble = i_debug1[7:4];
-            default: debug_nibble = i_debug1[3:0];
+            4'd1   : debug_nibble = i_debug0[7:4];
+            4'd2   : debug_nibble = i_debug0[3:0];
+            4'd3   : debug_nibble = i_debug1[7:4];
+            4'd4   : debug_nibble = i_debug1[3:0];
+            4'd5   : debug_nibble = i_debug2[7:4];
+            4'd6   : debug_nibble = i_debug2[3:0];
+            4'd7   : debug_nibble = i_debug3[7:4];
+            default: debug_nibble = i_debug3[3:0];
         }
         data = if i_debug_enable && report_index != 0 ? debug_ascii : status_data;
     }
@@ -56,13 +65,13 @@ module TangDdrStatusUart (
             shift        = 10'h3ff;
             report_index = 0;
         } else if bits == 0 {
-            gap = (gap + 22'd1) as 22;
+            gap = (gap + 1) as GAP_BITS;
             if gap == 0 {
                 shift    = {1'b1, data, 1'b0};
                 bits     = 4'd10;
                 bit_time = 0;
                 if i_debug_enable {
-                    report_index = if report_index == 4 ? 0 : report_index + 3'd1;
+                    report_index = if report_index == (if i_debug_extra ? 4'd8 : 4'd4) ? 0 : report_index + 4'd1;
                 }
             }
         } else if bit_time == BIT_CYCLES - 1 {
@@ -152,6 +161,10 @@ module TangDdrInitProbe #(
     var pattern0_ref      : 'reference logic           <8>  ;
     var pattern1_meta     : 'reference logic           <8>  ;
     var pattern1_ref      : 'reference logic           <8>  ;
+    var raw0_meta         : 'reference logic           <8>  ;
+    var raw0_ref          : 'reference logic           <8>  ;
+    var raw1_meta         : 'reference logic           <8>  ;
+    var raw1_ref          : 'reference logic           <8>  ;
     let mpr_debug         : 'reference logic                 = RUN_MPR != 0 || RUN_MPR_DELAY != 0;
     let use_sweep         : 'ctrl      logic                 = RUN_READ_SWEEP != 0 || RUN_MPR != 0 || RUN_MPR_DELAY
         != 0;
@@ -322,6 +335,10 @@ module TangDdrInitProbe #(
                 pattern0_ref  = 0;
                 pattern1_meta = 0;
                 pattern1_ref  = 0;
+                raw0_meta     = 0;
+                raw0_ref      = 0;
+                raw1_meta     = 0;
+                raw1_ref      = 0;
             } else {
                 status_pipe   = {status_pipe[0], done};
                 sweep_pipe    = {sweep_pipe[0], sweep_done};
@@ -332,6 +349,10 @@ module TangDdrInitProbe #(
                 pattern0_ref  = pattern0_meta;
                 pattern1_meta = if RUN_MPR_DELAY != 0 ? sweep_pass_delay1 : sweep_pattern1;
                 pattern1_ref  = pattern1_meta;
+                raw0_meta     = sweep_pattern0;
+                raw0_ref      = raw0_meta;
+                raw1_meta     = sweep_pattern1;
+                raw1_ref      = raw1_meta;
             }
         }
         assign status = if !pll_locked ?
@@ -353,12 +374,15 @@ module TangDdrInitProbe #(
         ;
     }
     inst uart: TangDdrStatusUart (
-        i_clk                       ,
-        i_rst         : ref_reset   ,
-        i_status      : status      ,
-        i_debug_enable: mpr_debug   ,
-        i_debug0      : pattern0_ref,
-        i_debug1      : pattern1_ref,
-        o_tx          : o_uart_tx   ,
+        i_clk                             ,
+        i_rst         : ref_reset         ,
+        i_status      : status            ,
+        i_debug_enable: mpr_debug         ,
+        i_debug_extra : RUN_MPR_DELAY != 0,
+        i_debug0      : pattern0_ref      ,
+        i_debug1      : pattern1_ref      ,
+        i_debug2      : raw0_ref          ,
+        i_debug3      : raw1_ref          ,
+        o_tx          : o_uart_tx         ,
     );
 }

@@ -18,7 +18,8 @@ if ((Get-FileHash -Algorithm SHA256 $lcd).Hash.ToLowerInvariant() -ne $knownLcdS
     throw 'The LCD restore image differs from the validated hardware image.'
 }
 try {
-    & (Join-Path $PSScriptRoot 'test-board.ps1') -Suite $Suite -Port $Port -Mode $Mode -Seconds 4
+    $probeSeconds = if ($Mode -eq 'DdrMprDelay') { 6 } else { 4 }
+    & (Join-Path $PSScriptRoot 'test-board.ps1') -Suite $Suite -Port $Port -Mode $Mode -Seconds $probeSeconds
 } finally {
     & (Join-Path $PSScriptRoot 'test-board.ps1') -Suite $Suite -Port $Port -Mode LcdSoc -Seconds 5
 }

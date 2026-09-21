@@ -80,9 +80,11 @@ SHA256 `954215dd2f54e3d3e98c19c04ed20bced55f39e8a631b2d21e06b2fba74f0613`
 受信遅延診断 `TangDdrMprDelayProbe` を追加した。DQS primitive の
 `RLOADN` と `RMOVE` を使い、DLLSTEP を基準に +0、+4、...、+28 tap の
 8 点を走査する。各遅延値で READ ゲート位置 8 通りと RCLKSEL 8 通りを
-組み合わせ、候補ごとに 3 READ を照合する。UART の 4 桁は従来の
-パターン値ではなく、前半・後半がそれぞれ lane 0/1 の合格遅延マスクで、
-bit 0 が +0 tap を表す。`DDR_MPR_DELAY=1 bash scripts/build_ddr_mpr.sh` で
+組み合わせ、候補ごとに 3 READ を照合する。遅延診断の UART は状態文字と
+8 桁で、前半 4 桁が lane 0/1 の合格遅延マスク、後半 4 桁が各レーンの
+最後の `RVALID` で観測した DQ0/DQ8 パターンである。マスクの bit 0 は
++0 tap を表す。後半は合格判定に使った 3 READ の値を表さない。
+`DDR_MPR_DELAY=1 bash scripts/build_ddr_mpr.sh` で
 専用 bitstream を構築し、`-Mode DdrMprDelay` で実機試験する。
 [Gowin DQS primitive 資料](https://www.gowinsemi.com/upload/database_doc/39/document/5bfcff2ce0b72.pdf)
 は `RLOADN`、`RMOVE`、`RDIR` による読出し遅延調整を規定する。
@@ -107,6 +109,18 @@ bit 0 が +0 tap を表す。`DDR_MPR_DELAY=1 bash scripts/build_ddr_mpr.sh` で
 `logs/board/20260921-233049-DdrMprDelay-*`、
 `logs/board/20260921-233155-DdrMpr-*`、
 `logs/board/20260921-233655-DdrMprDelay-*`。
+
+生パターンを併記した bitstream SHA256
+`ced2c6ba83baebe7fa595fed21055b35428a5b58e06730dfe746b98f36dffde1`
+を同じ基板へ 4 回ロードした。順に `V00000B0B`、`M676F0303`、
+`M070FFDBD`、`V00004040` を得た。合格マスクはロード間で変動し、
+`M` の 2 回も連続した単一のデータアイを示さない。最後の DQ パターンも
+変動するため、今の判定結果を Linux 用の読出し校正値として使用しない。
+各回の LCD 復元は成功した。ログは
+`logs/board/20260921-234542-DdrMprDelay-*`、
+`logs/board/20260921-234617-DdrMprDelay-*`、
+`logs/board/20260921-234702-DdrMprDelay-*`、
+`logs/board/20260921-234746-DdrMprDelay-*`。
 
 実機診断は `scripts/test-ddr-init-board.ps1 -Mode DdrMpr` で実施する。
 このスクリプトは結果にかかわらず検証済み LCD サンプルを復元する。
