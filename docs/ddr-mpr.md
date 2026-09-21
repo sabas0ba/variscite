@@ -122,6 +122,21 @@ SHA256 `954215dd2f54e3d3e98c19c04ed20bced55f39e8a631b2d21e06b2fba74f0613`
 `logs/board/20260921-234702-DdrMprDelay-*`、
 `logs/board/20260921-234746-DdrMprDelay-*`。
 
+ロード間変動の切り分けとして、初期化時の RESET 保持を 200 µs から
+400 µs、解除後に CKE を低く保つ時間を 500 µs から 1 ms に延ばした。
+[JEDEC DDR3 規格 JESD79-3E](https://e2e.ti.com/cfs-file/__key/communityserver-discussions-components-files/716/0636.JESD79_2D00_3E.pdf)
+の電源投入シーケンスで示す最小 200 µs / 500 µs に対して余裕を設ける
+実験である。bitstream SHA256
+`ad457338be9071265e2cd42e0fba181ffcbdf6804e8399d679b4dd69d65260b7`
+の 4 回の再ロード結果は `M070FFDDD`、`V00000F0B`、
+`V00000F0B`、`M070FFDDD` だった。待ち時間を倍にしても合格状態は
+安定せず、初期化待ち時間の不足だけでは説明できない。余裕を持たせた
+既定値は維持する。各回の LCD 復元は成功した。ログは
+`logs/board/20260921-235308-DdrMprDelay-*`、
+`logs/board/20260921-235339-DdrMprDelay-*`、
+`logs/board/20260921-235422-DdrMprDelay-*`、
+`logs/board/20260921-235455-DdrMprDelay-*`。
+
 実機診断は `scripts/test-ddr-init-board.ps1 -Mode DdrMpr` で実施する。
 このスクリプトは結果にかかわらず検証済み LCD サンプルを復元する。
 今回の試験でも復元と LCD UART 検査は通過した。ログは

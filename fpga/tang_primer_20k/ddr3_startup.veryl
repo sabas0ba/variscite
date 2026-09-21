@@ -5,9 +5,10 @@
 /// ZQ_CYCLES includes the PHY's command launch latency, not just DRAM tZQinit.
 /// All delay parameters must be positive. MR0 must request DLL reset; MR1 must
 /// enable the DLL. These modes are checked when choosing the memory profile.
+/// RESET and release defaults leave margin over the 200 us and 500 us minima.
 module Ddr3Startup #(
-    param RESET_CYCLES  : u32       = 19800   ,
-    param RELEASE_CYCLES: u32       = 49500   ,
+    param RESET_CYCLES  : u32       = 39600   ,
+    param RELEASE_CYCLES: u32       = 99000   ,
     param XPR_CYCLES    : u32       = 40      ,
     param MRD_CYCLES    : u32       = 2       ,
     param MOD_CYCLES    : u32       = 4       ,
