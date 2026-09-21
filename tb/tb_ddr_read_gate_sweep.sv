@@ -13,12 +13,13 @@ module tb_ddr_read_gate_sweep;
     always #5 clk=~clk;
     rv32ima_DdrReadGateSweep dut (
         .i_clk(clk), .i_rst(rst), .i_enable(enable), .i_burst(burst),
-        .i_valid(2'b0), .i_data(128'b0),
+        .i_valid(2'b0), .i_data(128'b0), .i_delay_ready(1'b1),
         .o_cmd_valid(cmd_valid), .o_cmd(cmd), .o_addr(addr), .o_bank(bank),
         .o_read(read_gate), .o_sel(sel), .o_hold(hold_gate),
         .o_done(done), .o_found(found), .o_burst_seen(), .o_valid_seen(),
         .o_sample0(), .o_sample1(), .o_pattern0(), .o_pattern1(),
-        .o_phase0(phase0), .o_phase1(phase1)
+        .o_phase0(phase0), .o_phase1(phase1),
+        .o_delay_target(), .o_pass_delay0(), .o_pass_delay1()
     );
 
     // The mock DRAM returns a lane-specific DQS burst only at the chosen gate

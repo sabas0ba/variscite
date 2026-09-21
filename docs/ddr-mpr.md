@@ -64,8 +64,49 @@ slot 2 の比較版 SHA256
 サンプルを表すわけではない。slot 2 は DQS の観測を改善したが、
 データアイ校正が必要である。各試験後の LCD 復元は成功した。
 Gowin の公式 PHY 資料は各サンプリング点で反復してデータを読み、連続する
-正しいサンプリング点の中央を選ぶ方法を説明している。現在の 1 点 1 READ の
-判定だけでは、その再現性とデータアイ幅を確認できない。
+正しいサンプリング点の中央を選ぶ方法を説明している。現在は同じ候補を
+3 回判定するが、連続する有効点の範囲とデータアイの中央は未検出である。
+
+同日、DLL の `STEP` を UART の先頭 2 桁へ一時的に出す計測用 bitstream
+SHA256 `954215dd2f54e3d3e98c19c04ed20bced55f39e8a631b2d21e06b2fba74f0613`
+を 2 回ロードした。どちらも `STEP=0x15`、MPR 診断結果は `V` だった。
+後半 2 桁は lane 1 の直近パターンで `AA`。この出力形式は計測専用であり、
+通常版の UART フレームとは異なる。計測後に RTL と SDC の一時変更を戻し、
+両回とも LCD 復元を確認した。ログは
+`logs/board/20260921-231850-DdrMpr-*` と
+`logs/board/20260921-231929-DdrMpr-*`。この観測は DLL の基準値を示すが、
+受信遅延の有効範囲はまだ示さない。
+
+受信遅延診断 `TangDdrMprDelayProbe` を追加した。DQS primitive の
+`RLOADN` と `RMOVE` を使い、DLLSTEP を基準に +0、+4、...、+28 tap の
+8 点を走査する。各遅延値で READ ゲート位置 8 通りと RCLKSEL 8 通りを
+組み合わせ、候補ごとに 3 READ を照合する。UART の 4 桁は従来の
+パターン値ではなく、前半・後半がそれぞれ lane 0/1 の合格遅延マスクで、
+bit 0 が +0 tap を表す。`DDR_MPR_DELAY=1 bash scripts/build_ddr_mpr.sh` で
+専用 bitstream を構築し、`-Mode DdrMprDelay` で実機試験する。
+[Gowin DQS primitive 資料](https://www.gowinsemi.com/upload/database_doc/39/document/5bfcff2ce0b72.pdf)
+は `RLOADN`、`RMOVE`、`RDIR` による読出し遅延調整を規定する。
+
+最初の固定ゲート版 SHA256
+`e41871de8686d68df4a2ea1f4cc2e9fe0e48ec79fa413618c7b7937e1ea01d2f`
+は `E0000` だった。ゲート位置も含めた全 512 候補版 SHA256
+`bc12dd13c1cdc7ed1b5e2bab3cde5366581e0fb09f73ef681e2ca204b0daf4df`
+も `E0000` で、合格遅延値は得られなかった。比較のため同じ RTL から
+従来 MPR モードを再構築した SHA256
+`91904a5d60c927f60266a74cb34a7827935db9730c9cc8d3e615712f157eb56d`
+も `E0000` だった。全 512 候補版は約 200 us で refresh を行わず、
+終了後に DRAM を RESET する。アレイデータの保持・利用はしない。
+`RMOVE` より 1 controller cycle 前に `RDIR` を確定する最終版 SHA256
+`845b3fdf2dc3961166e1c57a25271af5f49c78b470b10c3ff529ad95fce2bc5f`
+では `V0000` となり、両レーンの `RVALID` は観測できたが、3 READ 連続で
+合格する MPR パターンはどの遅延値にもなかった。現状では読出し校正値を
+選べない。
+シミュレーションでは 512 候補 × 3 READ、遅延更新 28 pulse、両レーンの
+合格マスクを確認した。実機の各試験後に LCD 復元を確認した。ログは
+`logs/board/20260921-232846-DdrMprDelay-*`、
+`logs/board/20260921-233049-DdrMprDelay-*`、
+`logs/board/20260921-233155-DdrMpr-*`、
+`logs/board/20260921-233655-DdrMprDelay-*`。
 
 実機診断は `scripts/test-ddr-init-board.ps1 -Mode DdrMpr` で実施する。
 このスクリプトは結果にかかわらず検証済み LCD サンプルを復元する。

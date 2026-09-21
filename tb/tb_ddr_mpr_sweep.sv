@@ -17,13 +17,14 @@ module tb_ddr_mpr_sweep;
     always #5 clk=~clk;
     rv32ima_DdrReadGateSweep #(.MPR_MODE(1)) dut (
         .i_clk(clk), .i_rst(rst), .i_enable(enable), .i_burst(2'b00),
-        .i_valid(valid), .i_data(data),
+        .i_valid(valid), .i_data(data), .i_delay_ready(1'b1),
         .o_cmd_valid(cmd_valid), .o_cmd(cmd), .o_addr(addr), .o_bank(bank),
         .o_read(read_gate), .o_sel(sel), .o_hold(hold_gate),
         .o_done(done), .o_found(found), .o_burst_seen(), .o_valid_seen(valid_seen),
         .o_sample0(sample0), .o_sample1(sample1),
         .o_pattern0(observed0), .o_pattern1(observed1),
-        .o_phase0(phase0), .o_phase1(phase1)
+        .o_phase0(phase0), .o_phase1(phase1),
+        .o_delay_target(), .o_pass_delay0(), .o_pass_delay1()
     );
 
     initial begin

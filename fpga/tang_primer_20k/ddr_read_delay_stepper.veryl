@@ -1,0 +1,67 @@
+/// Advance the DQS receive delay from the DLL-provided code by a requested
+/// number of primitive taps. The caller must change the target only between
+/// READ bursts and wait for o_ready before issuing the next READ.
+module DdrReadDelayStepper (
+    i_clk   : input  clock   ,
+    i_rst   : input  reset   ,
+    i_enable: input  logic   ,
+    i_target: input  logic<5>,
+    o_rloadn: output logic   ,
+    o_rmove : output logic   ,
+    o_rdir  : output logic   ,
+    o_ready : output logic   ,
+) {
+    enum State: logic<3> {
+        load,
+        idle,
+        move_prepare,
+        move_high,
+        move_low,
+    }
+    var state  : State   ;
+    var current: logic<5>;
+    var dir    : logic   ;
+
+    always_ff {
+        if_reset {
+            state   = State::load;
+            current = 0;
+            dir     = 1'b0;
+        } else if !i_enable {
+            state   = State::load;
+            current = 0;
+            dir     = 1'b0;
+        } else {
+            case state {
+                State::load: {
+                    state = State::idle;
+                }
+                State::idle: {
+                    if current != i_target {
+                        dir   = current >: i_target;
+                        state = State::move_prepare;
+                    }
+                }
+                State::move_prepare: {
+                    state = State::move_high;
+                }
+                State::move_high: {
+                    state = State::move_low;
+                }
+                State::move_low: {
+                    current = if dir ? current - 5'd1 : current + 5'd1;
+                    state   = State::idle;
+                }
+                default: {
+                    state   = State::load;
+                    current = 0;
+                    dir     = 1'b0;
+                }
+            }
+        }
+    }
+    assign o_rloadn = i_enable && state != State::load;
+    assign o_rmove  = state == State::move_high;
+    assign o_rdir   = dir;
+    assign o_ready  = i_enable && state == State::idle && current == i_target;
+}

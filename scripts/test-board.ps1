@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -23,6 +23,7 @@ $images = @{
     DdrInit = 'sim/fpga/ddr_init/impl/pnr/ddr_init.fs'
     DdrRead = 'sim/fpga/ddr_read/impl/pnr/ddr_read.fs'
     DdrMpr = 'sim/fpga/ddr_mpr/impl/pnr/ddr_mpr.fs'
+    DdrMprDelay = 'sim/fpga/ddr_mpr_delay/impl/pnr/ddr_mpr_delay.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -95,8 +96,8 @@ try {
             $passed = ([regex]::Matches($probe, 'G')).Count -ge 5 -and
                 -not $probe.Contains('E')
         }
-        DdrMpr {
-            # Each report is a status character and two hexadecimal MPR data bytes.
+        { $_ -in @('DdrMpr', 'DdrMprDelay') } {
+            # Each report is a status and four hex digits: MPR bytes or lane pass masks.
             $frames = @([regex]::Matches($received, '[PLIRMEVB][0-9A-F]{4}') |
                 Select-Object -Last 3)
             $passed = $frames.Count -eq 3 -and

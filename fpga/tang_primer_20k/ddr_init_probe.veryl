@@ -82,6 +82,7 @@ module TangDdrStatusUart (
 module TangDdrInitProbe #(
     param RUN_READ_SWEEP: u32 = 0,
     param RUN_MPR       : u32 = 0,
+    param RUN_MPR_DELAY : u32 = 0,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -101,58 +102,66 @@ module TangDdrInitProbe #(
     ddr_clk_p  : output 'fast      logic        ,
     ddr_clk_n  : output 'fast      logic        ,
 ) {
-    var por             : 'reference logic                ;
-    var fast_clk        : 'fast      clock                ;
-    var ctrl_clk        : 'ctrl      clock                ;
-    var pll_locked      : 'async     logic                ;
-    var dll_locked      : 'async     logic                ;
-    var dll_step        : 'async     logic           <8>  ;
-    var phy_reset       : 'async     reset_async_high     ;
-    var ready_pipe      : 'ctrl      logic           <2>  ;
-    var ready_reset     : 'ctrl      reset                ;
-    var cmd_valid       : 'ctrl      logic                ;
-    var cmd             : 'ctrl      logic           <3>  ;
-    var bank            : 'ctrl      logic           <3>  ;
-    var addr            : 'ctrl      logic           <14> ;
-    var reset_n         : 'ctrl      logic                ;
-    var cke             : 'ctrl      logic                ;
-    var done            : 'ctrl      logic                ;
-    var status_pipe     : 'reference logic           <2>  ;
-    var status          : 'reference logic           <4>  ;
-    var ref_reset       : 'reference reset                ;
-    var sweep_valid     : 'ctrl      logic                ;
-    var sweep_cmd       : 'ctrl      logic           <3>  ;
-    var sweep_bank      : 'ctrl      logic           <3>  ;
-    var sweep_addr      : 'ctrl      logic           <14> ;
-    var sweep_read      : 'ctrl      logic           <8>  ;
-    var sweep_sel       : 'ctrl      logic           <6>  ;
-    var sweep_hold      : 'ctrl      logic           <2>  ;
-    var sweep_done      : 'ctrl      logic                ;
-    var sweep_found     : 'ctrl      logic           <2>  ;
-    var sweep_burst_seen: 'ctrl      logic           <2>  ;
-    var sweep_valid_seen: 'ctrl      logic           <2>  ;
-    var sweep_pattern0  : 'ctrl      logic           <8>  ;
-    var sweep_pattern1  : 'ctrl      logic           <8>  ;
-    var phy_burst       : 'ctrl      logic           <2>  ;
-    var phy_valid       : 'ctrl      logic           <2>  ;
-    var phy_data        : 'ctrl      logic           <128>;
-    var sweep_pipe      : 'reference logic           <2>  ;
-    var found_pipe      : 'reference logic           <2>  ;
-    var burst_pipe      : 'reference logic           <2>  ;
-    var valid_pipe      : 'reference logic           <2>  ;
-    var pattern0_meta   : 'reference logic           <8>  ;
-    var pattern0_ref    : 'reference logic           <8>  ;
-    var pattern1_meta   : 'reference logic           <8>  ;
-    var pattern1_ref    : 'reference logic           <8>  ;
-    let mpr_debug       : 'reference logic                 = RUN_MPR != 0;
-    let use_sweep       : 'ctrl      logic                 = RUN_READ_SWEEP != 0 || RUN_MPR != 0;
-    let use_mpr         : 'ctrl      logic                 = RUN_MPR != 0;
-    let sweep_active    : 'ctrl      logic                 = use_sweep && done;
-    let phy_cmd_valid   : 'ctrl      logic                 = if sweep_active ? sweep_valid : cmd_valid;
-    let phy_cmd         : 'ctrl      logic           <3>   = if sweep_active ? sweep_cmd : cmd;
-    let phy_bank        : 'ctrl      logic           <3>   = if sweep_active ? sweep_bank : bank;
-    let phy_addr        : 'ctrl      logic           <14>  = if sweep_active ? sweep_addr : addr;
-    let phy_cke         : 'ctrl      logic                 = cke && !(use_sweep && sweep_done);
+    var por               : 'reference logic                ;
+    var fast_clk          : 'fast      clock                ;
+    var ctrl_clk          : 'ctrl      clock                ;
+    var pll_locked        : 'async     logic                ;
+    var dll_locked        : 'async     logic                ;
+    var dll_step          : 'async     logic           <8>  ;
+    var phy_reset         : 'async     reset_async_high     ;
+    var ready_pipe        : 'ctrl      logic           <2>  ;
+    var ready_reset       : 'ctrl      reset                ;
+    var cmd_valid         : 'ctrl      logic                ;
+    var cmd               : 'ctrl      logic           <3>  ;
+    var bank              : 'ctrl      logic           <3>  ;
+    var addr              : 'ctrl      logic           <14> ;
+    var reset_n           : 'ctrl      logic                ;
+    var cke               : 'ctrl      logic                ;
+    var done              : 'ctrl      logic                ;
+    var status_pipe       : 'reference logic           <2>  ;
+    var status            : 'reference logic           <4>  ;
+    var ref_reset         : 'reference reset                ;
+    var sweep_valid       : 'ctrl      logic                ;
+    var sweep_cmd         : 'ctrl      logic           <3>  ;
+    var sweep_bank        : 'ctrl      logic           <3>  ;
+    var sweep_addr        : 'ctrl      logic           <14> ;
+    var sweep_read        : 'ctrl      logic           <8>  ;
+    var sweep_sel         : 'ctrl      logic           <6>  ;
+    var sweep_hold        : 'ctrl      logic           <2>  ;
+    var sweep_done        : 'ctrl      logic                ;
+    var sweep_found       : 'ctrl      logic           <2>  ;
+    var sweep_burst_seen  : 'ctrl      logic           <2>  ;
+    var sweep_valid_seen  : 'ctrl      logic           <2>  ;
+    var sweep_pattern0    : 'ctrl      logic           <8>  ;
+    var sweep_pattern1    : 'ctrl      logic           <8>  ;
+    var sweep_delay_target: 'ctrl      logic           <5>  ;
+    var sweep_delay_ready : 'ctrl      logic                ;
+    var sweep_pass_delay0 : 'ctrl      logic           <8>  ;
+    var sweep_pass_delay1 : 'ctrl      logic           <8>  ;
+    var delay_rloadn      : 'ctrl      logic                ;
+    var delay_rmove       : 'ctrl      logic                ;
+    var delay_rdir        : 'ctrl      logic                ;
+    var phy_burst         : 'ctrl      logic           <2>  ;
+    var phy_valid         : 'ctrl      logic           <2>  ;
+    var phy_data          : 'ctrl      logic           <128>;
+    var sweep_pipe        : 'reference logic           <2>  ;
+    var found_pipe        : 'reference logic           <2>  ;
+    var burst_pipe        : 'reference logic           <2>  ;
+    var valid_pipe        : 'reference logic           <2>  ;
+    var pattern0_meta     : 'reference logic           <8>  ;
+    var pattern0_ref      : 'reference logic           <8>  ;
+    var pattern1_meta     : 'reference logic           <8>  ;
+    var pattern1_ref      : 'reference logic           <8>  ;
+    let mpr_debug         : 'reference logic                 = RUN_MPR != 0 || RUN_MPR_DELAY != 0;
+    let use_sweep         : 'ctrl      logic                 = RUN_READ_SWEEP != 0 || RUN_MPR != 0 || RUN_MPR_DELAY
+        != 0;
+    let use_mpr           : 'ctrl      logic                 = RUN_MPR != 0 || RUN_MPR_DELAY != 0;
+    let sweep_active      : 'ctrl      logic                 = use_sweep && done;
+    let phy_cmd_valid     : 'ctrl      logic                 = if sweep_active ? sweep_valid : cmd_valid;
+    let phy_cmd           : 'ctrl      logic           <3>   = if sweep_active ? sweep_cmd : cmd;
+    let phy_bank          : 'ctrl      logic           <3>   = if sweep_active ? sweep_bank : bank;
+    let phy_addr          : 'ctrl      logic           <14>  = if sweep_active ? sweep_addr : addr;
+    let phy_cke           : 'ctrl      logic                 = cke && !(use_sweep && sweep_done);
     // At CL=6/AL=0, the Gowin PHY timing example launches READ in slot 2.
     // Keep the startup sequencer in slot 0; shift diagnostic commands together.
     let phy_addr_slots: 'ctrl logic<56> = if sweep_active ?
@@ -216,31 +225,46 @@ module TangDdrInitProbe #(
         o_done     : done         ,
     );
     inst sweep: DdrReadGateSweep #(
-        MPR_MODE: RUN_MPR,
+        MPR_MODE  : if RUN_MPR_DELAY != 0 ? 1 : RUN_MPR,
+        DELAY_MODE: RUN_MPR_DELAY                      ,
     ) (
-        i_clk       : ctrl_clk         ,
-        i_rst       : ready_reset      ,
-        i_enable    : done && use_sweep,
-        i_burst     : phy_burst        ,
-        i_valid     : phy_valid        ,
-        i_data      : phy_data         ,
-        o_cmd_valid : sweep_valid      ,
-        o_cmd       : sweep_cmd        ,
-        o_addr      : sweep_addr       ,
-        o_bank      : sweep_bank       ,
-        o_read      : sweep_read       ,
-        o_sel       : sweep_sel        ,
-        o_hold      : sweep_hold       ,
-        o_done      : sweep_done       ,
-        o_found     : sweep_found      ,
-        o_burst_seen: sweep_burst_seen ,
-        o_valid_seen: sweep_valid_seen ,
-        o_sample0   : _                ,
-        o_sample1   : _                ,
-        o_pattern0  : sweep_pattern0   ,
-        o_pattern1  : sweep_pattern1   ,
-        o_phase0    : _                ,
-        o_phase1    : _                ,
+        i_clk         : ctrl_clk          ,
+        i_rst         : ready_reset       ,
+        i_enable      : done && use_sweep,
+        i_burst       : phy_burst         ,
+        i_valid       : phy_valid         ,
+        i_data        : phy_data          ,
+        i_delay_ready : sweep_delay_ready ,
+        o_cmd_valid   : sweep_valid       ,
+        o_cmd         : sweep_cmd         ,
+        o_addr        : sweep_addr        ,
+        o_bank        : sweep_bank        ,
+        o_read        : sweep_read        ,
+        o_sel         : sweep_sel         ,
+        o_hold        : sweep_hold        ,
+        o_done        : sweep_done        ,
+        o_found       : sweep_found       ,
+        o_burst_seen  : sweep_burst_seen  ,
+        o_valid_seen  : sweep_valid_seen  ,
+        o_sample0     : _                 ,
+        o_sample1     : _                 ,
+        o_pattern0    : sweep_pattern0    ,
+        o_pattern1    : sweep_pattern1    ,
+        o_phase0      : _                 ,
+        o_phase1      : _                 ,
+        o_delay_target: sweep_delay_target,
+        o_pass_delay0 : sweep_pass_delay0 ,
+        o_pass_delay1 : sweep_pass_delay1 ,
+    );
+    inst delay_stepper: DdrReadDelayStepper (
+        i_clk   : ctrl_clk                          ,
+        i_rst   : ready_reset                       ,
+        i_enable: sweep_active && RUN_MPR_DELAY != 0,
+        i_target: sweep_delay_target                ,
+        o_rloadn: delay_rloadn                      ,
+        o_rmove : delay_rmove                       ,
+        o_rdir  : delay_rdir                        ,
+        o_ready : sweep_delay_ready                 ,
     );
     unsafe (cdc) {
         inst phy: TangDdrPhyIo (
@@ -258,6 +282,9 @@ module TangDdrInitProbe #(
             i_hold       : if use_sweep ? sweep_hold : 2'b0,
             i_read       : if use_sweep ? sweep_read : 8'b0,
             i_read_sel   : if use_sweep ? sweep_sel : 6'b0,
+            i_rloadn     : delay_rloadn                         ,
+            i_rmove      : delay_rmove                          ,
+            i_rdir       : delay_rdir                           ,
             i_write_step : 16'b0                                ,
             i_data       : 128'b0                               ,
             i_mask       : 16'hffff                             ,
@@ -301,9 +328,9 @@ module TangDdrInitProbe #(
                 found_pipe    = {found_pipe[0], sweep_found == 2'b11};
                 burst_pipe    = {burst_pipe[0], sweep_burst_seen == 2'b11};
                 valid_pipe    = {valid_pipe[0], sweep_valid_seen == 2'b11};
-                pattern0_meta = sweep_pattern0;
+                pattern0_meta = if RUN_MPR_DELAY != 0 ? sweep_pass_delay0 : sweep_pattern0;
                 pattern0_ref  = pattern0_meta;
-                pattern1_meta = sweep_pattern1;
+                pattern1_meta = if RUN_MPR_DELAY != 0 ? sweep_pass_delay1 : sweep_pattern1;
                 pattern1_ref  = pattern1_meta;
             }
         }

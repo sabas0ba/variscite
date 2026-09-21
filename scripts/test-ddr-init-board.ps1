@@ -5,7 +5,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('DdrInit', 'DdrRead', 'DdrMpr')]
+    [ValidateSet('DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay')]
     [string]$Mode = 'DdrInit'
 )
 Set-StrictMode -Version Latest

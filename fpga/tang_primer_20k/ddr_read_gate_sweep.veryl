@@ -8,33 +8,40 @@
 /// finishes and does not preserve array data.
 /// RBURST proves DQS detection only. The returned phases require data-eye
 /// calibration before use as a memory controller.
+/// DELAY_MODE repeats the 64 MPR combinations at eight receive-delay offsets
+/// and records the offsets that pass all three reads for each byte lane.
 module DdrReadGateSweep #(
-    param MPR_MODE: u32 = 0,
+    param MPR_MODE  : u32 = 0,
+    param DELAY_MODE: u32 = 0,
 ) (
-    i_clk      : input  clock     ,
-    i_rst      : input  reset     ,
-    i_enable   : input  logic     ,
-    i_burst    : input  logic<2>  ,
-    i_valid    : input  logic<2>  ,
-    i_data     : input  logic<128>,
-    o_cmd_valid: output logic     ,
+    i_clk        : input  clock     ,
+    i_rst        : input  reset     ,
+    i_enable     : input  logic     ,
+    i_burst      : input  logic<2>  ,
+    i_valid      : input  logic<2>  ,
+    i_data       : input  logic<128>,
+    i_delay_ready: input  logic     ,
+    o_cmd_valid  : output logic     ,
     /// {RAS_n, CAS_n, WE_n}: ACT=011, READ=101, PRE=010.
-    o_cmd       : output logic<3> ,
-    o_addr      : output logic<14>,
-    o_bank      : output logic<3> ,
-    o_read      : output logic<8> ,
-    o_sel       : output logic<6> ,
-    o_hold      : output logic<2> ,
-    o_done      : output logic    ,
-    o_found     : output logic<2> ,
-    o_burst_seen: output logic<2> ,
-    o_valid_seen: output logic<2> ,
-    o_sample0   : output logic<8> ,
-    o_sample1   : output logic<8> ,
-    o_pattern0  : output logic<8> ,
-    o_pattern1  : output logic<8> ,
-    o_phase0    : output logic<6> ,
-    o_phase1    : output logic<6> ,
+    o_cmd         : output logic<3> ,
+    o_addr        : output logic<14>,
+    o_bank        : output logic<3> ,
+    o_read        : output logic<8> ,
+    o_sel         : output logic<6> ,
+    o_hold        : output logic<2> ,
+    o_done        : output logic    ,
+    o_found       : output logic<2> ,
+    o_burst_seen  : output logic<2> ,
+    o_valid_seen  : output logic<2> ,
+    o_sample0     : output logic<8> ,
+    o_sample1     : output logic<8> ,
+    o_pattern0    : output logic<8> ,
+    o_pattern1    : output logic<8> ,
+    o_phase0      : output logic<6> ,
+    o_phase1      : output logic<6> ,
+    o_delay_target: output logic<5> ,
+    o_pass_delay0 : output logic<8> ,
+    o_pass_delay1 : output logic<8> ,
 ) {
     enum State: logic<4> {
         idle,
@@ -42,6 +49,7 @@ module DdrReadGateSweep #(
         act_wait,
         mrs,
         mrs_wait,
+        delay_wait,
         read_cmd,
         sample,
         precharge,
@@ -50,21 +58,24 @@ module DdrReadGateSweep #(
         mrs_off_wait,
         done,
     }
-    var state     : State   ;
-    var elapsed   : logic<4>;
-    var phase     : logic<6>;
-    var seen      : logic<2>;
-    var repeat_idx: logic<2>;
-    var repeat_ok : logic<2>;
-    var found     : logic<2>;
-    var burst_seen: logic<2>;
-    var valid_seen: logic<2>;
-    var sample0   : logic<8>;
-    var sample1   : logic<8>;
-    var pattern0  : logic<8>;
-    var pattern1  : logic<8>;
-    var phase0    : logic<6>;
-    var phase1    : logic<6>;
+    var state      : State   ;
+    var elapsed    : logic<4>;
+    var phase      : logic<6>;
+    var delay_index: logic<3>;
+    var seen       : logic<2>;
+    var repeat_idx : logic<2>;
+    var repeat_ok  : logic<2>;
+    var found      : logic<2>;
+    var burst_seen : logic<2>;
+    var valid_seen : logic<2>;
+    var sample0    : logic<8>;
+    var sample1    : logic<8>;
+    var pattern0   : logic<8>;
+    var pattern1   : logic<8>;
+    var phase0     : logic<6>;
+    var phase1     : logic<6>;
+    var pass_delay0: logic<8>;
+    var pass_delay1: logic<8>;
     // MPR drives the fixed 0,1,0,1,... sequence on DQ0 and DQ8.
     // Either byte ordering is accepted here; alignment is checked later.
     let lower_pattern: logic<8> = {
@@ -82,37 +93,43 @@ module DdrReadGateSweep #(
 
     always_ff {
         if_reset {
-            state      = State::idle;
-            elapsed    = 0;
-            phase      = 0;
-            seen       = 0;
-            repeat_idx = 0;
-            repeat_ok  = 2'b11;
-            found      = 0;
-            burst_seen = 0;
-            valid_seen = 0;
-            sample0    = 0;
-            sample1    = 0;
-            pattern0   = 0;
-            pattern1   = 0;
-            phase0     = 0;
-            phase1     = 0;
+            state       = State::idle;
+            elapsed     = 0;
+            phase       = 0;
+            delay_index = 0;
+            seen        = 0;
+            repeat_idx  = 0;
+            repeat_ok   = 2'b11;
+            found       = 0;
+            burst_seen  = 0;
+            valid_seen  = 0;
+            sample0     = 0;
+            sample1     = 0;
+            pattern0    = 0;
+            pattern1    = 0;
+            phase0      = 0;
+            phase1      = 0;
+            pass_delay0 = 0;
+            pass_delay1 = 0;
         } else if !i_enable {
-            state      = State::idle;
-            elapsed    = 0;
-            phase      = 0;
-            seen       = 0;
-            repeat_idx = 0;
-            repeat_ok  = 2'b11;
-            found      = 0;
-            burst_seen = 0;
-            valid_seen = 0;
-            sample0    = 0;
-            sample1    = 0;
-            pattern0   = 0;
-            pattern1   = 0;
-            phase0     = 0;
-            phase1     = 0;
+            state       = State::idle;
+            elapsed     = 0;
+            phase       = 0;
+            delay_index = 0;
+            seen        = 0;
+            repeat_idx  = 0;
+            repeat_ok   = 2'b11;
+            found       = 0;
+            burst_seen  = 0;
+            valid_seen  = 0;
+            sample0     = 0;
+            sample1     = 0;
+            pattern0    = 0;
+            pattern1    = 0;
+            phase0      = 0;
+            phase1      = 0;
+            pass_delay0 = 0;
+            pass_delay1 = 0;
         } else {
             case state {
                 State::idle: {
@@ -135,9 +152,14 @@ module DdrReadGateSweep #(
                 }
                 State::mrs_wait: {
                     if elapsed == 11 {
-                        state = State::read_cmd;
+                        state = if DELAY_MODE != 0 ? State::delay_wait : State::read_cmd;
                     } else {
                         elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::delay_wait: {
+                    if i_delay_ready {
+                        state = State::read_cmd;
                     }
                 }
                 State::read_cmd: {
@@ -165,6 +187,14 @@ module DdrReadGateSweep #(
                             repeat_idx = repeat_idx + 2'd1;
                             state      = State::read_cmd;
                         } else {
+                            if DELAY_MODE != 0 {
+                                if qualified[0] {
+                                    pass_delay0 = pass_delay0 | (8'b1 << delay_index);
+                                }
+                                if qualified[1] {
+                                    pass_delay1 = pass_delay1 | (8'b1 << delay_index);
+                                }
+                            }
                             if !found[0] && qualified[0] {
                                 found[0] = 1'b1;
                                 phase0   = phase;
@@ -175,7 +205,12 @@ module DdrReadGateSweep #(
                             }
                             repeat_idx = 0;
                             repeat_ok  = 2'b11;
-                            if (found | qualified) == 2'b11 || phase == (if MPR_MODE != 0 ? 6'd63 : 6'd31) {
+                            if DELAY_MODE != 0 && phase == 6'd63 && delay_index != 3'd7 {
+                                delay_index = delay_index + 3'd1;
+                                phase       = 0;
+                                state       = State::delay_wait;
+                            } else if (DELAY_MODE == 0 && (found | qualified) == 2'b11) || phase
+                                == (if MPR_MODE != 0 ? 6'd63 : 6'd31) {
                                 state = if MPR_MODE != 0 ? State::mrs_off : State::precharge;
                             } else {
                                 phase = phase + 6'd1;
@@ -222,7 +257,10 @@ module DdrReadGateSweep #(
         o_addr      = 14'b0;
         o_bank      = 3'b0;
         o_read      = 8'b0;
-        o_sel       = {if found[1] ? phase1[2:0] : phase[2:0], if found[0] ? phase0[2:0] : phase[2:0]};
+        o_sel       = {
+            if found[1] && DELAY_MODE == 0 ? phase1[2:0] : phase[2:0],
+            if found[0] && DELAY_MODE == 0 ? phase0[2:0] : phase[2:0]
+        };
         o_hold      = 2'b0;
         case state {
             State::mrs: {
@@ -239,11 +277,11 @@ module DdrReadGateSweep #(
                 o_cmd_valid = 1'b1;
                 o_cmd       = 3'b101;
                 o_addr      = if MPR_MODE != 0 ? 14'h1000 : 14'h0000;
-                o_hold      = ~found;
+                o_hold      = if DELAY_MODE != 0 ? 2'b11 : ~found;
             }
             State::sample: {
                 if elapsed == ({1'b0, phase[5:3]} + 4'd1) {
-                    o_read = {if found[1] ? 4'h0 : 4'hf, if found[0] ? 4'h0 : 4'hf};
+                    o_read = if DELAY_MODE != 0 ? 8'hff : {if found[1] ? 4'h0 : 4'hf, if found[0] ? 4'h0 : 4'hf};
                 }
             }
             State::precharge: {
@@ -259,14 +297,17 @@ module DdrReadGateSweep #(
             default: {}
         }
     }
-    assign o_done       = state == State::done;
-    assign o_found      = found;
-    assign o_burst_seen = burst_seen;
-    assign o_valid_seen = valid_seen;
-    assign o_sample0    = sample0;
-    assign o_sample1    = sample1;
-    assign o_pattern0   = pattern0;
-    assign o_pattern1   = pattern1;
-    assign o_phase0     = phase0;
-    assign o_phase1     = phase1;
+    assign o_done         = state == State::done;
+    assign o_found        = found;
+    assign o_burst_seen   = burst_seen;
+    assign o_valid_seen   = valid_seen;
+    assign o_sample0      = sample0;
+    assign o_sample1      = sample1;
+    assign o_pattern0     = pattern0;
+    assign o_pattern1     = pattern1;
+    assign o_phase0       = phase0;
+    assign o_phase1       = phase1;
+    assign o_delay_target = if DELAY_MODE != 0 ? {delay_index, 2'b00} : 5'b0;
+    assign o_pass_delay0  = pass_delay0;
+    assign o_pass_delay1  = pass_delay1;
 }
