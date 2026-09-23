@@ -57,11 +57,29 @@ module tb_ddr_status_uart;
             if (actual!==expected)
                 $fatal(1,"ordinary UART byte %0d: got %c expected %c",i,actual,expected);
         end
-        $display("DDR status UART PASS: 9-byte delay and 5-byte array frames");
+        extra=1;
+        status=10;
+        for (int i=0; i<9; i++) begin
+            read_byte(actual);
+            case (i)
+                0: expected="T";
+                1: expected="1";
+                2: expected="2";
+                3: expected="A";
+                4: expected="B";
+                5: expected="C";
+                6: expected="D";
+                7: expected="E";
+                8: expected="F";
+            endcase
+            if (actual!==expected)
+                $fatal(1,"scan UART byte %0d: got %c expected %c",i,actual,expected);
+        end
+        $display("DDR status UART PASS: delay, array, and gate-scan frames");
         $finish;
     end
     initial begin
-        repeat (50000) @(posedge clk);
+        repeat (75000) @(posedge clk);
         $fatal(1,"UART frame timeout");
     end
 endmodule

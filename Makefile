@@ -94,7 +94,13 @@ coverage:
 	    logs/cov/*.dat 2>&1 | tee logs/cov/summary.txt
 
 # --- FPGA ports ----------------------------------------------------------
-.PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-status-uart-test
+.PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-gate-test ddr-status-uart-test
+
+ddr-array-gate-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_array_gate_scan \
+	    -Mdir sim/obj_ddr_array_gate_scan -o tb_ddr_array_gate_scan \
+	    target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_gate_scan.sv
+	sim/obj_ddr_array_gate_scan/tb_ddr_array_gate_scan
 
 ddr-array-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_array_probe \

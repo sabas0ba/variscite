@@ -44,6 +44,7 @@ module TangDdrStatusUart #(
             4'd7   : status_data = 8'h42; // B: RBURST but no RVALID
             4'd8   : status_data = 8'h56; // V: RVALID but no MPR pattern
             4'd9   : status_data = 8'h41; // A: two array patterns read back
+            4'd10  : status_data = 8'h54; // T: DQ0 and DQ8 pass a gate timing candidate
             default: status_data = 8'h45; // E: DQS gate timeout
         }
         case report_index {
@@ -95,6 +96,7 @@ module TangDdrInitProbe #(
     param RUN_MPR_DELAY : u32 = 0,
     param RUN_MPR_ALIGN : u32 = 0,
     param RUN_ARRAY     : u32 = 0,
+    param ARRAY_SCAN    : u32 = 0,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -173,6 +175,8 @@ module TangDdrInitProbe #(
     var array_valid_seen  : 'ctrl      logic           <2>  ;
     var array_match0      : 'ctrl      logic           <8>  ;
     var array_match1      : 'ctrl      logic           <8>  ;
+    var array_pass_gate0  : 'ctrl      logic           <8>  ;
+    var array_pass_gate1  : 'ctrl      logic           <8>  ;
     var array_first_raw0  : 'ctrl      logic           <8>  ;
     var array_first_raw1  : 'ctrl      logic           <8>  ;
     var array_raw0        : 'ctrl      logic           <8>  ;
@@ -331,7 +335,9 @@ module TangDdrInitProbe #(
         o_align_pass0 : sweep_align_pass0                  ,
         o_align_pass1 : sweep_align_pass1                  ,
     );
-    inst array: DdrArrayProbe (
+    inst array: DdrArrayProbe #(
+        GATE_SCAN: ARRAY_SCAN,
+    ) (
         i_clk        : ctrl_clk              ,
         i_rst        : ready_reset           ,
         i_enable     : done && RUN_ARRAY != 0,
@@ -357,6 +363,8 @@ module TangDdrInitProbe #(
         o_valid_seen : array_valid_seen      ,
         o_match0     : array_match0          ,
         o_match1     : array_match1          ,
+        o_pass_gate0 : array_pass_gate0      ,
+        o_pass_gate1 : array_pass_gate1      ,
         o_first_raw0 : array_first_raw0      ,
         o_first_raw1 : array_first_raw1      ,
         o_raw0       : array_raw0            ,
@@ -438,7 +446,9 @@ module TangDdrInitProbe #(
                 found_pipe    = {found_pipe[0], probe_found};
                 burst_pipe    = {burst_pipe[0], probe_burst == 2'b11};
                 valid_pipe    = {valid_pipe[0], probe_valid_seen == 2'b11};
-                pattern0_meta = if RUN_ARRAY != 0 ?
+                pattern0_meta = if ARRAY_SCAN != 0 ?
+                    array_pass_gate0
+                : if RUN_ARRAY != 0 ?
                     array_first_raw0
                 : if RUN_READ_SWEEP != 0 ?
                     {2'b0, sweep_phase0}
@@ -450,7 +460,9 @@ module TangDdrInitProbe #(
                     sweep_pattern0
                 ;
                 pattern0_ref  = pattern0_meta;
-                pattern1_meta = if RUN_ARRAY != 0 ?
+                pattern1_meta = if ARRAY_SCAN != 0 ?
+                    array_pass_gate1
+                : if RUN_ARRAY != 0 ?
                     array_first_raw1
                 : if RUN_READ_SWEEP != 0 ?
                     {2'b0, sweep_phase1}
@@ -477,7 +489,7 @@ module TangDdrInitProbe #(
         : if !use_sweep || !sweep_pipe[1] ?
             4'd3
         : if found_pipe[1] ?
-            (if RUN_ARRAY != 0 ? 4'd9 : if use_mpr ? 4'd6 : 4'd4)
+            (if ARRAY_SCAN != 0 ? 4'd10 : if RUN_ARRAY != 0 ? 4'd9 : if use_mpr ? 4'd6 : 4'd4)
         : if (use_mpr || RUN_ARRAY != 0) && valid_pipe[1] ?
             4'd8
         : if (use_mpr || RUN_ARRAY != 0) && burst_pipe[1] ?

@@ -28,6 +28,7 @@ module tb_ddr_array_probe;
         .o_dqs_pattern(dqs_pattern), .o_done(done), .o_found(found),
         .o_burst_seen(burst_seen), .o_valid_seen(valid_seen),
         .o_match0(match0), .o_match1(match1),
+        .o_pass_gate0(), .o_pass_gate1(),
         .o_first_raw0(first_raw0), .o_first_raw1(first_raw1),
         .o_raw0(raw0), .o_raw1(raw1)
     );

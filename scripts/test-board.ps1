@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -26,6 +26,7 @@ $images = @{
     DdrMprDelay = 'sim/fpga/ddr_mpr_delay/impl/pnr/ddr_mpr_delay.fs'
     DdrMprAlign = 'sim/fpga/ddr_mpr_align/impl/pnr/ddr_mpr_align.fs'
     DdrArray = 'sim/fpga/ddr_array/impl/pnr/ddr_array.fs'
+    DdrArrayScan = 'sim/fpga/ddr_array_scan/impl/pnr/ddr_array_scan.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -128,6 +129,14 @@ try {
                 Select-Object -Last 3)
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'A' }).Count -eq 0
+        }
+        DdrArrayScan {
+            # T means both byte lanes passed at some gate candidate. The
+            # first two bytes are the DQ0/DQ8 pass masks, not a full-bus test.
+            $frames = @([regex]::Matches($received, '[PLIRTBVE][0-9A-F]{8}') |
+                Select-Object -Last 3)
+            $passed = $frames.Count -eq 3 -and
+                @($frames | Where-Object { $_.Value[0] -ne 'T' }).Count -eq 0
         }
         { $_ -in @('Soc', 'LcdSoc') } {
             # Ignore output from the old SRAM image before the new boot banner.
