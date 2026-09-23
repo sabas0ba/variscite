@@ -32,6 +32,10 @@ USB 再接続後、同じ bitstream を3回ロードできた。いずれも定�
 
 次の切り分けには、DQS/DQ/CA の外部波形または FPGA 内部の送受信時刻を同じロード中に観測し、WRITE の CWL 位相と READ の RVALID/IDES8_MEM 出力の対応を確定する必要がある。現在のマスクを校正値に用いない。
 
+外部測定器がないため、`DdrArrayFlags` は DQS primitive の `RFLAG`/`WFLAG` を controller clock で累積し、`RVALID` を観測した最初と最後の `RPOINT`、書込みバースト時の最後の `WPOINT` を UART で報告する。フレーム `SFFRRWWPP` で、`FF` の bit 0–1 が lane 0/1 の `RFLAG`、bit 2–3 が lane 0/1 の `WFLAG`、`RR` と `PP` はそれぞれ最後と最初の `RPOINT` を2レーン各3 bitで格納し、`WW` は最後の `WPOINT` である。`DDR_ARRAY_FLAGS=1 bash scripts/build_ddr_mpr.sh` で構築し、`-Mode DdrArrayFlags` で測定する。[Gowin FPGA Primitive User Guide](https://www.gowinsemi.com/upload/database_doc/39/document/5bfcff2ce0b72.pdf) は `RFLAG`/`WFLAG` を FIFO の under-flow/over-flow の margin flag と説明する。controller clock より短いパルスは本診断では捕捉できない。
+
+bitstream SHA256 `963c6f7444c0a42a6675b1ae406ccfa360f905b2f5635c08cec91ecc15d2e513` の3回のロード結果は `V001B002D`、`V002D002D`、`V002D002D` だった。全回で観測した FIFO flag は0、最初の RPOINT は両レーンとも5。最後の RPOINT は初回のみ両レーンとも3で、残り2回は5だった。WPOINT の取得値は0。値の変動は FIFO pointer の状態差を示すが、正常な進行かデータ不一致の原因かは未確定である。ログは `logs/board/20260923-171818-DdrArrayFlags-*`、`171854`、`171930` にあり、各回の LCD サンプル復元と UART 検査は通過した。`RFLAG`/`WFLAG` が0であることから受信データの正しさは推定しない。
+
 安定したゲート位置が見つかってから受信遅延を走査し、全 DQ bit、byte mask、アドレス alias、refresh を検証する。現段階の結果を Linux 用 RAM の設定には使用しない。
 
 ## 一次資料

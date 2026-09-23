@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -30,6 +30,7 @@ $images = @{
     DdrArraySame = 'sim/fpga/ddr_array_same/impl/pnr/ddr_array_same.fs'
     DdrArrayTrace = 'sim/fpga/ddr_array_trace/impl/pnr/ddr_array_trace.fs'
     DdrArrayMatch = 'sim/fpga/ddr_array_match/impl/pnr/ddr_array_match.fs'
+    DdrArrayFlags = 'sim/fpga/ddr_array_flags/impl/pnr/ddr_array_flags.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -162,6 +163,13 @@ try {
         }
         DdrArrayMatch {
             # Four masks report column 0 DQ0/DQ8 and column 8 DQ0/DQ8.
+            $frames = @([regex]::Matches($received, '[PLIRTBVE][0-9A-F]{8}') |
+                Select-Object -Last 3)
+            $passed = $frames.Count -eq 3 -and
+                @($frames | Where-Object { $_.Value[0] -ne 'T' }).Count -eq 0
+        }
+        DdrArrayFlags {
+            # Status T still requires both lanes to match two columns.
             $frames = @([regex]::Matches($received, '[PLIRTBVE][0-9A-F]{8}') |
                 Select-Object -Last 3)
             $passed = $frames.Count -eq 3 -and
