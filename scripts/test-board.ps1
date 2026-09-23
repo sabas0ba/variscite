@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -27,6 +27,7 @@ $images = @{
     DdrMprAlign = 'sim/fpga/ddr_mpr_align/impl/pnr/ddr_mpr_align.fs'
     DdrArray = 'sim/fpga/ddr_array/impl/pnr/ddr_array.fs'
     DdrArrayScan = 'sim/fpga/ddr_array_scan/impl/pnr/ddr_array_scan.fs'
+    DdrArraySame = 'sim/fpga/ddr_array_same/impl/pnr/ddr_array_same.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -132,11 +133,22 @@ try {
         }
         DdrArrayScan {
             # T means both byte lanes passed at some gate candidate. The
-            # first two bytes are the DQ0/DQ8 pass masks, not a full-bus test.
+            # first two bytes are DQ0/DQ8 pass masks; the last two are masks
+            # where the two columns differ at the same RVALID cycle.
             $frames = @([regex]::Matches($received, '[PLIRTBVE][0-9A-F]{8}') |
                 Select-Object -Last 3)
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'T' }).Count -eq 0
+        }
+        DdrArraySame {
+            # Both columns have the same write data. Their observed patterns
+            # should not differ at the same read-gate candidate and cycle.
+            $frames = @([regex]::Matches($received, '[PLIRTBVE][0-9A-F]{8}') |
+                Select-Object -Last 3)
+            $passed = $frames.Count -eq 3 -and
+                @($frames | Where-Object {
+                    $_.Value[0] -notin @('V', 'T') -or $_.Value.Substring(5, 4) -ne '0000'
+                }).Count -eq 0
         }
         { $_ -in @('Soc', 'LcdSoc') } {
             # Ignore output from the old SRAM image before the new boot banner.

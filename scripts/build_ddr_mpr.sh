@@ -3,7 +3,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_ARRAY_SCAN:-0}" == 1 ]]; then
+if [[ "${DDR_ARRAY_SAME:-0}" == 1 ]]; then
+    name=ddr_array_same
+    top=rv32ima_TangDdrArraySameProbe
+elif [[ "${DDR_ARRAY_SCAN:-0}" == 1 ]]; then
     name=ddr_array_scan
     top=rv32ima_TangDdrArrayScanProbe
 elif [[ "${DDR_ARRAY:-0}" == 1 ]]; then

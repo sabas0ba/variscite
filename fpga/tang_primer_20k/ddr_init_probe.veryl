@@ -97,6 +97,7 @@ module TangDdrInitProbe #(
     param RUN_MPR_ALIGN : u32 = 0,
     param RUN_ARRAY     : u32 = 0,
     param ARRAY_SCAN    : u32 = 0,
+    param ARRAY_SAME    : u32 = 0,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -177,6 +178,8 @@ module TangDdrInitProbe #(
     var array_match1      : 'ctrl      logic           <8>  ;
     var array_pass_gate0  : 'ctrl      logic           <8>  ;
     var array_pass_gate1  : 'ctrl      logic           <8>  ;
+    var array_change_gate0: 'ctrl      logic           <8>  ;
+    var array_change_gate1: 'ctrl      logic           <8>  ;
     var array_first_raw0  : 'ctrl      logic           <8>  ;
     var array_first_raw1  : 'ctrl      logic           <8>  ;
     var array_raw0        : 'ctrl      logic           <8>  ;
@@ -337,38 +340,41 @@ module TangDdrInitProbe #(
     );
     inst array: DdrArrayProbe #(
         GATE_SCAN: ARRAY_SCAN,
+        SAME_DATA: ARRAY_SAME,
     ) (
-        i_clk        : ctrl_clk              ,
-        i_rst        : ready_reset           ,
-        i_enable     : done && RUN_ARRAY != 0,
-        i_burst      : phy_burst             ,
-        i_valid      : phy_valid             ,
-        i_data       : phy_data              ,
-        o_cmd_valid  : array_valid           ,
-        o_cmd        : array_cmd             ,
-        o_addr       : array_addr            ,
-        o_bank       : array_bank            ,
-        o_read       : array_read            ,
-        o_sel        : array_sel             ,
-        o_hold       : array_hold            ,
-        o_odt        : array_odt             ,
-        o_data       : array_data            ,
-        o_mask       : array_mask            ,
-        o_dq_enable  : array_dq_enable       ,
-        o_dqs_enable : array_dqs_enable      ,
-        o_dqs_pattern: array_dqs_pattern     ,
-        o_done       : array_done            ,
-        o_found      : array_found           ,
-        o_burst_seen : array_burst_seen      ,
-        o_valid_seen : array_valid_seen      ,
-        o_match0     : array_match0          ,
-        o_match1     : array_match1          ,
-        o_pass_gate0 : array_pass_gate0      ,
-        o_pass_gate1 : array_pass_gate1      ,
-        o_first_raw0 : array_first_raw0      ,
-        o_first_raw1 : array_first_raw1      ,
-        o_raw0       : array_raw0            ,
-        o_raw1       : array_raw1            ,
+        i_clk         : ctrl_clk              ,
+        i_rst         : ready_reset           ,
+        i_enable      : done && RUN_ARRAY != 0,
+        i_burst       : phy_burst             ,
+        i_valid       : phy_valid             ,
+        i_data        : phy_data              ,
+        o_cmd_valid   : array_valid           ,
+        o_cmd         : array_cmd             ,
+        o_addr        : array_addr            ,
+        o_bank        : array_bank            ,
+        o_read        : array_read            ,
+        o_sel         : array_sel             ,
+        o_hold        : array_hold            ,
+        o_odt         : array_odt             ,
+        o_data        : array_data            ,
+        o_mask        : array_mask            ,
+        o_dq_enable   : array_dq_enable       ,
+        o_dqs_enable  : array_dqs_enable      ,
+        o_dqs_pattern : array_dqs_pattern     ,
+        o_done        : array_done            ,
+        o_found       : array_found           ,
+        o_burst_seen  : array_burst_seen      ,
+        o_valid_seen  : array_valid_seen      ,
+        o_match0      : array_match0          ,
+        o_match1      : array_match1          ,
+        o_pass_gate0  : array_pass_gate0      ,
+        o_pass_gate1  : array_pass_gate1      ,
+        o_change_gate0: array_change_gate0    ,
+        o_change_gate1: array_change_gate1    ,
+        o_first_raw0  : array_first_raw0      ,
+        o_first_raw1  : array_first_raw1      ,
+        o_raw0        : array_raw0            ,
+        o_raw1        : array_raw1            ,
     );
     inst delay_stepper: DdrReadDelayStepper (
         i_clk   : ctrl_clk                                                  ,
@@ -474,9 +480,21 @@ module TangDdrInitProbe #(
                     sweep_pattern1
                 ;
                 pattern1_ref  = pattern1_meta;
-                raw0_meta     = if RUN_ARRAY != 0 ? array_raw0 : sweep_pattern0;
+                raw0_meta     = if ARRAY_SCAN != 0 ?
+                    array_change_gate0
+                : if RUN_ARRAY != 0 ?
+                    array_raw0
+                :
+                    sweep_pattern0
+                ;
                 raw0_ref      = raw0_meta;
-                raw1_meta     = if RUN_ARRAY != 0 ? array_raw1 : sweep_pattern1;
+                raw1_meta     = if ARRAY_SCAN != 0 ?
+                    array_change_gate1
+                : if RUN_ARRAY != 0 ?
+                    array_raw1
+                :
+                    sweep_pattern1
+                ;
                 raw1_ref      = raw1_meta;
             }
         }

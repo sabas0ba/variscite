@@ -5,41 +5,44 @@
 /// resets DRAM when finished.
 module DdrArrayProbe #(
     param GATE_SCAN: u32 = 0,
+    param SAME_DATA: u32 = 0,
 ) (
-    i_clk        : input  clock     ,
-    i_rst        : input  reset     ,
-    i_enable     : input  logic     ,
-    i_burst      : input  logic<2>  ,
-    i_valid      : input  logic<2>  ,
-    i_data       : input  logic<128>,
-    o_cmd_valid  : output logic     ,
-    o_cmd        : output logic<3>  ,
-    o_addr       : output logic<14> ,
-    o_bank       : output logic<3>  ,
-    o_read       : output logic<8>  ,
-    o_sel        : output logic<6>  ,
-    o_hold       : output logic<2>  ,
-    o_odt        : output logic<4>  ,
-    o_data       : output logic<128>,
-    o_mask       : output logic<16> ,
-    o_dq_enable  : output logic<4>  ,
-    o_dqs_enable : output logic<4>  ,
-    o_dqs_pattern: output logic<8>  ,
-    o_done       : output logic     ,
-    o_found      : output logic     ,
-    o_burst_seen : output logic<2>  ,
-    o_valid_seen : output logic<2>  ,
-    o_match0     : output logic<8>  ,
-    o_match1     : output logic<8>  ,
-    o_pass_gate0 : output logic<8>  ,
-    o_pass_gate1 : output logic<8>  ,
-    o_first_raw0 : output logic<8>  ,
-    o_first_raw1 : output logic<8>  ,
-    o_raw0       : output logic<8>  ,
-    o_raw1       : output logic<8>  ,
+    i_clk         : input  clock     ,
+    i_rst         : input  reset     ,
+    i_enable      : input  logic     ,
+    i_burst       : input  logic<2>  ,
+    i_valid       : input  logic<2>  ,
+    i_data        : input  logic<128>,
+    o_cmd_valid   : output logic     ,
+    o_cmd         : output logic<3>  ,
+    o_addr        : output logic<14> ,
+    o_bank        : output logic<3>  ,
+    o_read        : output logic<8>  ,
+    o_sel         : output logic<6>  ,
+    o_hold        : output logic<2>  ,
+    o_odt         : output logic<4>  ,
+    o_data        : output logic<128>,
+    o_mask        : output logic<16> ,
+    o_dq_enable   : output logic<4>  ,
+    o_dqs_enable  : output logic<4>  ,
+    o_dqs_pattern : output logic<8>  ,
+    o_done        : output logic     ,
+    o_found       : output logic     ,
+    o_burst_seen  : output logic<2>  ,
+    o_valid_seen  : output logic<2>  ,
+    o_match0      : output logic<8>  ,
+    o_match1      : output logic<8>  ,
+    o_pass_gate0  : output logic<8>  ,
+    o_pass_gate1  : output logic<8>  ,
+    o_change_gate0: output logic<8>  ,
+    o_change_gate1: output logic<8>  ,
+    o_first_raw0  : output logic<8>  ,
+    o_first_raw1  : output logic<8>  ,
+    o_raw0        : output logic<8>  ,
+    o_raw1        : output logic<8>  ,
 ) {
     const DATA_A: logic<128> = 128'ha55a_5aa5_c33c_3cc3_9669_6996_f00f_0ff0;
-    const DATA_B: logic<128> = ~DATA_A;
+    const DATA_B: logic<128> = if SAME_DATA != 0 ? DATA_A : ~DATA_A;
     const LANE0 : logic<128> = 128'h00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff;
     const LANE1 : logic<128> = ~LANE0;
     enum State: logic<4>   {
@@ -70,6 +73,11 @@ module DdrArrayProbe #(
     var bit_match0       : logic<6>  ;
     var pass_gate0       : logic<8>  ;
     var pass_gate1       : logic<8>  ;
+    var change_gate0     : logic<8>  ;
+    var change_gate1     : logic<8>  ;
+    var first_valid      : logic<2>  ;
+    var first_elapsed0   : logic<4>  ;
+    var first_elapsed1   : logic<4>  ;
     var burst_seen       : logic<2>  ;
     var valid_seen       : logic<2>  ;
     var raw0             : logic<8>  ;
@@ -100,8 +108,8 @@ module DdrArrayProbe #(
         previous_data[120], previous_data[104], previous_data[88], previous_data[72], previous_data[56],
         previous_data[40], previous_data[24], previous_data[8]
     };
-    let expected_pattern0: logic<8>   = if state == State::sample1 ? 8'ha5 : 8'h5a;
-    let expected_pattern1: logic<8>   = if state == State::sample1 ? 8'h5a : 8'ha5;
+    let expected_pattern0: logic<8>   = if state == State::sample1 && SAME_DATA == 0 ? 8'ha5 : 8'h5a;
+    let expected_pattern1: logic<8>   = if state == State::sample1 && SAME_DATA == 0 ? 8'h5a : 8'ha5;
     let bit_observed     : logic<6>   = bit_seen
         | {
             previous_valid[1] && pattern1 == expected_pattern1, i_valid[1] && pattern1 == expected_pattern1,
@@ -123,6 +131,11 @@ module DdrArrayProbe #(
             bit_match0     = 0;
             pass_gate0     = 0;
             pass_gate1     = 0;
+            change_gate0   = 0;
+            change_gate1   = 0;
+            first_valid    = 0;
+            first_elapsed0 = 0;
+            first_elapsed1 = 0;
             burst_seen     = 0;
             valid_seen     = 0;
             raw0           = 0;
@@ -142,6 +155,11 @@ module DdrArrayProbe #(
             bit_match0     = 0;
             pass_gate0     = 0;
             pass_gate1     = 0;
+            change_gate0   = 0;
+            change_gate1   = 0;
+            first_valid    = 0;
+            first_elapsed0 = 0;
+            first_elapsed1 = 0;
             burst_seen     = 0;
             valid_seen     = 0;
             raw0           = 0;
@@ -190,6 +208,7 @@ module DdrArrayProbe #(
                     previous_valid = 0;
                     seen_matches   = 0;
                     bit_seen       = 0;
+                    first_valid    = 0;
                     state          = State::sample0;
                 }
                 State::sample0: {
@@ -200,10 +219,14 @@ module DdrArrayProbe #(
                     burst_seen     = burst_seen | i_burst;
                     valid_seen     = valid_seen | i_valid;
                     if i_valid[0] {
-                        first_raw0 = pattern0;
+                        first_raw0     = pattern0;
+                        first_valid[0] = 1'b1;
+                        first_elapsed0 = elapsed;
                     }
                     if i_valid[1] {
-                        first_raw1 = pattern1;
+                        first_raw1     = pattern1;
+                        first_valid[1] = 1'b1;
+                        first_elapsed1 = elapsed;
                     }
                     if elapsed == 11 {
                         match0     = observed;
@@ -230,9 +253,15 @@ module DdrArrayProbe #(
                     valid_seen     = valid_seen | i_valid;
                     if i_valid[0] {
                         raw0 = pattern0;
+                        if GATE_SCAN != 0 && first_valid[0] && elapsed == first_elapsed0 && pattern0 != first_raw0 {
+                            change_gate0[gate_index] = 1'b1;
+                        }
                     }
                     if i_valid[1] {
                         raw1 = pattern1;
+                        if GATE_SCAN != 0 && first_valid[1] && elapsed == first_elapsed1 && pattern1 != first_raw1 {
+                            change_gate1[gate_index] = 1'b1;
+                        }
                     }
                     if elapsed == 11 {
                         match1 = observed;
@@ -333,20 +362,22 @@ module DdrArrayProbe #(
             default: {}
         }
     }
-    assign o_done       = state == State::done;
-    assign o_found      = if GATE_SCAN != 0 ?
+    assign o_done         = state == State::done;
+    assign o_found        = if GATE_SCAN != 0 ?
         (|pass_gate0) && (|pass_gate1)
     :
         (|(match0[2:0] & match1[2:0])) && (|(match0[5:3] & match1[5:3]))
     ;
-    assign o_burst_seen = burst_seen;
-    assign o_valid_seen = valid_seen;
-    assign o_match0     = {2'b0, match0};
-    assign o_match1     = {2'b0, match1};
-    assign o_pass_gate0 = pass_gate0;
-    assign o_pass_gate1 = pass_gate1;
-    assign o_first_raw0 = first_raw0;
-    assign o_first_raw1 = first_raw1;
-    assign o_raw0       = raw0;
-    assign o_raw1       = raw1;
+    assign o_burst_seen   = burst_seen;
+    assign o_valid_seen   = valid_seen;
+    assign o_match0       = {2'b0, match0};
+    assign o_match1       = {2'b0, match1};
+    assign o_pass_gate0   = pass_gate0;
+    assign o_pass_gate1   = pass_gate1;
+    assign o_change_gate0 = change_gate0;
+    assign o_change_gate1 = change_gate1;
+    assign o_first_raw0   = first_raw0;
+    assign o_first_raw1   = first_raw1;
+    assign o_raw0         = raw0;
+    assign o_raw1         = raw1;
 }
