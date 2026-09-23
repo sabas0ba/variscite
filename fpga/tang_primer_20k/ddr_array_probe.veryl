@@ -1,0 +1,293 @@
+/// One short DDR3 array transaction. WRITE commands occupy CA slot 3 for
+/// CWL=5; READ commands occupy slot 2 for CL=6. The data burst occupies one
+/// controller cycle, with a one-CK DQS preamble and postamble. This probe
+/// deliberately leaves refresh and data-eye training to later stages and
+/// resets DRAM when finished.
+module DdrArrayProbe (
+    i_clk        : input  clock     ,
+    i_rst        : input  reset     ,
+    i_enable     : input  logic     ,
+    i_burst      : input  logic<2>  ,
+    i_valid      : input  logic<2>  ,
+    i_data       : input  logic<128>,
+    o_cmd_valid  : output logic     ,
+    o_cmd        : output logic<3>  ,
+    o_addr       : output logic<14> ,
+    o_bank       : output logic<3>  ,
+    o_read       : output logic<8>  ,
+    o_sel        : output logic<6>  ,
+    o_hold       : output logic<2>  ,
+    o_odt        : output logic<4>  ,
+    o_data       : output logic<128>,
+    o_mask       : output logic<16> ,
+    o_dq_enable  : output logic<4>  ,
+    o_dqs_enable : output logic<4>  ,
+    o_dqs_pattern: output logic<8>  ,
+    o_done       : output logic     ,
+    o_found      : output logic     ,
+    o_burst_seen : output logic<2>  ,
+    o_valid_seen : output logic<2>  ,
+    o_match0     : output logic<8>  ,
+    o_match1     : output logic<8>  ,
+    o_first_raw0 : output logic<8>  ,
+    o_first_raw1 : output logic<8>  ,
+    o_raw0       : output logic<8>  ,
+    o_raw1       : output logic<8>  ,
+) {
+    const DATA_A: logic<128> = 128'ha55a_5aa5_c33c_3cc3_9669_6996_f00f_0ff0;
+    const DATA_B: logic<128> = ~DATA_A;
+    const LANE0 : logic<128> = 128'h00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff;
+    const LANE1 : logic<128> = ~LANE0;
+    enum State: logic<4>   {
+        idle,
+        activate,
+        act_wait,
+        write0,
+        wave0,
+        write1,
+        wave1,
+        read0,
+        sample0,
+        read1,
+        sample1,
+        precharge,
+        pre_wait,
+        done,
+    }
+    var state         : State     ;
+    var elapsed       : logic<4>  ;
+    var previous_data : logic<128>;
+    var previous_valid: logic<2>  ;
+    var seen_matches  : logic<6>  ;
+    var match0        : logic<6>  ;
+    var match1        : logic<6>  ;
+    var burst_seen    : logic<2>  ;
+    var valid_seen    : logic<2>  ;
+    var raw0          : logic<8>  ;
+    var raw1          : logic<8>  ;
+    var first_raw0    : logic<8>  ;
+    var first_raw1    : logic<8>  ;
+    let expected      : logic<128> = if state == State::sample1 ? DATA_B : DATA_A;
+    let observed      : logic<6>   = seen_matches
+        | {
+            previous_valid[1] && ((i_data & LANE1) == (expected & LANE1)),
+            i_valid[1] && ((i_data & LANE1) == (expected & LANE1)),
+            i_valid[1] && ((previous_data & LANE1) == (expected & LANE1)),
+            previous_valid[0] && ((i_data & LANE0) == (expected & LANE0)),
+            i_valid[0] && ((i_data & LANE0) == (expected & LANE0)),
+            i_valid[0] && ((previous_data & LANE0) == (expected & LANE0)),
+        };
+    let pattern0      : logic<8>   = {
+        i_data[112], i_data[96], i_data[80], i_data[64], i_data[48], i_data[32], i_data[16], i_data[0]
+    };
+    let pattern1      : logic<8>   = {
+        i_data[120], i_data[104], i_data[88], i_data[72], i_data[56], i_data[40], i_data[24], i_data[8]
+    };
+
+    always_ff {
+        if_reset {
+            state          = State::idle;
+            elapsed        = 0;
+            previous_data  = 0;
+            previous_valid = 0;
+            seen_matches   = 0;
+            match0         = 0;
+            match1         = 0;
+            burst_seen     = 0;
+            valid_seen     = 0;
+            raw0           = 0;
+            raw1           = 0;
+            first_raw0     = 0;
+            first_raw1     = 0;
+        } else if !i_enable {
+            state          = State::idle;
+            elapsed        = 0;
+            previous_data  = 0;
+            previous_valid = 0;
+            seen_matches   = 0;
+            match0         = 0;
+            match1         = 0;
+            burst_seen     = 0;
+            valid_seen     = 0;
+            raw0           = 0;
+            raw1           = 0;
+            first_raw0     = 0;
+            first_raw1     = 0;
+        } else {
+            case state {
+                State::idle    : state = State::activate;
+                State::activate: {
+                    elapsed = 0;
+                    state   = State::act_wait;
+                }
+                State::act_wait: {
+                    if elapsed == 2 {
+                        state = State::write0;
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::write0: {
+                    elapsed = 0;
+                    state   = State::wave0;
+                }
+                State::wave0: {
+                    if elapsed == 5 {
+                        state = State::write1;
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::write1: {
+                    elapsed = 0;
+                    state   = State::wave1;
+                }
+                State::wave1: {
+                    if elapsed == 8 {
+                        state = State::read0;
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::read0: {
+                    elapsed        = 0;
+                    previous_data  = 0;
+                    previous_valid = 0;
+                    seen_matches   = 0;
+                    state          = State::sample0;
+                }
+                State::sample0: {
+                    previous_data  = i_data;
+                    previous_valid = i_valid;
+                    seen_matches   = observed;
+                    burst_seen     = burst_seen | i_burst;
+                    valid_seen     = valid_seen | i_valid;
+                    if i_valid[0] {
+                        first_raw0 = pattern0;
+                    }
+                    if i_valid[1] {
+                        first_raw1 = pattern1;
+                    }
+                    if elapsed == 11 {
+                        match0 = observed;
+                        state  = State::read1;
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::read1: {
+                    elapsed        = 0;
+                    previous_data  = 0;
+                    previous_valid = 0;
+                    seen_matches   = 0;
+                    state          = State::sample1;
+                }
+                State::sample1: {
+                    previous_data  = i_data;
+                    previous_valid = i_valid;
+                    seen_matches   = observed;
+                    burst_seen     = burst_seen | i_burst;
+                    valid_seen     = valid_seen | i_valid;
+                    if i_valid[0] {
+                        raw0 = pattern0;
+                    }
+                    if i_valid[1] {
+                        raw1 = pattern1;
+                    }
+                    if elapsed == 11 {
+                        match1 = observed;
+                        state  = State::precharge;
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::precharge: {
+                    elapsed = 0;
+                    state   = State::pre_wait;
+                }
+                State::pre_wait: {
+                    if elapsed == 2 {
+                        state = State::done;
+                    } else {
+                        elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::done: {}
+                default: state = State::idle;
+            }
+        }
+    }
+    always_comb {
+        o_cmd_valid   = 1'b0;
+        o_cmd         = 3'b111;
+        o_addr        = 0;
+        o_bank        = 0;
+        o_read        = 0;
+        o_sel         = {3'd4, 3'd0};
+        o_hold        = 0;
+        o_odt         = 0;
+        o_data        = 0;
+        o_mask        = 16'hffff;
+        o_dq_enable   = 0;
+        o_dqs_enable  = 0;
+        o_dqs_pattern = 0;
+        case state {
+            State::activate: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b011;
+            }
+            State::write0: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b100;
+                o_odt       = 4'b1111;
+            }
+            State::write1: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b100;
+                o_addr      = 14'd8;
+                o_odt       = 4'b1111;
+            }
+            State::wave0, State::wave1: {
+                o_odt = 4'b1111;
+                if elapsed == 0 {
+                    o_dqs_enable = 4'b1000;
+                } else if elapsed == 1 {
+                    o_data        = if state == State::wave0 ? DATA_A : DATA_B;
+                    o_mask        = 0;
+                    o_dq_enable   = 4'b1111;
+                    o_dqs_enable  = 4'b1111;
+                    o_dqs_pattern = 8'haa;
+                } else if elapsed == 2 {
+                    o_dqs_enable = 4'b0001;
+                }
+            }
+            State::read0, State::read1: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b101;
+                o_addr      = if state == State::read1 ? 14'd8 : 14'd0;
+                o_hold      = 2'b11;
+            }
+            State::sample0, State::sample1: {
+                if elapsed == 1 {
+                    o_read = 8'hff;
+                }
+            }
+            State::precharge: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b010;
+                o_addr      = 14'h0400;
+            }
+            default: {}
+        }
+    }
+    assign o_done       = state == State::done;
+    assign o_found      = (|(match0[2:0] & match1[2:0])) && (|(match0[5:3] & match1[5:3]));
+    assign o_burst_seen = burst_seen;
+    assign o_valid_seen = valid_seen;
+    assign o_match0     = {2'b0, match0};
+    assign o_match1     = {2'b0, match1};
+    assign o_first_raw0 = first_raw0;
+    assign o_first_raw1 = first_raw1;
+    assign o_raw0       = raw0;
+    assign o_raw1       = raw1;
+}

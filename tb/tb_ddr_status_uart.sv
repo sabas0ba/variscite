@@ -1,11 +1,12 @@
 module tb_ddr_status_uart;
     reg clk=0, rst=1, extra=1;
+    reg [3:0] status=6;
     wire tx;
     byte actual, expected;
     always #5 clk=~clk;
 
     rv32ima_TangDdrStatusUart #(.GAP_BITS(8)) dut (
-        .i_clk(clk), .i_rst(rst), .i_status(4'd6),
+        .i_clk(clk), .i_rst(rst), .i_status(status),
         .i_debug_enable(1'b1), .i_debug_extra(extra),
         .i_debug0(8'h12), .i_debug1(8'hab),
         .i_debug2(8'hcd), .i_debug3(8'hef), .o_tx(tx)
@@ -43,10 +44,11 @@ module tb_ddr_status_uart;
                 $fatal(1,"extended UART byte %0d: got %c expected %c",i,actual,expected);
         end
         extra=0;
+        status=9;
         for (int i=0; i<5; i++) begin
             read_byte(actual);
             case (i)
-                0: expected="M";
+                0: expected="A";
                 1: expected="1";
                 2: expected="2";
                 3: expected="A";
@@ -55,7 +57,7 @@ module tb_ddr_status_uart;
             if (actual!==expected)
                 $fatal(1,"ordinary UART byte %0d: got %c expected %c",i,actual,expected);
         end
-        $display("DDR status UART PASS: 9-byte delay and 5-byte MPR frames");
+        $display("DDR status UART PASS: 9-byte delay and 5-byte array frames");
         $finish;
     end
     initial begin

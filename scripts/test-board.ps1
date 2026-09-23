@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -25,6 +25,7 @@ $images = @{
     DdrMpr = 'sim/fpga/ddr_mpr/impl/pnr/ddr_mpr.fs'
     DdrMprDelay = 'sim/fpga/ddr_mpr_delay/impl/pnr/ddr_mpr_delay.fs'
     DdrMprAlign = 'sim/fpga/ddr_mpr_align/impl/pnr/ddr_mpr_align.fs'
+    DdrArray = 'sim/fpga/ddr_array/impl/pnr/ddr_array.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -119,6 +120,14 @@ try {
                 Select-Object -Last 3)
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'M' }).Count -eq 0
+        }
+        DdrArray {
+            # A proves both columns matched in the same cycle position per lane.
+            # Four bytes report DQ0/DQ8 at RVALID for columns 0 and 8.
+            $frames = @([regex]::Matches($received, '[PLIRABVE][0-9A-F]{8}') |
+                Select-Object -Last 3)
+            $passed = $frames.Count -eq 3 -and
+                @($frames | Where-Object { $_.Value[0] -ne 'A' }).Count -eq 0
         }
         { $_ -in @('Soc', 'LcdSoc') } {
             # Ignore output from the old SRAM image before the new boot banner.

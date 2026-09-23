@@ -222,6 +222,8 @@ MPR の既知パターンによる DQ 受信診断と配置依存の実機結果
 DRAM アレイの読み書きは未達成であり、Linux 用 RAM としては使用できない。
 RVALID と DQ の前後 1 controller cycle の比較は
 [DDR3 MPR サイクル位置診断](ddr-mpr-align.md) に記録した。
+2 列への反転パターン書込みと読戻しの初期結果は
+[DDR3 アレイ書込み・読戻し診断](ddr-array.md) に記録した。
 
 ## 一次資料
 
