@@ -1,4 +1,7 @@
-module tb_ddr_array_gate_scan #(parameter int unsigned SAME_DATA=0);
+module tb_ddr_array_gate_scan #(
+    parameter int unsigned SAME_DATA=0,
+    parameter int unsigned EARLY_GATE=0
+);
     localparam [127:0] DATA_A = 128'ha55a_5aa5_c33c_3cc3_9669_6996_f00f_0ff0;
     localparam [127:0] DATA_B = SAME_DATA!=0 ? DATA_A : ~DATA_A;
     reg clk=0, rst=1, enable=0, stale_second=0;
@@ -14,7 +17,7 @@ module tb_ddr_array_gate_scan #(parameter int unsigned SAME_DATA=0);
     integer read_count=0, write_count=0, pre_count=0;
     always #5 clk=~clk;
 
-    rv32ima_DdrArrayProbe #(.GATE_SCAN(1), .SAME_DATA(SAME_DATA)) dut (
+    rv32ima_DdrArrayProbe #(.GATE_SCAN(1), .SAME_DATA(SAME_DATA), .EARLY_GATE(EARLY_GATE)) dut (
         .i_clk(clk), .i_rst(rst), .i_enable(enable),
         .i_burst(burst), .i_valid(valid), .i_data(data),
         .o_cmd_valid(cmd_valid), .o_cmd(cmd), .o_addr(addr), .o_bank(bank),
@@ -71,7 +74,7 @@ module tb_ddr_array_gate_scan #(parameter int unsigned SAME_DATA=0);
                 $fatal(1,"WRITE burst data mismatch");
             if (read_gate!=0) begin
                 if (read_gate!=8'hff || read_count==0 ||
-                    cycle-read_cycle!=((read_count-1)/2)+2)
+                    cycle-read_cycle!=((read_count-1)/2)+(EARLY_GATE!=0 ? 1 : 2))
                     $fatal(1,"gate schedule at read %0d",read_count);
                 // Only DQ0 at candidate 3 and DQ8 at candidate 5 are valid.
                 if ((read_count-1)/2==3) begin

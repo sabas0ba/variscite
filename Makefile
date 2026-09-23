@@ -94,7 +94,25 @@ coverage:
 	    logs/cov/*.dat 2>&1 | tee logs/cov/summary.txt
 
 # --- FPGA ports ----------------------------------------------------------
-.PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-gate-test ddr-array-same-test ddr-timeline-test ddr-status-uart-test
+.PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test ddr-timeline-test ddr-status-uart-test
+
+ddr-array-early-scan-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -GEARLY_GATE=1 --top-module tb_ddr_array_gate_scan \
+	    -Mdir sim/obj_ddr_array_early_scan -o tb_ddr_array_early_scan \
+	    target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_gate_scan.sv
+	sim/obj_ddr_array_early_scan/tb_ddr_array_early_scan
+
+ddr-array-early-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -DSIMPLE_DATA -DEARLY_GATE --top-module tb_ddr_array_probe \
+	    -Mdir sim/obj_ddr_array_early -o tb_ddr_array_early \
+	    target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_probe.sv
+	sim/obj_ddr_array_early/tb_ddr_array_early
+
+ddr-array-simple-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -DSIMPLE_DATA --top-module tb_ddr_array_probe \
+	    -Mdir sim/obj_ddr_array_simple -o tb_ddr_array_simple \
+	    target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_probe.sv
+	sim/obj_ddr_array_simple/tb_ddr_array_simple
 
 ddr-timeline-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_timeline \

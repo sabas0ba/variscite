@@ -1,5 +1,16 @@
 module tb_ddr_array_probe;
+`ifdef SIMPLE_DATA
+    localparam [127:0] DATA_A = 128'b0;
+    localparam [7:0] EXPECTED_MATCH0 = 8'h3f;
+`else
     localparam [127:0] DATA_A = 128'ha55a_5aa5_c33c_3cc3_9669_6996_f00f_0ff0;
+    localparam [7:0] EXPECTED_MATCH0 = 8'h12;
+`endif
+`ifdef EARLY_GATE
+    localparam [31:0] EARLY = 1;
+`else
+    localparam [31:0] EARLY = 0;
+`endif
     localparam [127:0] DATA_B = ~DATA_A;
     reg clk=0, rst=1, enable=0, stale_second=0;
     reg [1:0] valid=0, burst=0;
@@ -18,7 +29,14 @@ module tb_ddr_array_probe;
     integer write_cycle=-100, read_cycle=-100, pending=0;
     always #5 clk=~clk;
 
-    rv32ima_DdrArrayProbe dut (
+    rv32ima_DdrArrayProbe #(
+`ifdef SIMPLE_DATA
+        .SIMPLE_DATA(1),
+`else
+        .SIMPLE_DATA(0),
+`endif
+        .EARLY_GATE(EARLY)
+    ) dut (
         .i_clk(clk), .i_rst(rst), .i_enable(enable),
         .i_burst(burst), .i_valid(valid), .i_data(data),
         .o_cmd_valid(cmd_valid), .o_cmd(cmd), .o_addr(addr), .o_bank(bank),
@@ -88,7 +106,7 @@ module tb_ddr_array_probe;
             if (cycle-write_cycle==3 && (dqs_enable!=4'b0001 || dq_enable!=0))
                 $fatal(1,"DQS postamble timing");
             if (read_gate!=0 && (read_gate!=8'hff || sel!={3'd4,3'd0} ||
-                                  cycle-read_cycle!=2 || dq_enable!=0))
+                                  cycle-read_cycle!=(EARLY != 0 ? 1 : 2) || dq_enable!=0))
                 $fatal(1,"READ gate timing");
             if (done && (cmd_valid || dq_enable!=0 || dqs_enable!=0))
                 $fatal(1,"activity after completion");
@@ -103,7 +121,7 @@ module tb_ddr_array_probe;
             if (done) begin
                 if (command_index!=6 || write_count!=2 || read_count!=2 ||
                     valid_seen!=2'b11 || burst_seen!=2'b11 ||
-                    match0!=8'h12 || match1!=(stale ? 8'h00 : 8'h12) ||
+                    match0!=EXPECTED_MATCH0 || match1!=(stale ? 8'h00 : 8'h12) ||
                     found==stale ||
                     (stale ? (first_raw0!=raw0 || first_raw1!=raw1)
                            : (first_raw0==raw0 || first_raw1==raw1)))

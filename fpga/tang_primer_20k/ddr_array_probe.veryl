@@ -4,8 +4,10 @@
 /// deliberately leaves refresh and data-eye training to later stages and
 /// resets DRAM when finished.
 module DdrArrayProbe #(
-    param GATE_SCAN: u32 = 0,
-    param SAME_DATA: u32 = 0,
+    param GATE_SCAN  : u32 = 0    ,
+    param SAME_DATA  : u32 = 0    ,
+    param SIMPLE_DATA: u32 = 0    ,
+    param EARLY_GATE : u32 = 32'd0,
 ) (
     i_clk         : input  clock     ,
     i_rst         : input  reset     ,
@@ -45,7 +47,7 @@ module DdrArrayProbe #(
     o_raw0        : output logic<8>  ,
     o_raw1        : output logic<8>  ,
 ) {
-    const DATA_A: logic<128> = 128'ha55a_5aa5_c33c_3cc3_9669_6996_f00f_0ff0;
+    const DATA_A: logic<128> = if SIMPLE_DATA != 0 ? 128'b0 : 128'ha55a_5aa5_c33c_3cc3_9669_6996_f00f_0ff0;
     const DATA_B: logic<128> = if SAME_DATA != 0 ? DATA_A : ~DATA_A;
     const LANE0 : logic<128> = 128'h00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff;
     const LANE1 : logic<128> = ~LANE0;
@@ -116,8 +118,20 @@ module DdrArrayProbe #(
         previous_data[120], previous_data[104], previous_data[88], previous_data[72], previous_data[56],
         previous_data[40], previous_data[24], previous_data[8]
     };
-    let expected_pattern0: logic<8>   = if state == State::sample1 && SAME_DATA == 0 ? 8'ha5 : 8'h5a;
-    let expected_pattern1: logic<8>   = if state == State::sample1 && SAME_DATA == 0 ? 8'h5a : 8'ha5;
+    let expected_pattern0: logic<8>   = if SIMPLE_DATA != 0 ?
+        (if state == State::sample1 && SAME_DATA == 0 ? 8'hff : 8'h00)
+    : if state == State::sample1 && SAME_DATA == 0 ?
+        8'ha5
+    :
+        8'h5a
+    ;
+    let expected_pattern1: logic<8>   = if SIMPLE_DATA != 0 ?
+        (if state == State::sample1 && SAME_DATA == 0 ? 8'hff : 8'h00)
+    : if state == State::sample1 && SAME_DATA == 0 ?
+        8'h5a
+    :
+        8'ha5
+    ;
     let bit_observed     : logic<6>   = bit_seen
         | {
             previous_valid[1] && pattern1 == expected_pattern1, i_valid[1] && pattern1 == expected_pattern1,
@@ -380,7 +394,14 @@ module DdrArrayProbe #(
                 o_hold      = 2'b11;
             }
             State::sample0, State::sample1: {
-                if elapsed == (if GATE_SCAN != 0 ? {1'b0, gate_index} + 4'd1 : 4'd1) {
+                if elapsed
+                    == (if GATE_SCAN != 0 ?
+                        {1'b0, gate_index} + (if EARLY_GATE != 0 ? 4'd0 : 4'd1)
+                    : if EARLY_GATE != 0 ?
+                        4'd0
+                    :
+                        4'd1
+                    ) {
                     o_read = 8'hff;
                 }
             }

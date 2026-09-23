@@ -102,6 +102,8 @@ module TangDdrInitProbe #(
     param ARRAY_MATCH   : u32 = 0,
     param ARRAY_FLAGS   : u32 = 0,
     param ARRAY_TIMELINE: u32 = 0,
+    param ARRAY_SIMPLE  : u32 = 0,
+    param ARRAY_EARLY   : u32 = 0,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -362,8 +364,10 @@ module TangDdrInitProbe #(
         o_align_pass1 : sweep_align_pass1                  ,
     );
     inst array: DdrArrayProbe #(
-        GATE_SCAN: ARRAY_SCAN,
-        SAME_DATA: ARRAY_SAME,
+        GATE_SCAN  : ARRAY_SCAN  ,
+        SAME_DATA  : ARRAY_SAME  ,
+        SIMPLE_DATA: ARRAY_SIMPLE,
+        EARLY_GATE : ARRAY_EARLY ,
     ) (
         i_clk         : ctrl_clk              ,
         i_rst         : ready_reset           ,
