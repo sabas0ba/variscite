@@ -26,6 +26,12 @@ USB 再接続後、同じ bitstream を3回ロードできた。いずれも定�
 
 現行 RTL で再構築した反転データ bitstream SHA256 `276d71af8ef69c803fa1d6c8e50f3ba27b5d3b7964e906ce4a1e67869227b620` も `V0000FFFF` となり、LCD 復元は通過した。ログは `logs/board/20260923-163222-DdrArrayScan-*`。同一値と反転値の比較は、書込み値の差が読出し値に反映されている可能性を示す。ただし、対照試験自体がロードごとに `V` と `T` に変動し、期待パターンへの安定した一致がないため、書込み経路や読出しデータアイの合格とは判定しない。
 
+`DdrArrayTrace` は走査を行った後、最後のゲート候補における column 0 の DQ0/DQ8 と column 8 の DQ0/DQ8 の4つの生パターンを UART に出す。反転データ bitstream SHA256 `e143d5a8043168a6f02c300366c0da02df427e357a8faee9a52a8e1d28e9e02f` を2回ロードすると、両回とも `V80404056` だった。最後の候補では column 0 が `80/40`、column 8 が `40/56` で、期待する `5A/A5`、`A5/5A` とは異なる。ログは `logs/board/20260923-164343-DdrArrayTrace-*`、`164421`。両回とも LCD 復元は通過した。この出力は最後の候補だけであり、他の候補の生パターンを示さない。
+
+`DdrArrayMatch` は各候補で期待する DQ0/DQ8 が一致したかを、column 0 の2レーン、column 8 の2レーンの順に独立した4マスクで出す。`DDR_ARRAY_MATCH=1 bash scripts/build_ddr_mpr.sh` で構築し、`-Mode DdrArrayMatch` で測定する。bitstream SHA256 `47868936e02f5edb75a1e78dd79320360c1b4d76ff64e2e3f16e001377fc2822` の3回のロードでは `V00000000`、`V0000FEFF`、`V00000000` だった。2回目だけ column 8 で多数の一致候補を観測した。`FE/FF` は同一の候補で両レーンが一致したことや、column 0 との整合を示さない。ロード間で結果が変わるため、データアイまたは書込み位相の安定値は決められない。ログは `logs/board/20260923-164906-DdrArrayMatch-*`、`164957`、`165041`。初回のJTAGログには FTDI reset 警告があるが、bitstream ロード、UART取得、LCD復元は完了した。3回とも LCD 復元のUART検査は通過した。
+
+次の切り分けには、DQS/DQ/CA の外部波形または FPGA 内部の送受信時刻を同じロード中に観測し、WRITE の CWL 位相と READ の RVALID/IDES8_MEM 出力の対応を確定する必要がある。現在のマスクを校正値に用いない。
+
 安定したゲート位置が見つかってから受信遅延を走査し、全 DQ bit、byte mask、アドレス alias、refresh を検証する。現段階の結果を Linux 用 RAM の設定には使用しない。
 
 ## 一次資料

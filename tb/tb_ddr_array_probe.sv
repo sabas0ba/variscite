@@ -30,6 +30,7 @@ module tb_ddr_array_probe;
         .o_match0(match0), .o_match1(match1),
         .o_pass_gate0(), .o_pass_gate1(),
         .o_change_gate0(), .o_change_gate1(),
+        .o_col0_match0(), .o_col0_match1(), .o_col8_match0(), .o_col8_match1(),
         .o_first_raw0(first_raw0), .o_first_raw1(first_raw1),
         .o_raw0(raw0), .o_raw1(raw1)
     );

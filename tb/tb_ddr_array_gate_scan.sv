@@ -8,6 +8,7 @@ module tb_ddr_array_gate_scan #(parameter int unsigned SAME_DATA=0);
     wire [2:0] cmd, bank;
     wire [13:0] addr;
     wire [7:0] read_gate, gate0, gate1, change0, change1;
+    wire [7:0] col0_match0, col0_match1, col8_match0, col8_match1;
     wire [127:0] write_data;
     integer cycle=0, read_cycle=-100, write_cycle=-100;
     integer read_count=0, write_count=0, pre_count=0;
@@ -23,6 +24,8 @@ module tb_ddr_array_gate_scan #(parameter int unsigned SAME_DATA=0);
         .o_burst_seen(), .o_valid_seen(), .o_match0(), .o_match1(),
         .o_pass_gate0(gate0), .o_pass_gate1(gate1),
         .o_change_gate0(change0), .o_change_gate1(change1),
+        .o_col0_match0(col0_match0), .o_col0_match1(col0_match1),
+        .o_col8_match0(col8_match0), .o_col8_match1(col8_match1),
         .o_first_raw0(), .o_first_raw1(), .o_raw0(), .o_raw1()
     );
 
@@ -95,6 +98,9 @@ module tb_ddr_array_gate_scan #(parameter int unsigned SAME_DATA=0);
                     gate1!=(stale ? 8'h00 : 8'h20) ||
                     change0!=(stale || SAME_DATA!=0 ? 8'h00 : 8'h08) ||
                     change1!=(stale || SAME_DATA!=0 ? 8'h00 : 8'h20) ||
+                    col0_match0!=8'h08 || col0_match1!=8'h20 ||
+                    col8_match0!=(stale ? 8'h00 : 8'h08) ||
+                    col8_match1!=(stale ? 8'h00 : 8'h20) ||
                     write_count!=2 || read_count!=16 || pre_count!=1)
                     $fatal(1,"gate result mismatch: %h/%h found=%b",gate0,gate1,found);
                 return;

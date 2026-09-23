@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -28,6 +28,8 @@ $images = @{
     DdrArray = 'sim/fpga/ddr_array/impl/pnr/ddr_array.fs'
     DdrArrayScan = 'sim/fpga/ddr_array_scan/impl/pnr/ddr_array_scan.fs'
     DdrArraySame = 'sim/fpga/ddr_array_same/impl/pnr/ddr_array_same.fs'
+    DdrArrayTrace = 'sim/fpga/ddr_array_trace/impl/pnr/ddr_array_trace.fs'
+    DdrArrayMatch = 'sim/fpga/ddr_array_match/impl/pnr/ddr_array_match.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -149,6 +151,21 @@ try {
                 @($frames | Where-Object {
                     $_.Value[0] -notin @('V', 'T') -or $_.Value.Substring(5, 4) -ne '0000'
                 }).Count -eq 0
+        }
+        DdrArrayTrace {
+            # This is an observation mode; T still requires the expected
+            # pattern on both byte lanes at some gate candidate.
+            $frames = @([regex]::Matches($received, '[PLIRTBVE][0-9A-F]{8}') |
+                Select-Object -Last 3)
+            $passed = $frames.Count -eq 3 -and
+                @($frames | Where-Object { $_.Value[0] -ne 'T' }).Count -eq 0
+        }
+        DdrArrayMatch {
+            # Four masks report column 0 DQ0/DQ8 and column 8 DQ0/DQ8.
+            $frames = @([regex]::Matches($received, '[PLIRTBVE][0-9A-F]{8}') |
+                Select-Object -Last 3)
+            $passed = $frames.Count -eq 3 -and
+                @($frames | Where-Object { $_.Value[0] -ne 'T' }).Count -eq 0
         }
         { $_ -in @('Soc', 'LcdSoc') } {
             # Ignore output from the old SRAM image before the new boot banner.

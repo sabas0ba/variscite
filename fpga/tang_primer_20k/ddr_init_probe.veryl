@@ -98,6 +98,8 @@ module TangDdrInitProbe #(
     param RUN_ARRAY     : u32 = 0,
     param ARRAY_SCAN    : u32 = 0,
     param ARRAY_SAME    : u32 = 0,
+    param ARRAY_TRACE   : u32 = 0,
+    param ARRAY_MATCH   : u32 = 0,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -180,6 +182,10 @@ module TangDdrInitProbe #(
     var array_pass_gate1  : 'ctrl      logic           <8>  ;
     var array_change_gate0: 'ctrl      logic           <8>  ;
     var array_change_gate1: 'ctrl      logic           <8>  ;
+    var array_col0_match0 : 'ctrl      logic           <8>  ;
+    var array_col0_match1 : 'ctrl      logic           <8>  ;
+    var array_col8_match0 : 'ctrl      logic           <8>  ;
+    var array_col8_match1 : 'ctrl      logic           <8>  ;
     var array_first_raw0  : 'ctrl      logic           <8>  ;
     var array_first_raw1  : 'ctrl      logic           <8>  ;
     var array_raw0        : 'ctrl      logic           <8>  ;
@@ -371,6 +377,10 @@ module TangDdrInitProbe #(
         o_pass_gate1  : array_pass_gate1      ,
         o_change_gate0: array_change_gate0    ,
         o_change_gate1: array_change_gate1    ,
+        o_col0_match0 : array_col0_match0     ,
+        o_col0_match1 : array_col0_match1     ,
+        o_col8_match0 : array_col8_match0     ,
+        o_col8_match1 : array_col8_match1     ,
         o_first_raw0  : array_first_raw0      ,
         o_first_raw1  : array_first_raw1      ,
         o_raw0        : array_raw0            ,
@@ -452,7 +462,11 @@ module TangDdrInitProbe #(
                 found_pipe    = {found_pipe[0], probe_found};
                 burst_pipe    = {burst_pipe[0], probe_burst == 2'b11};
                 valid_pipe    = {valid_pipe[0], probe_valid_seen == 2'b11};
-                pattern0_meta = if ARRAY_SCAN != 0 ?
+                pattern0_meta = if ARRAY_MATCH != 0 ?
+                    array_col0_match0
+                : if ARRAY_TRACE != 0 ?
+                    array_first_raw0
+                : if ARRAY_SCAN != 0 ?
                     array_pass_gate0
                 : if RUN_ARRAY != 0 ?
                     array_first_raw0
@@ -466,7 +480,11 @@ module TangDdrInitProbe #(
                     sweep_pattern0
                 ;
                 pattern0_ref  = pattern0_meta;
-                pattern1_meta = if ARRAY_SCAN != 0 ?
+                pattern1_meta = if ARRAY_MATCH != 0 ?
+                    array_col0_match1
+                : if ARRAY_TRACE != 0 ?
+                    array_first_raw1
+                : if ARRAY_SCAN != 0 ?
                     array_pass_gate1
                 : if RUN_ARRAY != 0 ?
                     array_first_raw1
@@ -480,7 +498,11 @@ module TangDdrInitProbe #(
                     sweep_pattern1
                 ;
                 pattern1_ref  = pattern1_meta;
-                raw0_meta     = if ARRAY_SCAN != 0 ?
+                raw0_meta     = if ARRAY_MATCH != 0 ?
+                    array_col8_match0
+                : if ARRAY_TRACE != 0 ?
+                    array_raw0
+                : if ARRAY_SCAN != 0 ?
                     array_change_gate0
                 : if RUN_ARRAY != 0 ?
                     array_raw0
@@ -488,7 +510,11 @@ module TangDdrInitProbe #(
                     sweep_pattern0
                 ;
                 raw0_ref      = raw0_meta;
-                raw1_meta     = if ARRAY_SCAN != 0 ?
+                raw1_meta     = if ARRAY_MATCH != 0 ?
+                    array_col8_match1
+                : if ARRAY_TRACE != 0 ?
+                    array_raw1
+                : if ARRAY_SCAN != 0 ?
                     array_change_gate1
                 : if RUN_ARRAY != 0 ?
                     array_raw1

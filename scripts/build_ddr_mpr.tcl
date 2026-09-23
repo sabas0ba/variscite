@@ -15,6 +15,8 @@ add_file -type verilog [file join $root target tang_primer_20k ddr_array_probe.s
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_scan_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_same_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_array_trace_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_array_match_top.sv]
 add_file -type cst [file join $out "$::env(DDR_MPR_NAME).cst"]
 add_file -type sdc [file join $root fpga tang_primer_20k ddr_read_probe.sdc]
 set_option -top_module $::env(DDR_MPR_TOP)
