@@ -101,6 +101,7 @@ module TangDdrInitProbe #(
     param ARRAY_TRACE   : u32 = 0,
     param ARRAY_MATCH   : u32 = 0,
     param ARRAY_FLAGS   : u32 = 0,
+    param ARRAY_TIMELINE: u32 = 0,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -205,6 +206,12 @@ module TangDdrInitProbe #(
     var last_rpoint       : 'ctrl      logic           <6>  ;
     var last_wpoint       : 'ctrl      logic           <6>  ;
     var first_captured    : 'ctrl      logic           <2>  ;
+    var timeline_captured : 'ctrl      logic                ;
+    var timeline_word     : 'ctrl      logic           <32> ;
+    var timeline_index    : 'reference logic           <5>  ;
+    var timeline_ready    : 'reference logic           <2>  ;
+    var normal_uart_tx    : 'reference logic                ;
+    var timeline_uart_tx  : 'reference logic                ;
     var phy_data          : 'ctrl      logic           <128>;
     var sweep_pipe        : 'reference logic           <2>  ;
     var found_pipe        : 'reference logic           <2>  ;
@@ -485,26 +492,27 @@ module TangDdrInitProbe #(
         }
         always_ff (i_clk, ref_reset) {
             if_reset {
-                status_pipe   = 0;
-                sweep_pipe    = 0;
-                found_pipe    = 0;
-                burst_pipe    = 0;
-                valid_pipe    = 0;
-                pattern0_meta = 0;
-                pattern0_ref  = 0;
-                pattern1_meta = 0;
-                pattern1_ref  = 0;
-                raw0_meta     = 0;
-                raw0_ref      = 0;
-                raw1_meta     = 0;
-                raw1_ref      = 0;
+                status_pipe    = 0;
+                sweep_pipe     = 0;
+                found_pipe     = 0;
+                burst_pipe     = 0;
+                valid_pipe     = 0;
+                pattern0_meta  = 0;
+                pattern0_ref   = 0;
+                pattern1_meta  = 0;
+                pattern1_ref   = 0;
+                raw0_meta      = 0;
+                raw0_ref       = 0;
+                raw1_meta      = 0;
+                raw1_ref       = 0;
+                timeline_ready = 0;
             } else {
-                status_pipe   = {status_pipe[0], done};
-                sweep_pipe    = {sweep_pipe[0], probe_done};
-                found_pipe    = {found_pipe[0], probe_found};
-                burst_pipe    = {burst_pipe[0], probe_burst == 2'b11};
-                valid_pipe    = {valid_pipe[0], probe_valid_seen == 2'b11};
-                pattern0_meta = if ARRAY_FLAGS != 0 ?
+                status_pipe    = {status_pipe[0], done};
+                sweep_pipe     = {sweep_pipe[0], probe_done};
+                found_pipe     = {found_pipe[0], probe_found};
+                burst_pipe     = {burst_pipe[0], probe_burst == 2'b11};
+                valid_pipe     = {valid_pipe[0], probe_valid_seen == 2'b11};
+                pattern0_meta  = if ARRAY_FLAGS != 0 ?
                     {4'b0, flag_seen}
                 : if ARRAY_MATCH != 0 ?
                     array_col0_match0
@@ -523,8 +531,8 @@ module TangDdrInitProbe #(
                 :
                     sweep_pattern0
                 ;
-                pattern0_ref  = pattern0_meta;
-                pattern1_meta = if ARRAY_FLAGS != 0 ?
+                pattern0_ref   = pattern0_meta;
+                pattern1_meta  = if ARRAY_FLAGS != 0 ?
                     {2'b0, last_rpoint}
                 : if ARRAY_MATCH != 0 ?
                     array_col0_match1
@@ -543,8 +551,8 @@ module TangDdrInitProbe #(
                 :
                     sweep_pattern1
                 ;
-                pattern1_ref  = pattern1_meta;
-                raw0_meta     = if ARRAY_FLAGS != 0 ?
+                pattern1_ref   = pattern1_meta;
+                raw0_meta      = if ARRAY_FLAGS != 0 ?
                     {2'b0, last_wpoint}
                 : if ARRAY_MATCH != 0 ?
                     array_col8_match0
@@ -557,8 +565,8 @@ module TangDdrInitProbe #(
                 :
                     sweep_pattern0
                 ;
-                raw0_ref      = raw0_meta;
-                raw1_meta     = if ARRAY_FLAGS != 0 ?
+                raw0_ref       = raw0_meta;
+                raw1_meta      = if ARRAY_FLAGS != 0 ?
                     {2'b0, first_rpoint}
                 : if ARRAY_MATCH != 0 ?
                     array_col8_match1
@@ -571,7 +579,8 @@ module TangDdrInitProbe #(
                 :
                     sweep_pattern1
                 ;
-                raw1_ref      = raw1_meta;
+                raw1_ref       = raw1_meta;
+                timeline_ready = {timeline_ready[0], array_done && timeline_captured};
             }
         }
         assign status = if !pll_locked ?
@@ -592,6 +601,28 @@ module TangDdrInitProbe #(
             4'd5
         ;
     }
+    unsafe (cdc) {
+        inst timeline: DdrArrayTimeline (
+            i_clk     : ctrl_clk                                            ,
+            i_rst     : ready_reset                                         ,
+            i_start   : RUN_ARRAY != 0 && array_valid && array_cmd == 3'b101,
+            i_gate    : |array_read                                         ,
+            i_burst   : phy_burst                                           ,
+            i_valid   : phy_valid                                           ,
+            i_data    : phy_data                                            ,
+            i_index   : timeline_index                                      ,
+            o_sample  : timeline_word                                       ,
+            o_captured: timeline_captured                                   ,
+        );
+        inst timeline_uart: DdrTimelineUart (
+            i_clk                      ,
+            i_rst   : ref_reset        ,
+            i_ready : timeline_ready[1],
+            i_sample: timeline_word    ,
+            o_index : timeline_index   ,
+            o_tx    : timeline_uart_tx ,
+        );
+    }
     inst uart: TangDdrStatusUart (
         i_clk                                                                     ,
         i_rst         : ref_reset                                                 ,
@@ -602,6 +633,7 @@ module TangDdrInitProbe #(
         i_debug1      : pattern1_ref                                              ,
         i_debug2      : raw0_ref                                                  ,
         i_debug3      : raw1_ref                                                  ,
-        o_tx          : o_uart_tx                                                 ,
+        o_tx          : normal_uart_tx                                            ,
     );
+    assign o_uart_tx = if ARRAY_TIMELINE != 0 ? timeline_uart_tx : normal_uart_tx;
 }

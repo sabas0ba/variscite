@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -31,6 +31,7 @@ $images = @{
     DdrArrayTrace = 'sim/fpga/ddr_array_trace/impl/pnr/ddr_array_trace.fs'
     DdrArrayMatch = 'sim/fpga/ddr_array_match/impl/pnr/ddr_array_match.fs'
     DdrArrayFlags = 'sim/fpga/ddr_array_flags/impl/pnr/ddr_array_flags.fs'
+    DdrArrayTimeline = 'sim/fpga/ddr_array_timeline/impl/pnr/ddr_array_timeline.fs'
 }
 $bitstream = Join-Path $root $images[$Mode]
 $loader = Join-Path $Suite 'bin/openFPGALoader.exe'
@@ -71,8 +72,8 @@ try {
         }
         Start-Sleep -Milliseconds 500
     }
-    # Keep startup bytes for the SoC banner; probes need no startup capture.
-    if ($Mode -notin @('Soc', 'LcdSoc')) { $serial.DiscardInBuffer() }
+    # The timeline is sent once at startup, so retain bytes received during loading.
+    if ($Mode -notin @('Soc', 'LcdSoc', 'DdrArrayTimeline')) { $serial.DiscardInBuffer() }
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $sent = $false
     $buffer = New-Object byte[] 4096
@@ -174,6 +175,11 @@ try {
                 Select-Object -Last 3)
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'T' }).Count -eq 0
+        }
+        DdrArrayTimeline {
+            # A complete capture frame proves transport, not RAM correctness.
+            $frames = @([regex]::Matches($received, '@[0-9A-F]{256}\n'))
+            $passed = $frames.Count -eq 1
         }
         { $_ -in @('Soc', 'LcdSoc') } {
             # Ignore output from the old SRAM image before the new boot banner.
