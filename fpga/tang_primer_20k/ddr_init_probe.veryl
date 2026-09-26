@@ -101,6 +101,7 @@ module TangDdrInitProbe #(
     param ARRAY_TRACE      : u32      = 0    ,
     param ARRAY_MATCH      : u32      = 0    ,
     param ARRAY_FLAGS      : u32      = 0    ,
+    param ARRAY_RAW        : u32      = 0    ,
     param ARRAY_TIMELINE   : u32      = 0    ,
     param ARRAY_SIMPLE     : u32      = 0    ,
     param ARRAY_EARLY      : u32      = 0    ,
@@ -226,6 +227,10 @@ module TangDdrInitProbe #(
     var last_rpoint       : 'ctrl      logic           <6>  ;
     var last_wpoint       : 'ctrl      logic           <6>  ;
     var first_captured    : 'ctrl      logic           <2>  ;
+    var raw_captured      : 'ctrl      logic                ;
+    var regular_captured  : 'ctrl      logic                ;
+    var raw_word          : 'ctrl      logic           <32> ;
+    var regular_word      : 'ctrl      logic           <32> ;
     var timeline_captured : 'ctrl      logic                ;
     var array_expected    : 'ctrl      logic           <128>;
     var timeline_word     : 'ctrl      logic           <32> ;
@@ -675,8 +680,20 @@ module TangDdrInitProbe #(
             i_data    : phy_data                                            ,
             i_expected: array_expected                                      ,
             i_index   : timeline_index                                      ,
-            o_sample  : timeline_word                                       ,
-            o_captured: timeline_captured                                   ,
+            o_sample  : regular_word                                        ,
+            o_captured: regular_captured                                    ,
+        );
+        inst raw_capture: DdrRawBurstCapture (
+            i_clk         : ctrl_clk                                            ,
+            i_rst         : ready_reset                                         ,
+            i_read_command: RUN_ARRAY != 0 && array_valid && array_cmd == 3'b101,
+            i_gate        : |array_read                                         ,
+            i_burst       : phy_burst                                           ,
+            i_valid       : phy_valid                                           ,
+            i_data        : phy_data                                            ,
+            i_index       : timeline_index                                      ,
+            o_sample      : raw_word                                            ,
+            o_captured    : raw_captured                                        ,
         );
         inst timeline_uart: DdrTimelineUart (
             i_clk                      ,
@@ -687,6 +704,8 @@ module TangDdrInitProbe #(
             o_tx    : timeline_uart_tx ,
         );
     }
+    assign timeline_word     = if ARRAY_RAW != 0 ? raw_word : regular_word;
+    assign timeline_captured = if ARRAY_RAW != 0 ? raw_captured : regular_captured;
     inst uart: TangDdrStatusUart (
         i_clk                                                                     ,
         i_rst         : ref_reset                                                 ,

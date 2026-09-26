@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -35,6 +35,8 @@ $images = @{
     DdrArraySimpleTimeline = 'sim/fpga/ddr_array_simple_timeline/impl/pnr/ddr_array_simple_timeline.fs'
     DdrArrayEarlyTimeline = 'sim/fpga/ddr_array_early_timeline/impl/pnr/ddr_array_early_timeline.fs'
     DdrArrayFullTimeline = 'sim/fpga/ddr_array_full_timeline/impl/pnr/ddr_array_full_timeline.fs'
+    DdrArrayRawScaled = 'sim/fpga/ddr_array_raw_scaled/impl/pnr/ddr_array_raw_scaled.fs'
+    DdrArrayRawBurst = 'sim/fpga/ddr_array_raw_burst/impl/pnr/ddr_array_raw_burst.fs'
     DdrArrayStartupScan = 'sim/fpga/ddr_array_startup_scan/impl/pnr/ddr_array_startup_scan.fs'
     DdrArrayAlignedScan = 'sim/fpga/ddr_array_aligned_scan/impl/pnr/ddr_array_aligned_scan.fs'
     DdrArrayQuarterScan = 'sim/fpga/ddr_array_quarter_scan/impl/pnr/ddr_array_quarter_scan.fs'
@@ -84,7 +86,7 @@ try {
         Start-Sleep -Milliseconds 500
     }
     # The timeline is sent once at startup, so retain bytes received during loading.
-    if ($Mode -notin @('Soc', 'LcdSoc', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')) { $serial.DiscardInBuffer() }
+    if ($Mode -notin @('Soc', 'LcdSoc', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')) { $serial.DiscardInBuffer() }
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $sent = $false
     $buffer = New-Object byte[] 4096
@@ -194,7 +196,7 @@ try {
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'T' }).Count -eq 0
         }
-        { $_ -in @('DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline') } {
+        { $_ -in @('DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled') } {
             # A complete capture frame proves transport, not RAM correctness.
             $frames = @([regex]::Matches($received, '@[0-9A-F]{256}\n'))
             $passed = $frames.Count -eq 1

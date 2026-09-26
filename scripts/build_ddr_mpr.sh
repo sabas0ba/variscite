@@ -3,7 +3,13 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_ARRAY_STARTUP_SCAN:-0}" == 1 ]]; then
+if [[ "${DDR_ARRAY_RAW_SCALED:-0}" == 1 ]]; then
+    name=ddr_array_raw_scaled
+    top=rv32ima_TangDdrArrayRawScaledProbe
+elif [[ "${DDR_ARRAY_RAW_BURST:-0}" == 1 ]]; then
+    name=ddr_array_raw_burst
+    top=rv32ima_TangDdrArrayRawBurstProbe
+elif [[ "${DDR_ARRAY_STARTUP_SCAN:-0}" == 1 ]]; then
     name=ddr_array_startup_scan
     top=rv32ima_TangDdrArrayStartupScanProbe
 elif [[ "${DDR_ARRAY_ALIGNED_SCAN:-0}" == 1 ]]; then
@@ -74,7 +80,7 @@ mkdir -p "$out"
 veryl build > "$out/veryl.log" 2>&1
 cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/ddr_probe_uart.cst > "$out/$name.cst"
 cat fpga/tang_primer_20k/ddr_read_probe.sdc > "$out/$name.sdc"
-if [[ "$name" == ddr_array_startup_scan ]]; then
+if [[ "$name" == ddr_array_startup_scan || "$name" == ddr_array_raw_* ]]; then
     cat fpga/tang_primer_20k/ddr_phy_startup.sdc >> "$out/$name.sdc"
 fi
 cd "$out"

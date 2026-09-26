@@ -21,6 +21,7 @@ add_file -type verilog [file join $root target tang_primer_20k ddr_array_trace_t
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_match_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_flags_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_timeline.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_raw_burst.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_timeline_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_simple_timeline_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_early_timeline_top.sv]
@@ -33,6 +34,8 @@ add_file -type verilog [file join $root target tang_primer_20k ddr_array_continu
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_quarter_scan_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_aligned_scan_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_startup_scan_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_array_raw_burst_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_array_raw_scaled_top.sv]
 add_file -type cst [file join $out "$::env(DDR_MPR_NAME).cst"]
 add_file -type sdc [file join $out "$::env(DDR_MPR_NAME).sdc"]
 set_option -top_module $::env(DDR_MPR_TOP)

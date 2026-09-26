@@ -98,6 +98,13 @@ coverage:
 
 .PHONY: ddr-array-phase-test
 .PHONY: ddr-phy-startup-test
+.PHONY: ddr-raw-burst-test
+ddr-raw-burst-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_raw_burst \
+	    -Mdir sim/obj_ddr_raw_burst -o tb_ddr_raw_burst \
+	    target/tang_primer_20k/ddr_raw_burst.sv tb/tb_ddr_raw_burst.sv
+	sim/obj_ddr_raw_burst/tb_ddr_raw_burst
+
 ddr-phy-startup-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_phy_startup \
 	    -Mdir sim/obj_ddr_phy_startup -o tb_ddr_phy_startup \
