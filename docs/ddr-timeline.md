@@ -31,3 +31,13 @@ RTL は Veryl、テストベンチは SystemVerilog。`make ddr-timeline-test` �
 2026-09-26にVeryl lint、既存timeline試験、新しい全幅試験、配置配線・setup/hold検証を通過した。bitstream SHA256は `4af9977423d16f86b7b61a2dd91a70e36603a98d7061195377c018fe7ddb8121`。初回実機試行はJTAG検出時の `usb bulk read failed` により書込み前に失敗し、その後のLCD SoC復帰試行もJTAG検出時に失敗した。ログは `logs/board/20260926-110359-DdrArrayFullTimeline-*` と同試行のLCD SoCログに保存した。WindowsはFTDIとCOM4を認識しているが、全幅の実機データは未取得である。
 
 USB再接続後の再試行 `logs/board/20260926-112659-DdrArrayFullTimeline-*` は `device not found` で書込み前に失敗した。その時点のWindows接続済み機器一覧にはFTDIが存在せず、JTAG用USBと電源の確認待ちとなった。この試行のLCD SoC復帰検出も失敗しており、実機データと現在のLCD表示は未確認である。
+
+利用者によるケーブル・接続ポート・電源の変更後、FTDI、JTAG Debugger、COM4の列挙が復旧した。Zadigによるドライバ変更は行っていない。同じ全幅診断bitstreamを3回ロードし、`logs/board/20260926-114150-DdrArrayFullTimeline-*`、`120035`、`120732` に完全なUART記録を取得した。各回のLCD SoC復帰とUART検査も通過した。
+
+| 記録 | 列0の `RVALID=3` cycle | その時点の全128 bit零一致 | 列8の `RVALID=3` cycle | その時点のlane0/lane1全1一致 |
+| --- | ---: | --- | ---: | --- |
+| 114150 | 8 | 1 | 21 | 0/1 |
+| 120035 | 7 | 1 | 20 | 1/1 |
+| 120732 | 7 | 1 | 20 | 1/1 |
+
+列8のcycle 20では3回とも両laneの全1一致が得られた。初回だけ `RVALID` がcycle 21へ遅れ、その時点ではlane0のDQ1/DQ0が`3F/3F`に変化していた。後の2回は全32 cycle記録が同じだった。全幅の全0/全1パターンを観測できたが、有効位置がロード間で変わり、列0の全0はアイドル値とも一致するため、これだけで安定したDDR3 RAM動作とは判定しない。複雑なパターンと反復読書き、起動時の受信位置校正が引き続き必要である。
