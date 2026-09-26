@@ -96,6 +96,13 @@ coverage:
 # --- FPGA ports ----------------------------------------------------------
 .PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test ddr-timeline-test ddr-full-timeline-test ddr-status-uart-test
 
+.PHONY: ddr-array-phase-test
+ddr-array-phase-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps "-GREAD_SEL=6'h24" --top-module tb_ddr_array_probe \
+	    -Mdir sim/obj_ddr_array_phase -o tb_ddr_array_phase \
+	    target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_probe.sv
+	sim/obj_ddr_array_phase/tb_ddr_array_phase
+
 ddr-expected-timeline-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_expected_timeline \
 	    -Mdir sim/obj_ddr_expected_timeline -o tb_ddr_expected_timeline \

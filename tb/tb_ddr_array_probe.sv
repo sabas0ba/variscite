@@ -1,4 +1,4 @@
-module tb_ddr_array_probe;
+module tb_ddr_array_probe #(parameter [5:0] READ_SEL = 6'h20);
 `ifdef SIMPLE_DATA
     localparam [127:0] DATA_A = 128'b0;
     localparam [7:0] EXPECTED_MATCH0 = 8'h3f;
@@ -36,7 +36,7 @@ module tb_ddr_array_probe;
 `else
         .SIMPLE_DATA(0),
 `endif
-        .EARLY_GATE(EARLY)
+        .EARLY_GATE(EARLY), .READ_SEL(READ_SEL)
     ) dut (
         .i_clk(clk), .i_rst(rst), .i_enable(enable),
         .i_burst(burst), .i_valid(valid), .i_data(data),
@@ -106,7 +106,7 @@ module tb_ddr_array_probe;
                 $fatal(1,"WRITE burst timing or data");
             if (cycle-write_cycle==3 && (dqs_enable!=4'b0001 || dq_enable!=0))
                 $fatal(1,"DQS postamble timing");
-            if (read_gate!=0 && (read_gate!=8'hff || sel!={3'd4,3'd0} ||
+            if (read_gate!=0 && (read_gate!=8'hff || sel!=READ_SEL ||
                                   cycle-read_cycle!=(EARLY != 0 ? 1 : 2) || dq_enable!=0 ||
                                   expected_data!=(read_count==1 ? DATA_A : DATA_B)))
                 $fatal(1,"READ gate timing");

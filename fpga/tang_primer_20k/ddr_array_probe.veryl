@@ -4,10 +4,11 @@
 /// deliberately leaves refresh and data-eye training to later stages and
 /// resets DRAM when finished.
 module DdrArrayProbe #(
-    param GATE_SCAN  : u32 = 0    ,
-    param SAME_DATA  : u32 = 0    ,
-    param SIMPLE_DATA: u32 = 0    ,
-    param EARLY_GATE : u32 = 32'd0,
+    param GATE_SCAN  : u32      = 0    ,
+    param SAME_DATA  : u32      = 0    ,
+    param SIMPLE_DATA: u32      = 0    ,
+    param EARLY_GATE : u32      = 32'd0,
+    param READ_SEL   : logic<6> = 6'h20,
 ) (
     i_clk         : input  clock     ,
     i_rst         : input  reset     ,
@@ -350,7 +351,7 @@ module DdrArrayProbe #(
         o_addr        = 0;
         o_bank        = 0;
         o_read        = 0;
-        o_sel         = {3'd4, 3'd0};
+        o_sel         = READ_SEL;
         o_hold        = 0;
         o_odt         = 0;
         o_data        = 0;

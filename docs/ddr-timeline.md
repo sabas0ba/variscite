@@ -59,3 +59,23 @@ USB再接続後の再試行 `logs/board/20260926-112659-DdrArrayFullTimeline-*` 
 ログは `logs/board/20260926-160540-DdrArrayExpectedTimeline-*`、`160616`、`160651`。初回のFTDI初期化は一度失敗したが、スクリプトの再試行でロードできた。3回とも完全なUARTフレームを取得し、測定後の既知LCD SoC復帰とUART検査も通過した。初回と3回目の32 wordは同一だった。
 
 全32 cycleで全幅一致とlane0一致は一度も得られない。一方、2回目は異なる2列の複雑なパターンがlane1の64 bit全体で有効cycleに一致した。この観測はlane1の書込み・保持・読出し経路が少なくともこの条件で機能することを支持するが、安定動作やlane0の故障原因までは確定しない。有効位置の起動間変動が残るため、次はレーンごとのDQS捕捉位置・beat整列・有効判定とWRITE送出の確認を行う。Linux用RAMとして使える段階には達していない。
+
+## 両レーンのRCLKSELを4にした比較
+
+`DdrArrayProbe.READ_SEL` と親の `ARRAY_READ_SEL` で各laneのRCLKSELを指定できるようにした。下位3 bitがlane0、上位3 bitがlane1で、既定値 `6'h20` は従来の0/4を維持する。新しい `DdrArrayPhaseTimeline` は `6'h24`、すなわち4/4を使う。論理上の変更はlane0のRCLKSELのみで、書込みパターン、コマンド時刻、READゲート時刻、期待値比較は前節と同じである。別の配置配線結果となるため、実機差をRCLKSELだけの効果と断定しない。
+
+[Gowin FPGA Primitive User Guide のDQS仕様](https://www.gowinsemi.com/upload/database_doc/39/document/5bfcff2ce0b72.pdf) はRCLKSELを読出しクロック源と極性の制御と定義する。この比較は手動の候補評価であり、起動時校正を実装したものではない。
+
+構築は `DDR_ARRAY_PHASE_TIMELINE=1 bash scripts/build_ddr_mpr.sh`、実機取得は `scripts/test-ddr-init-board.ps1 -Mode DdrArrayPhaseTimeline` を使う。デコードは前節と同じ `--expected` を指定する。`make ddr-array-phase-test` は変更した選択値でコマンド時刻、2パターン、古い値の拒否を検証する。Veryl lint、同試験、既定値のarray試験、gate scan試験、expected timeline試験は通過した。配置配線後のsetup/hold違反は0。bitstream SHA256は `e27aeb17c6d66f54f3a2d7b9d9eddae48449ae166662c76438a29fa96833d2ba`。
+
+2026-09-26の3回の実機取得結果は以下のとおり。全回でUART全フレームと測定後のLCD SoC復帰・UART検査を通過した。
+
+| 記録 | 列0の `RVALID=3` cycle | 全幅/lane0/lane1一致 | DQ1/DQ0/DQ8 | 列8の `RVALID=3` cycle | 全幅/lane0/lane1一致 | DQ1/DQ0/DQ8 |
+| --- | ---: | --- | --- | ---: | --- | --- |
+| 162624 | 8 | 0/0/0 | `25/16/29` | 21 | 0/0/0 | `1A/29/16` |
+| 162702 | 8 | 1/1/1 | `96/5A/A5` | 21 | 1/1/1 | `69/A5/5A` |
+| 162757 | 7 | 0/0/0 | `5A/6A/95` | 20 | 0/0/0 | `A5/95/6A` |
+
+ログは `logs/board/20260926-162624-DdrArrayPhaseTimeline-*`、`162702`、`162757`。2回目で異なる2列の複雑なパターンが全128 bitで有効cycleに一致した。一方、残り2回では全32 cycleでどちらのlaneも一致しないため、この固定設定を安定動作の校正値として採用しない。
+
+3回目の列0ではcycle 7と8のDQ1が`5A/02`、DQ0が`6A/01`、DQ8が`95/02`だった。連続する2 cycleを後の値が上位になるよう連結して2 bit右へ移動すると、それぞれ期待値`96/5A/A5`を得る。列8でも同じ操作で`69/A5/5A`となる。この3本の観測はデータがcontroller cycle境界をまたぐbeat整列の問題を示唆するが、未記録のDQを含む全幅の補正可能性は未確認である。次は連続cycleの全128 bitを使ったレーン別の整列診断と、再起動後も成立する校正を検証する。refresh、アドレスalias、長時間反復試験、Linux実機bootは未達である。
