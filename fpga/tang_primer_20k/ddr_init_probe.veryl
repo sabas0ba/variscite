@@ -112,6 +112,7 @@ module TangDdrInitProbe #(
     param ARRAY_READ_HOLD  : u32      = 1    ,
     param DLL_QUARTER      : u32      = 0    ,
     param ARRAY_PHASE_ALIGN: u32      = 0    ,
+    param PHY_STARTUP      : u32      = 0    ,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -137,6 +138,15 @@ module TangDdrInitProbe #(
     var pll_locked        : 'async     logic                ;
     var dll_locked        : 'async     logic                ;
     var dll_step          : 'async     logic           <8>  ;
+    var pll_lock_sync     : 'reference logic           <2>  ;
+    var dll_lock_sync     : 'reference logic           <2>  ;
+    var startup_freeze    : 'reference logic                ;
+    var startup_stop      : 'reference logic                ;
+    var startup_div_reset : 'reference logic                ;
+    var startup_phy_reset : 'reference logic                ;
+    var startup_hold      : 'reference logic                ;
+    var startup_update_n  : 'reference logic                ;
+    var startup_ready     : 'reference logic                ;
     var phy_reset         : 'async     reset_async_high     ;
     var ready_pipe        : 'ctrl      logic           <2>  ;
     var ready_reset       : 'ctrl      reset                ;
@@ -292,38 +302,61 @@ module TangDdrInitProbe #(
     );
     unsafe (cdc) {
         inst clocks: TangDdrClock (
-            i_clk                  ,
-            i_reset    : por       ,
-            i_stop     : 1'b0      ,
-            i_div_reset: 1'b0      ,
-            o_fast     : fast_clk  ,
-            o_ctrl     : ctrl_clk  ,
-            o_locked   : pll_locked,
+            i_clk                                                      ,
+            i_reset    : por                                           ,
+            i_stop     : if PHY_STARTUP != 0 ? startup_stop : 1'b0,
+            i_div_reset: if PHY_STARTUP != 0 ? startup_div_reset : 1'b0,
+            o_fast     : fast_clk                                      ,
+            o_ctrl     : ctrl_clk                                      ,
+            o_locked   : pll_locked                                    ,
         );
     }
     unsafe (cdc) {
         assign ref_reset = por as reset;
-        assign phy_reset = (por || !pll_locked || !dll_locked) as reset_async_high;
+        assign phy_reset = (por
+            || (if PHY_STARTUP != 0 ? startup_phy_reset : !pll_locked || !dll_locked)) as reset_async_high;
+        always_ff (i_clk, ref_reset) {
+            if_reset {
+                pll_lock_sync = 0;
+                dll_lock_sync = 0;
+            } else {
+                pll_lock_sync = {pll_lock_sync[0], pll_locked};
+                dll_lock_sync = {dll_lock_sync[0], dll_locked};
+            }
+        }
         inst dll: $sv::DLL #(
             SCAL_EN : if DLL_QUARTER != 0 ? "false" : "true",
             CODESCAL: "101"                                 ,
         ) (
-            CLKIN   : fast_clk          ,
-            STOP    : 1'b0              ,
-            UPDNCNTL: 1'b0              ,
+            CLKIN   : fast_clk                                     ,
+            STOP    : if PHY_STARTUP != 0 ? startup_freeze : 1'b0,
+            UPDNCNTL: if PHY_STARTUP != 0 ? startup_update_n : 1'b0,
             RESET   : por || !pll_locked,
-            STEP    : dll_step          ,
-            LOCK    : dll_locked        ,
+            STEP    : dll_step                                     ,
+            LOCK    : dll_locked                                   ,
         );
         always_ff (ctrl_clk, phy_reset) {
             if_reset {
                 ready_pipe = 0;
             } else {
-                ready_pipe = {ready_pipe[0], 1'b1};
+                ready_pipe = {ready_pipe[0], (if PHY_STARTUP != 0 ? startup_ready : 1'b1)};
             }
         }
         assign ready_reset = !ready_pipe[1] as reset;
     }
+    inst phy_startup: DdrPhyStartup (
+        i_clk                          ,
+        i_rst       : ref_reset        ,
+        i_pll_locked: pll_lock_sync[1] ,
+        i_dll_locked: dll_lock_sync[1] ,
+        o_freeze    : startup_freeze   ,
+        o_stop      : startup_stop     ,
+        o_div_reset : startup_div_reset,
+        o_phy_reset : startup_phy_reset,
+        o_hold      : startup_hold     ,
+        o_update_n  : startup_update_n ,
+        o_ready     : startup_ready    ,
+    );
     inst startup: Ddr3Startup (
         i_clk      : ctrl_clk     ,
         i_rst      : ready_reset  ,
@@ -433,18 +466,26 @@ module TangDdrInitProbe #(
     );
     unsafe (cdc) {
         inst phy: TangDdrPhyIo (
-            i_clk        : ctrl_clk                                                         ,
-            i_fast       : fast_clk                                                         ,
-            i_reset      : phy_reset                                                        ,
-            i_dll_step   : dll_step                                                         ,
+            i_clk        : ctrl_clk                             ,
+            i_fast       : fast_clk                             ,
+            i_reset      : phy_reset                            ,
+            i_dll_step   : dll_step                             ,
             i_mem_reset_n: reset_n && !(use_sweep && probe_done),
-            i_addr       : phy_addr_slots                                                   ,
-            i_bank       : phy_bank_slots                                                   ,
-            i_cmd        : phy_cmd_slots                                                    ,
-            i_cs_n       : phy_cs_slots                                                     ,
+            i_addr       : phy_addr_slots                       ,
+            i_bank       : phy_bank_slots                       ,
+            i_cmd        : phy_cmd_slots                        ,
+            i_cs_n       : phy_cs_slots                         ,
             i_cke        : {phy_cke, phy_cke, phy_cke, phy_cke},
             i_odt        : if RUN_ARRAY != 0 ? array_odt : 4'b0,
-            i_hold       : if RUN_ARRAY != 0 ? array_hold : if use_sweep ? sweep_hold : 2'b0,
+            i_hold       : if PHY_STARTUP != 0 && startup_hold ?
+                2'b11
+            : if RUN_ARRAY != 0 ?
+                array_hold
+            : if use_sweep ?
+                sweep_hold
+            :
+                2'b0
+            ,
             i_read       : if RUN_ARRAY != 0 ? array_read : if use_sweep ? sweep_read : 8'b0,
             i_read_sel   : if RUN_ARRAY != 0 ? array_sel : if use_sweep ? sweep_sel : 6'b0,
             i_rloadn     : delay_rloadn                                                     ,

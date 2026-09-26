@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -35,6 +35,7 @@ $images = @{
     DdrArraySimpleTimeline = 'sim/fpga/ddr_array_simple_timeline/impl/pnr/ddr_array_simple_timeline.fs'
     DdrArrayEarlyTimeline = 'sim/fpga/ddr_array_early_timeline/impl/pnr/ddr_array_early_timeline.fs'
     DdrArrayFullTimeline = 'sim/fpga/ddr_array_full_timeline/impl/pnr/ddr_array_full_timeline.fs'
+    DdrArrayStartupScan = 'sim/fpga/ddr_array_startup_scan/impl/pnr/ddr_array_startup_scan.fs'
     DdrArrayAlignedScan = 'sim/fpga/ddr_array_aligned_scan/impl/pnr/ddr_array_aligned_scan.fs'
     DdrArrayQuarterScan = 'sim/fpga/ddr_array_quarter_scan/impl/pnr/ddr_array_quarter_scan.fs'
     DdrArrayContinuousScan = 'sim/fpga/ddr_array_continuous_scan/impl/pnr/ddr_array_continuous_scan.fs'
@@ -83,7 +84,7 @@ try {
         Start-Sleep -Milliseconds 500
     }
     # The timeline is sent once at startup, so retain bytes received during loading.
-    if ($Mode -notin @('Soc', 'LcdSoc', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan')) { $serial.DiscardInBuffer() }
+    if ($Mode -notin @('Soc', 'LcdSoc', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')) { $serial.DiscardInBuffer() }
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $sent = $false
     $buffer = New-Object byte[] 4096
@@ -145,7 +146,7 @@ try {
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'A' }).Count -eq 0
         }
-        { $_ -in @('DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan') } {
+        { $_ -in @('DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan') } {
             # Completed scan transport only: T requires full lane matches in
             # both columns; V/B/E still provide a valid negative measurement.
             $frames = @([regex]::Matches($received, '[TBVE][0-9A-F]{8}') |

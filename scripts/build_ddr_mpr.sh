@@ -3,7 +3,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_ARRAY_ALIGNED_SCAN:-0}" == 1 ]]; then
+if [[ "${DDR_ARRAY_STARTUP_SCAN:-0}" == 1 ]]; then
+    name=ddr_array_startup_scan
+    top=rv32ima_TangDdrArrayStartupScanProbe
+elif [[ "${DDR_ARRAY_ALIGNED_SCAN:-0}" == 1 ]]; then
     name=ddr_array_aligned_scan
     top=rv32ima_TangDdrArrayAlignedScanProbe
 elif [[ "${DDR_ARRAY_QUARTER_SCAN:-0}" == 1 ]]; then
@@ -70,6 +73,10 @@ gowin="${GOWIN_HOME:-/opt/gowin/IDE}"
 mkdir -p "$out"
 veryl build > "$out/veryl.log" 2>&1
 cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/ddr_probe_uart.cst > "$out/$name.cst"
+cat fpga/tang_primer_20k/ddr_read_probe.sdc > "$out/$name.sdc"
+if [[ "$name" == ddr_array_startup_scan ]]; then
+    cat fpga/tang_primer_20k/ddr_phy_startup.sdc >> "$out/$name.sdc"
+fi
 cd "$out"
 env QT_QPA_PLATFORM=offscreen \
     LD_LIBRARY_PATH="/opt/gowin-runtime/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:$gowin/lib" \
@@ -81,7 +88,7 @@ report="impl/pnr/$name.rpt.txt"
 timing="impl/pnr/${name}_tr_content.html"
 grep -q '^Placement and routing completed$' gowin.log
 test "$report" -nt veryl.log
-if grep -Eq 'ERROR|TA1132|TA1052' gowin.log; then
+if grep -Eq 'ERROR|TA1132|TA1052|No objects|no objects|cannot find|Cannot find' gowin.log; then
     echo 'GOWIN reported an error or an uncreated/ignored clock.' >&2
     exit 1
 fi

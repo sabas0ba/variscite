@@ -97,6 +97,13 @@ coverage:
 .PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test ddr-timeline-test ddr-full-timeline-test ddr-status-uart-test
 
 .PHONY: ddr-array-phase-test
+.PHONY: ddr-phy-startup-test
+ddr-phy-startup-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_phy_startup \
+	    -Mdir sim/obj_ddr_phy_startup -o tb_ddr_phy_startup \
+	    target/tang_primer_20k/ddr_phy_startup.sv tb/tb_ddr_phy_startup.sv
+	sim/obj_ddr_phy_startup/tb_ddr_phy_startup
+
 .PHONY: ddr-array-phase-scan-test
 .PHONY: ddr-array-continuous-test
 .PHONY: ddr-array-aligned-scan-test
