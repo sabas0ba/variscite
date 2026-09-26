@@ -104,6 +104,7 @@ module TangDdrInitProbe #(
     param ARRAY_TIMELINE: u32 = 0,
     param ARRAY_SIMPLE  : u32 = 0,
     param ARRAY_EARLY   : u32 = 0,
+    param ARRAY_FULL    : u32 = 0,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -606,7 +607,9 @@ module TangDdrInitProbe #(
         ;
     }
     unsafe (cdc) {
-        inst timeline: DdrArrayTimeline (
+        inst timeline: DdrArrayTimeline #(
+            MATCH_ALL: ARRAY_FULL,
+        ) (
             i_clk     : ctrl_clk                                            ,
             i_rst     : ready_reset                                         ,
             i_start   : RUN_ARRAY != 0 && array_valid && array_cmd == 3'b101,

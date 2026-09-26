@@ -14,13 +14,15 @@ def main() -> None:
     if len(frames) != 1:
         parser.error(f"expected one 32-word timeline frame, found {len(frames)}")
 
-    print("cycle gate burst valid dq1 dq0 dq8")
+    print("cycle gate burst valid zero one0 one1 dq1 dq0 dq8")
     for cycle in range(32):
         word = int(frames[0][cycle * 8 : (cycle + 1) * 8], 16)
         status = word >> 24
         print(
             f"{cycle:2d}    {status >> 7}    {(status >> 5) & 3}"
-            f"     {(status >> 3) & 3}    {(word >> 16) & 255:02X}"
+            f"     {(status >> 3) & 3}      {(status >> 2) & 1}"
+            f"     {(status >> 1) & 1}     {status & 1}"
+            f"   {(word >> 16) & 255:02X}"
             f"  {(word >> 8) & 255:02X}  {word & 255:02X}"
         )
 

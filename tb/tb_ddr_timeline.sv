@@ -1,4 +1,4 @@
-module tb_ddr_timeline;
+module tb_ddr_timeline #(parameter int unsigned MATCH_ALL=0);
     reg clk=0, rst=1, start=0, ready=0, gate=0;
     reg [1:0] burst=0, valid=0;
     reg [127:0] data=0;
@@ -10,7 +10,7 @@ module tb_ddr_timeline;
     reg [3:0] digit;
     always #5 clk=~clk;
 
-    rv32ima_DdrArrayTimeline recorder (
+    rv32ima_DdrArrayTimeline #(.MATCH_ALL(MATCH_ALL)) recorder (
         .i_clk(clk), .i_rst(rst), .i_start(start), .i_gate(gate),
         .i_burst(burst), .i_valid(valid),
         .i_data(data), .i_index(sample_index),
@@ -23,7 +23,20 @@ module tb_ddr_timeline;
 
     function automatic [31:0] expected_word(input int n);
         reg [7:0] flags;
-        flags={(n==2),2'(n),2'(n),3'b000};
+        reg [2:0] match_bits;
+        match_bits = MATCH_ALL!=0 ? {(n%8==0), (n==20), (n==20)} : 3'b000;
+        flags={(n==2),2'(n),2'(n),match_bits};
+        if (MATCH_ALL!=0) begin
+            case (n)
+                20: return {flags[7:3],3'b011,24'hffffff};
+                21: return {flags[7:3],3'b010,24'hffff00};
+                22: return {flags[7:3],3'b001,24'h0000ff};
+                23: return {flags[7:3],3'b010,24'hffffff};
+                24: return {flags[7:3],3'b001,24'hfffeff};
+                25: return {flags[7:3],3'b000,24'h000000};
+                default: begin end
+            endcase
+        end
         return {flags,7'b0,1'(n>>2),7'b0,1'(n),7'b0,1'(n>>1)};
     endfunction
 
@@ -52,6 +65,17 @@ module tb_ddr_timeline;
             data[0]=1'(n);
             data[1]=1'(n>>2);
             data[8]=1'(n>>1);
+            if (MATCH_ALL!=0) begin
+                case (n)
+                    20: data='1;
+                    21: data=128'h00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff;
+                    22: data=128'hff00_ff00_ff00_ff00_ff00_ff00_ff00_ff00;
+                    23: data=128'h7fff_ffff_ffff_ffff_ffff_ffff_ffff_ffff;
+                    24: data=128'hffff_ffff_ffff_ffff_ffff_ffff_ffff_fffe;
+                    25: data=128'h8000_0000_0000_0000_0000_0000_0000_0000;
+                    default: begin end
+                endcase
+            end
             @(posedge clk);
         end
         @(negedge clk);

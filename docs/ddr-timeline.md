@@ -21,3 +21,11 @@ RTL は Veryl、テストベンチは SystemVerilog。`make ddr-timeline-test` �
 比較用の `DdrArrayEarlyTimeline` は、同じ書込み内容でREADゲートだけを1 controller cycle早める。`DDR_ARRAY_EARLY_TIMELINE=1 bash scripts/build_ddr_mpr.sh` と `-Mode DdrArrayEarlyTimeline` を使う。bitstream SHA256 は `688386cba015395c1334f17cefab46e2495392396b2a9fef4e83bf1f65d1fdb7`。`logs/board/20260923-231844-DdrArrayEarlyTimeline-*` と `232048` の2回は同一の32 cycle記録だった。ゲートはcycle 2から1へ移ったが、`RBURST`は全cycleで0となり、列0/列8の `RVALID=3` はそれぞれcycle 10–12と23–25で3 cycle連続した。有効サイクルで列8の全1は得られない。早期ゲートは今回の安定した受信位置ではない。途中のFTDIリセット失敗2回では診断bitstreamをロードできなかったため測定に含めない。成功した各測定後のLCD SoC復帰検査は通過した。
 
 `make lint ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test ddr-timeline-test` と、2つのbitstreamの配置配線・setup/hold検証は通過した。次は128 bit全体の一致をREADの各cycleで確認し、WRITEがDRAMに保持されたかと `RVALID` のずれを分離する必要がある。
+
+## 全128 bitの一致フラグ
+
+`DdrArrayFullTimeline` は全0/全1の書込みと通常ゲートを使い、UART wordの既存reserved 3 bitを上位から `all_zero`、`lane0_all_one`、`lane1_all_one` に置き換える。`all_zero` は全128 bitが0の場合だけ1、各laneの `all_one` はそのlaneの64 bitがすべて1の場合だけ1である。両laneの `all_one` が1なら全128 bitが1となる。フラグとDQパターンは同じcontroller cycleから記録する。他のtimelineモードではこの3 bitを引き続き0に固定する。
+
+`DDR_ARRAY_FULL_TIMELINE=1 bash scripts/build_ddr_mpr.sh` と `scripts/test-ddr-init-board.ps1 -Mode DdrArrayFullTimeline` を使う。デコーダは `zero`、`one0`、`one1` 列にフラグを表示する。旧モードの0は判定無効を意味するので、旧bitstreamのログから全幅不一致を推定しない。`make ddr-full-timeline-test` は全0、全1、片laneだけの全1、DQ15またはDQ0の1bit不一致をUARTフレーム全体で検証する。
+
+2026-09-26にVeryl lint、既存timeline試験、新しい全幅試験、配置配線・setup/hold検証を通過した。bitstream SHA256は `4af9977423d16f86b7b61a2dd91a70e36603a98d7061195377c018fe7ddb8121`。初回実機試行はJTAG検出時の `usb bulk read failed` により書込み前に失敗し、その後のLCD SoC復帰試行もJTAG検出時に失敗した。ログは `logs/board/20260926-110359-DdrArrayFullTimeline-*` と同試行のLCD SoCログに保存した。WindowsはFTDIとCOM4を認識しているが、全幅の実機データは未取得である。
