@@ -3,7 +3,16 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_ARRAY_PHASE_SCAN:-0}" == 1 ]]; then
+if [[ "${DDR_ARRAY_ALIGNED_SCAN:-0}" == 1 ]]; then
+    name=ddr_array_aligned_scan
+    top=rv32ima_TangDdrArrayAlignedScanProbe
+elif [[ "${DDR_ARRAY_QUARTER_SCAN:-0}" == 1 ]]; then
+    name=ddr_array_quarter_scan
+    top=rv32ima_TangDdrArrayQuarterScanProbe
+elif [[ "${DDR_ARRAY_CONTINUOUS_SCAN:-0}" == 1 ]]; then
+    name=ddr_array_continuous_scan
+    top=rv32ima_TangDdrArrayContinuousScanProbe
+elif [[ "${DDR_ARRAY_PHASE_SCAN:-0}" == 1 ]]; then
     name=ddr_array_phase_scan
     top=rv32ima_TangDdrArrayPhaseScanProbe
 elif [[ "${DDR_ARRAY_ALIGN_TIMELINE:-0}" == 1 ]]; then

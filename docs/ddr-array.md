@@ -38,9 +38,7 @@ bitstream SHA256 `963c6f7444c0a42a6675b1ae406ccfa360f905b2f5635c08cec91ecc15d2e5
 
 安定したゲート位置が見つかってから受信遅延を走査し、全 DQ bit、byte mask、アドレス alias、refresh を検証する。現段階の結果を Linux 用 RAM の設定には使用しない。
 
-## 一次資料
-
-### 2026-09-26: 全幅での受信選択走査
+## 2026-09-26: 全幅での受信選択走査
 
 `DdrArrayPhaseScan` はREADゲートを通常の位置に固定し、RCLKSEL=0–7を同一起動中に走査する。各候補で列0/8を読み、各laneの64 bit全体が両列で同じRVALID相対位置（直前・同時・直後）に一致した場合だけ合格マスクへ記録する。従来の `DdrArrayScan` はDQ0/DQ8とゲート位置を評価するモードとして維持する。
 
@@ -50,7 +48,27 @@ bitstream SHA256 `963c6f7444c0a42a6675b1ae406ccfa360f905b2f5635c08cec91ecc15d2e5
 
 bitstream SHA256 `98f72456eedcd26d576fae6a4355f99876f8b6c816d6c539bf9ec49501aec612` の3回の実機結果は全て `V00000000`。ログは `logs/board/20260926-165320-DdrArrayPhaseScan-*`、`165349`、`165438`。各回のLCD SoC復帰とUART検査は通過した。いずれも全幅で使える受信選択は得られなかった。RCLKSEL単独の走査では解消しておらず、PHY起動とREAD時のクロック制御、DLLの位相条件も確認対象である。
 
-### 参照先
+## READごとのHOLD停止の比較
+
+`DdrArrayContinuousScan` は全幅位相走査と同じ手順で `READ_HOLD=0` とし、READ指令時のDQS HOLDを無効にする。既定値1は従来動作を維持する。Gowin同梱 `prim_sim.v` のDQSモデルではHOLDが内部高速クロックを停止するため、その影響を比較する。`DDR_ARRAY_CONTINUOUS_SCAN=1 bash scripts/build_ddr_mpr.sh` と `-Mode DdrArrayContinuousScan` を使う。`make ddr-array-continuous-test` は全READでHOLDが0であることと、従来の指令順序・位相選択・全幅比較を検証する。lint、既定のphase/gate scan試験、配置配線（setup/hold違反0）は通過した。
+
+bitstream SHA256 `aa913f89f1235bf67d75158f867879b4166c215b84208f7358ff6c07d10f7875` の初回試行 `20260926-165912` はFTDI USB reset失敗により書込み前に失敗した。LCD復帰は再試行で成功し、USB列挙も正常だった。その後 `logs/board/20260926-165954-DdrArrayContinuousScan-*`、`170021`、`170054` で順に `V00002802`、`V00002802`、`V0000A002` を取得した。全回LCD SoC復帰とUART検査を通過した。列ごとのDQ変化を観測したが、全幅合格マスクは両laneとも0であり、HOLD停止の除去だけでは読出しを安定化できていない。
+
+## DLL 90度設定の比較
+
+`DdrArrayQuarterScan` はHOLD無効の位相走査に `DLL_QUARTER=1` を設定する。これはDLLの `SCAL_EN="false"` を選ぶ比較であり、既定の `SCAL_EN="true", CODESCAL="101"` は維持する。Gowin Primitive仕様のDLL属性表では前者が90°、後者が68°である。書込みと読出しの両方がDLLSTEPを使用するため、受信側だけの変更ではない。`DDR_ARRAY_QUARTER_SCAN=1 bash scripts/build_ddr_mpr.sh` と `-Mode DdrArrayQuarterScan` を使う。
+
+Veryl lintと配置配線（setup/hold違反0）を通過したbitstream SHA256 `2e3f655306b59f18600243ac53eeaef1f8100791afc1321c46c54f193176774e` を3回ロードした。`logs/board/20260926-170258-DdrArrayQuarterScan-*`、`170325`、`170413` の結果は `V0000A00A`、`V0000A00A`、`V0000A80A`。列ごとの変化はあるが全幅合格候補は0。各回のLCD SoC復帰・UART検査は通過した。DLL設定の変更だけでは安定化していない。
+
+## 位相とbeat位置の組合せ探索
+
+`DdrArrayAlignedScan` はHOLD無効・90度DLL・全8 RCLKSEL走査の各READで、隣接cycleの全幅beat整列も同時に評価する。レーンごとに、現在または直前のRVALIDが立つ窓で一致した開始位置を蓄積し、両列の位置マスクの共通部分がある場合だけ合格とする。UARTの最初の2 byteはこの基準の位相マスクである。同じRVALID相対cycleまで保証するものではなく、運用時の読出しlatencyや補正値を確定する試験ではない。
+
+`DDR_ARRAY_ALIGNED_SCAN=1 bash scripts/build_ddr_mpr.sh` と `-Mode DdrArrayAlignedScan` を使う。`DdrBurstAlignment` はtimelineとarrayで共有する独立Verylモジュールへ移した。`make ddr-array-aligned-scan-test` は2 beatずれた2 word、隠れた1 bit誤り、古い列値を検証し、列ごとに異なるbeat位置で一致する場合は拒否する。lint、continuous/phase/gate/same/early-scan/array/alignment/expected-timelineの回帰試験も通過した。配置配線後のsetup/hold違反は0。
+
+bitstream SHA256 `4bd52c906207c636f9df915b4e26ccd730806efefcb32a0fde197249e1ea5015` の実機結果は3回とも `V00002828`。ログは `logs/board/20260926-170809-DdrArrayAlignedScan-*`、`170836`、`170933`。初回FTDI初期化の再試行後、全回で記録取得とLCD復帰・UART検査を通過した。組合せ探索でも合格候補はないため、これを校正済みPHYとして扱わない。次の確認対象はPHY起動時のDLL/高速クロック/分周器の制御順序である。
+
+## 一次資料
 
 - [Gowin DDR3 PHY Interface IP User Guide](https://www.gowinsemi.com/upload/database_doc/2819/document/660baf95016e1.pdf): CWL=5 の WRITE と CL=6 の READ の CA slot 例。
 - [Gowin FPGA Primitive](https://www.gowinsemi.com/upload/database_doc/39/document/5bfcff2ce0b72.pdf): DQS と OSER8_MEM/IDES8_MEM の信号定義。

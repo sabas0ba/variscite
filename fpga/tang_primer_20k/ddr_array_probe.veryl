@@ -10,6 +10,8 @@ module DdrArrayProbe #(
     param EARLY_GATE : u32      = 32'd0,
     param READ_SEL   : logic<6> = 6'h20,
     param PHASE_SCAN : u32      = 0    ,
+    param READ_HOLD  : u32      = 1    ,
+    param PHASE_ALIGN: u32      = 0    ,
 ) (
     i_clk         : input  clock     ,
     i_rst         : input  reset     ,
@@ -145,6 +147,37 @@ module DdrArrayProbe #(
     let scan_observed: logic<6> = if PHASE_SCAN != 0 ? observed : bit_observed;
     let scan_match0  : logic<6> = if PHASE_SCAN != 0 ? match0 : bit_match0;
 
+    var align_offsets: logic<16>;
+    var align_seen   : logic<16>;
+    var align_column0: logic<16>;
+    inst alignment: DdrBurstAlignment (
+        i_previous: previous_data,
+        i_current : i_data       ,
+        i_expected: expected     ,
+        o_offsets : align_offsets,
+    );
+    let align_observed: logic<16> = align_seen
+        | {
+            (if i_valid[1] || previous_valid[1] ? align_offsets[15:8] : 8'b0),
+            (if i_valid[0] || previous_valid[0] ? align_offsets[7:0] : 8'b0),
+        };
+    always_ff {
+        if_reset {
+            align_seen    = 0;
+            align_column0 = 0;
+        } else if !i_enable {
+            align_seen    = 0;
+            align_column0 = 0;
+        } else if state == State::read0 || state == State::read1 {
+            align_seen = 0;
+        } else if state == State::sample0 || state == State::sample1 {
+            align_seen = align_observed;
+            if state == State::sample0 && elapsed == 11 {
+                align_column0 = align_observed;
+            }
+        }
+    }
+
     always_ff {
         if_reset {
             state          = State::idle;
@@ -268,10 +301,10 @@ module DdrArrayProbe #(
                         match0     = observed;
                         bit_match0 = bit_observed;
                         if GATE_SCAN != 0 {
-                            if |scan_observed[2:0] {
+                            if (if PHASE_ALIGN != 0 ? |align_observed[7:0] : |scan_observed[2:0]) {
                                 col0_match0[gate_index] = 1'b1;
                             }
-                            if |scan_observed[5:3] {
+                            if (if PHASE_ALIGN != 0 ? |align_observed[15:8] : |scan_observed[5:3]) {
                                 col0_match1[gate_index] = 1'b1;
                             }
                         }
@@ -310,16 +343,24 @@ module DdrArrayProbe #(
                     if elapsed == 11 {
                         match1 = observed;
                         if GATE_SCAN != 0 {
-                            if |scan_observed[2:0] {
+                            if (if PHASE_ALIGN != 0 ? |align_observed[7:0] : |scan_observed[2:0]) {
                                 col8_match0[gate_index] = 1'b1;
                             }
-                            if |scan_observed[5:3] {
+                            if (if PHASE_ALIGN != 0 ? |align_observed[15:8] : |scan_observed[5:3]) {
                                 col8_match1[gate_index] = 1'b1;
                             }
-                            if |(scan_match0[2:0] & scan_observed[2:0]) {
+                            if (if PHASE_ALIGN != 0 ?
+                                |(align_column0[7:0] & align_observed[7:0])
+                            :
+                                |(scan_match0[2:0] & scan_observed[2:0])
+                            ) {
                                 pass_gate0[gate_index] = 1'b1;
                             }
-                            if |(scan_match0[5:3] & scan_observed[5:3]) {
+                            if (if PHASE_ALIGN != 0 ?
+                                |(align_column0[15:8] & align_observed[15:8])
+                            :
+                                |(scan_match0[5:3] & scan_observed[5:3])
+                            ) {
                                 pass_gate1[gate_index] = 1'b1;
                             }
                         }
@@ -397,7 +438,7 @@ module DdrArrayProbe #(
                 o_cmd_valid = 1'b1;
                 o_cmd       = 3'b101;
                 o_addr      = if state == State::read1 ? 14'd8 : 14'd0;
-                o_hold      = 2'b11;
+                o_hold      = if READ_HOLD != 0 ? 2'b11 : 2'b00;
             }
             State::sample0, State::sample1: {
                 if elapsed
