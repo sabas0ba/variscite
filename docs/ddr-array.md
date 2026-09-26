@@ -40,6 +40,18 @@ bitstream SHA256 `963c6f7444c0a42a6675b1ae406ccfa360f905b2f5635c08cec91ecc15d2e5
 
 ## 一次資料
 
+### 2026-09-26: 全幅での受信選択走査
+
+`DdrArrayPhaseScan` はREADゲートを通常の位置に固定し、RCLKSEL=0–7を同一起動中に走査する。各候補で列0/8を読み、各laneの64 bit全体が両列で同じRVALID相対位置（直前・同時・直後）に一致した場合だけ合格マスクへ記録する。従来の `DdrArrayScan` はDQ0/DQ8とゲート位置を評価するモードとして維持する。
+
+構築は `DDR_ARRAY_PHASE_SCAN=1 bash scripts/build_ddr_mpr.sh`、実機取得は `scripts/test-ddr-init-board.ps1 -Mode DdrArrayPhaseScan`。UARTは `SMMNNCCDD` で、`MM`/`NN` がlane0/1の全幅合格位相マスク、`CC`/`DD` は同じRVALID相対cycleで列ごとのDQ0/DQ8が変化した位相マスクである。後半2 byteは全幅の正しさを示さない。実機スクリプトのpassedは完了フレーム取得を意味し、`T` 以外はDDR読出し合格ではない。
+
+`make lint ddr-array-phase-scan-test ddr-array-gate-test ddr-array-same-test ddr-array-early-scan-test ddr-array-test` は通過した。新規試験は16 READの順序・固定ゲート・8選択値、レーンごとの異なる合格位相、古い列データとDQ7/DQ15の1 bit誤りの拒否を確認する。配置配線後のsetup/hold違反は0。
+
+bitstream SHA256 `98f72456eedcd26d576fae6a4355f99876f8b6c816d6c539bf9ec49501aec612` の3回の実機結果は全て `V00000000`。ログは `logs/board/20260926-165320-DdrArrayPhaseScan-*`、`165349`、`165438`。各回のLCD SoC復帰とUART検査は通過した。いずれも全幅で使える受信選択は得られなかった。RCLKSEL単独の走査では解消しておらず、PHY起動とREAD時のクロック制御、DLLの位相条件も確認対象である。
+
+### 参照先
+
 - [Gowin DDR3 PHY Interface IP User Guide](https://www.gowinsemi.com/upload/database_doc/2819/document/660baf95016e1.pdf): CWL=5 の WRITE と CL=6 の READ の CA slot 例。
 - [Gowin FPGA Primitive](https://www.gowinsemi.com/upload/database_doc/39/document/5bfcff2ce0b72.pdf): DQS と OSER8_MEM/IDES8_MEM の信号定義。
 - [SK hynix H5TQ1G63EFR Rev. 1.1](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf): 搭載 DDR3 の速度・タイミング仕様。

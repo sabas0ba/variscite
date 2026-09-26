@@ -97,6 +97,20 @@ coverage:
 .PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test ddr-timeline-test ddr-full-timeline-test ddr-status-uart-test
 
 .PHONY: ddr-array-phase-test
+.PHONY: ddr-array-phase-scan-test
+ddr-array-phase-scan-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -GPHASE_SCAN=1 --top-module tb_ddr_array_gate_scan \
+	    -Mdir sim/obj_ddr_array_phase_scan -o tb_ddr_array_phase_scan \
+	    target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_gate_scan.sv
+	sim/obj_ddr_array_phase_scan/tb_ddr_array_phase_scan
+
+.PHONY: ddr-alignment-test
+ddr-alignment-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_alignment \
+	    -Mdir sim/obj_ddr_alignment -o tb_ddr_alignment \
+	    target/tang_primer_20k/ddr_timeline.sv tb/tb_ddr_alignment.sv
+	sim/obj_ddr_alignment/tb_ddr_alignment
+
 ddr-array-phase-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps "-GREAD_SEL=6'h24" --top-module tb_ddr_array_probe \
 	    -Mdir sim/obj_ddr_array_phase -o tb_ddr_array_phase \

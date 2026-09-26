@@ -1,3 +1,25 @@
+/// Compare each lane's eight-beat pattern at all offsets in two adjacent words.
+/// Offset zero starts at beat zero of i_previous; offset seven ends in i_current.
+module DdrBurstAlignment (
+    i_previous: input  logic<128>,
+    i_current : input  logic<128>,
+    i_expected: input  logic<128>,
+    o_offsets : output logic<16> ,
+) {
+    for lane in 0..2 :lanes {
+        var window  : logic<128>;
+        var expected: logic<64> ;
+        for beat in 0..8 :beats {
+            assign window[8 * beat+:8]      = i_previous[16 * beat + 8 * lane+:8];
+            assign window[64 + 8 * beat+:8] = i_current[16 * beat + 8 * lane+:8];
+            assign expected[8 * beat+:8]    = i_expected[16 * beat + 8 * lane+:8];
+        }
+        for offset in 0..8 :offsets {
+            assign o_offsets[8 * lane + offset] = window[8 * offset+:64] == expected;
+        }
+    }
+}
+
 /// Record the first 32 controller cycles beginning with the first array READ.
 /// Each word contains {gate, burst[1:0], valid[1:0], match[2:0]}, then
 /// DQ1, DQ0, and DQ8 over eight beats. All inputs use the controller clock.
@@ -6,6 +28,7 @@
 module DdrArrayTimeline #(
     param MATCH_ALL     : u32 = 0,
     param MATCH_EXPECTED: u32 = 0,
+    param ALIGN_SCAN    : u32 = 0,
 ) (
     i_clk     : input  clock     ,
     i_rst     : input  reset     ,
@@ -19,29 +42,51 @@ module DdrArrayTimeline #(
     o_sample  : output logic<32> ,
     o_captured: output logic     ,
 ) {
-    var   samples    : logic<32>  [32];
-    var   write_index: logic<5>       ;
-    var   active     : logic          ;
-    var   captured   : logic          ;
-    let   pattern0   : logic<8>        = {
+    var   samples       : logic<32>  [32];
+    var   write_index   : logic<5>       ;
+    var   active        : logic          ;
+    var   captured      : logic          ;
+    let   pattern0      : logic<8>        = {
         i_data[112], i_data[96], i_data[80], i_data[64], i_data[48], i_data[32], i_data[16], i_data[0]
     };
-    let   pattern2   : logic<8>        = {
+    let   pattern2      : logic<8>        = {
         i_data[113], i_data[97], i_data[81], i_data[65], i_data[49], i_data[33], i_data[17], i_data[1]
     };
-    let   pattern1   : logic<8>        = {
+    let   pattern1      : logic<8>        = {
         i_data[120], i_data[104], i_data[88], i_data[72], i_data[56], i_data[40], i_data[24], i_data[8]
     };
-    const LANE0      : logic<128>      = 128'h00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff;
-    const LANE1      : logic<128>      = ~LANE0;
-    let   match_bits : logic<3>        = if MATCH_EXPECTED != 0 ?
+    const LANE0         : logic<128>      = 128'h00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff;
+    const LANE1         : logic<128>      = ~LANE0;
+    let   match_bits    : logic<3>        = if MATCH_EXPECTED != 0 ?
         {i_data == i_expected, (i_data & LANE0) == (i_expected & LANE0), (i_data & LANE1) == (i_expected & LANE1)}
     : if MATCH_ALL != 0 ?
         {i_data == 128'b0, (i_data & LANE0) == LANE0, (i_data & LANE1) == LANE1}
     :
         3'b0
     ;
-    let   word       : logic<32>       = {i_gate, i_burst, i_valid, match_bits, pattern2, pattern0, pattern1};
+    var   previous_data : logic<128>     ;
+    var   previous_valid: logic<2>       ;
+    var   offsets       : logic<16>      ;
+    inst alignment: DdrBurstAlignment (
+        i_previous: previous_data,
+        i_current : i_data       ,
+        i_expected               ,
+        o_offsets : offsets      ,
+    );
+    always_ff {
+        if_reset {
+            previous_data  = 0;
+            previous_valid = 0;
+        } else {
+            previous_data  = i_data;
+            previous_valid = i_valid;
+        }
+    }
+    let word: logic<32> = if ALIGN_SCAN != 0 ?
+        {i_gate, i_burst, i_valid, match_bits, 6'b0, previous_valid, offsets}
+    :
+        {i_gate, i_burst, i_valid, match_bits, pattern2, pattern0, pattern1}
+    ;
 
     always_ff {
         if_reset {

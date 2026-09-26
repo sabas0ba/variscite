@@ -9,6 +9,7 @@ module DdrArrayProbe #(
     param SIMPLE_DATA: u32      = 0    ,
     param EARLY_GATE : u32      = 32'd0,
     param READ_SEL   : logic<6> = 6'h20,
+    param PHASE_SCAN : u32      = 0    ,
 ) (
     i_clk         : input  clock     ,
     i_rst         : input  reset     ,
@@ -141,6 +142,9 @@ module DdrArrayProbe #(
             i_valid[0] && pattern0 == expected_pattern0, i_valid[0] && previous_pattern0 == expected_pattern0,
         };
 
+    let scan_observed: logic<6> = if PHASE_SCAN != 0 ? observed : bit_observed;
+    let scan_match0  : logic<6> = if PHASE_SCAN != 0 ? match0 : bit_match0;
+
     always_ff {
         if_reset {
             state          = State::idle;
@@ -264,10 +268,10 @@ module DdrArrayProbe #(
                         match0     = observed;
                         bit_match0 = bit_observed;
                         if GATE_SCAN != 0 {
-                            if |bit_observed[2:0] {
+                            if |scan_observed[2:0] {
                                 col0_match0[gate_index] = 1'b1;
                             }
-                            if |bit_observed[5:3] {
+                            if |scan_observed[5:3] {
                                 col0_match1[gate_index] = 1'b1;
                             }
                         }
@@ -306,16 +310,16 @@ module DdrArrayProbe #(
                     if elapsed == 11 {
                         match1 = observed;
                         if GATE_SCAN != 0 {
-                            if |bit_observed[2:0] {
+                            if |scan_observed[2:0] {
                                 col8_match0[gate_index] = 1'b1;
                             }
-                            if |bit_observed[5:3] {
+                            if |scan_observed[5:3] {
                                 col8_match1[gate_index] = 1'b1;
                             }
-                            if |(bit_match0[2:0] & bit_observed[2:0]) {
+                            if |(scan_match0[2:0] & scan_observed[2:0]) {
                                 pass_gate0[gate_index] = 1'b1;
                             }
-                            if |(bit_match0[5:3] & bit_observed[5:3]) {
+                            if |(scan_match0[5:3] & scan_observed[5:3]) {
                                 pass_gate1[gate_index] = 1'b1;
                             }
                         }
@@ -351,7 +355,7 @@ module DdrArrayProbe #(
         o_addr        = 0;
         o_bank        = 0;
         o_read        = 0;
-        o_sel         = READ_SEL;
+        o_sel         = if PHASE_SCAN != 0 ? {gate_index, gate_index} : READ_SEL;
         o_hold        = 0;
         o_odt         = 0;
         o_data        = 0;
@@ -397,7 +401,7 @@ module DdrArrayProbe #(
             }
             State::sample0, State::sample1: {
                 if elapsed
-                    == (if GATE_SCAN != 0 ?
+                    == (if GATE_SCAN != 0 && PHASE_SCAN == 0 ?
                         {1'b0, gate_index} + (if EARLY_GATE != 0 ? 4'd0 : 4'd1)
                     : if EARLY_GATE != 0 ?
                         4'd0

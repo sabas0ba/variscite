@@ -79,3 +79,15 @@ USB再接続後の再試行 `logs/board/20260926-112659-DdrArrayFullTimeline-*` 
 ログは `logs/board/20260926-162624-DdrArrayPhaseTimeline-*`、`162702`、`162757`。2回目で異なる2列の複雑なパターンが全128 bitで有効cycleに一致した。一方、残り2回では全32 cycleでどちらのlaneも一致しないため、この固定設定を安定動作の校正値として採用しない。
 
 3回目の列0ではcycle 7と8のDQ1が`5A/02`、DQ0が`6A/01`、DQ8が`95/02`だった。連続する2 cycleを後の値が上位になるよう連結して2 bit右へ移動すると、それぞれ期待値`96/5A/A5`を得る。列8でも同じ操作で`69/A5/5A`となる。この3本の観測はデータがcontroller cycle境界をまたぐbeat整列の問題を示唆するが、未記録のDQを含む全幅の補正可能性は未確認である。次は連続cycleの全128 bitを使ったレーン別の整列診断と、再起動後も成立する校正を検証する。refresh、アドレスalias、長時間反復試験、Linux実機bootは未達である。
+
+## 隣接cycleの全幅整列診断
+
+`DdrBurstAlignment` は直前・現在の128 bit wordをレーンごとに分離し、連続する16 beatのうち開始位置0–7から8 beatを取り出して期待する64 bitと照合する。結果はレーンごとに8 bitの一致位置マスクとなる。これは観測回路であり、受信データの補正や合格位置の自動選択は行わない。
+
+`DdrArrayAlignTimeline` は4/4の受信選択を使い、32 bit記録を `{gate, burst[1:0], valid[1:0], direct_match[2:0], reserved[5:0], previous_valid[1:0], lane1_offsets[7:0], lane0_offsets[7:0]}` とする。bit nは直前cycleのbeat nを先頭にした一致を表す。現在cycleそのものの一致は従来の `direct_match` に残す。`DDR_ARRAY_ALIGN_TIMELINE=1 bash scripts/build_ddr_mpr.sh`、`-Mode DdrArrayAlignTimeline`、デコーダの `--alignment` を使用する。
+
+`make ddr-alignment-test` は両列のパターン、全8位置、異なるレーン位置、観測DQ0/DQ8以外の1 bit誤り、別列の古い値、reset、保存した前回/今回validを検証する。Veryl lint、同試験と既存のexpected/full/UART timeline試験は通過した。配置配線後のsetup/hold違反は0。
+
+bitstream SHA256 `ad0072c2b33673fae87e8323ede320b4bd6cbdf95961eae9c1512d1118dcc101` を2026-09-26に3回ロードした。`logs/board/20260926-164758-DdrArrayAlignTimeline-*`、`164830`、`164903` の全32 cycleで直接一致・整列一致は全て0だった。初回と3回目は両レーンのvalidがcycle 8/21に立った。2回目はlane0が8/21、lane1が10–12/23–25に立ち、RBURSTはlane0のみだった。初回FTDI初期化の再試行を経て3回とも記録を取得し、LCD SoC復帰・UART検査も通過した。
+
+このbitstreamで単純な隣接cycleの並べ替えによる回復は得られていない。前節の成功bitstreamと配置配線が異なるため、以前の成功・不一致データに対する全幅の再構成可否をこの結果だけで断定しない。受信バースト検出自体の起動間変動もあり、固定RCLKSELの候補評価を同一起動中の走査へ進める。
