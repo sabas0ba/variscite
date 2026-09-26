@@ -1,0 +1,789 @@
+/// Repeated diagnostic byte: P=PLL pending, L=DLL pending,
+/// I=DRAM initialization pending, R=initialization commands completed,
+/// G=both read DQS gates detected, M=MPR DQ pattern captured,
+/// V=MPR RVALID without a matching pattern, B=RBURST without RVALID,
+/// E=read DQS gate or MPR pattern timeout.
+module TangDdrStatusUart #(
+    param GAP_BITS: u32 = 22,
+) (
+    i_clk         : input  'reference clock   ,
+    i_rst         : input  'reference reset   ,
+    i_status      : input  'reference logic<4>,
+    i_debug_enable: input  'reference logic   ,
+    i_debug_extra : input  'reference logic   ,
+    i_debug0      : input  'reference logic<8>,
+    i_debug1      : input  'reference logic<8>,
+    i_debug2      : input  'reference logic<8>,
+    i_debug3      : input  'reference logic<8>,
+    o_tx          : output 'reference logic   ,
+) {
+    const BIT_CYCLES   : logic<8>        = 234;
+    var   gap          : 'reference logic<GAP_BITS>;
+    var   bit_time     : 'reference logic<8>       ;
+    var   bits         : 'reference logic<4>       ;
+    var   shift        : 'reference logic<10>      ;
+    var   data         : 'reference logic<8>       ;
+    var   status_data  : 'reference logic<8>       ;
+    var   debug_nibble : 'reference logic<4>       ;
+    var   report_index : 'reference logic<4>       ;
+    let   decimal_digit: 'reference logic           = debug_nibble <: 4'd10;
+    let   debug_ascii  : 'reference logic<8>        = if decimal_digit ?
+        8'h30 + {4'b0, debug_nibble}
+    :
+        8'h37 + {4'b0, debug_nibble}
+    ;
+
+    always_comb {
+        case i_status {
+            4'd0   : status_data = 8'h50; // P
+            4'd1   : status_data = 8'h4c; // L
+            4'd2   : status_data = 8'h49; // I
+            4'd3   : status_data = 8'h52; // R
+            4'd4   : status_data = 8'h47; // G: both DQS gates detected
+            4'd6   : status_data = 8'h4d; // M: both MPR DQ patterns captured
+            4'd7   : status_data = 8'h42; // B: RBURST but no RVALID
+            4'd8   : status_data = 8'h56; // V: RVALID but no MPR pattern
+            4'd9   : status_data = 8'h41; // A: two array patterns read back
+            4'd10  : status_data = 8'h54; // T: DQ0 and DQ8 pass a gate timing candidate
+            default: status_data = 8'h45; // E: DQS gate timeout
+        }
+        case report_index {
+            4'd1   : debug_nibble = i_debug0[7:4];
+            4'd2   : debug_nibble = i_debug0[3:0];
+            4'd3   : debug_nibble = i_debug1[7:4];
+            4'd4   : debug_nibble = i_debug1[3:0];
+            4'd5   : debug_nibble = i_debug2[7:4];
+            4'd6   : debug_nibble = i_debug2[3:0];
+            4'd7   : debug_nibble = i_debug3[7:4];
+            default: debug_nibble = i_debug3[3:0];
+        }
+        data = if i_debug_enable && report_index != 0 ? debug_ascii : status_data;
+    }
+    always_ff (i_clk, i_rst) {
+        if_reset {
+            gap          = 0;
+            bit_time     = 0;
+            bits         = 0;
+            shift        = 10'h3ff;
+            report_index = 0;
+        } else if bits == 0 {
+            gap = (gap + 1) as GAP_BITS;
+            if gap == 0 {
+                shift    = {1'b1, data, 1'b0};
+                bits     = 4'd10;
+                bit_time = 0;
+                if i_debug_enable {
+                    report_index = if report_index == (if i_debug_extra ? 4'd8 : 4'd4) ? 0 : report_index + 4'd1;
+                }
+            }
+        } else if bit_time == BIT_CYCLES - 1 {
+            bit_time = 0;
+            shift    = {1'b1, shift[9:1]};
+            bits     = (bits - 4'd1) as 4;
+        } else {
+            bit_time = (bit_time + 8'd1) as 8;
+        }
+    }
+    assign o_tx = if bits != 0 ? shift[0] : 1'b1;
+}
+
+/// JEDEC power-up probe. RUN_READ_SWEEP also issues ACT/READ/PRE and detects
+/// DQS bursts. RUN_MPR checks the fixed MPR read pattern on DQ0 and DQ8.
+/// Neither mode verifies write timing or RAM retention.
+module TangDdrInitProbe #(
+    param RUN_READ_SWEEP   : u32      = 0    ,
+    param RUN_MPR          : u32      = 0    ,
+    param RUN_MPR_DELAY    : u32      = 0    ,
+    param RUN_MPR_ALIGN    : u32      = 0    ,
+    param RUN_ARRAY        : u32      = 0    ,
+    param ARRAY_SCAN       : u32      = 0    ,
+    param ARRAY_SAME       : u32      = 0    ,
+    param ARRAY_TRACE      : u32      = 0    ,
+    param ARRAY_MATCH      : u32      = 0    ,
+    param ARRAY_FLAGS      : u32      = 0    ,
+    param ARRAY_MULTI      : u32      = 0    ,
+    param ARRAY_TRAIN      : u32      = 0    ,
+    param ARRAY_ASSEMBLE   : u32      = 0    ,
+    param ARRAY_RAW        : u32      = 0    ,
+    param ARRAY_TIMELINE   : u32      = 0    ,
+    param ARRAY_SIMPLE     : u32      = 0    ,
+    param ARRAY_EARLY      : u32      = 0    ,
+    param ARRAY_FULL       : u32      = 0    ,
+    param ARRAY_EXPECTED   : u32      = 0    ,
+    param ARRAY_READ_SEL   : logic<6> = 6'h20,
+    param ARRAY_ALIGN      : u32      = 0    ,
+    param ARRAY_PHASE_SCAN : u32      = 0    ,
+    param ARRAY_READ_HOLD  : u32      = 1    ,
+    param DLL_QUARTER      : u32      = 0    ,
+    param ARRAY_PHASE_ALIGN: u32      = 0    ,
+    param PHY_STARTUP      : u32      = 0    ,
+) (
+    i_clk      : input  'reference clock        ,
+    o_uart_tx  : output 'reference logic        ,
+    ddr_dq     : inout  'async     tri logic<16>,
+    ddr_dqs_p  : inout  'async     tri logic<2> ,
+    ddr_dqs_n  : inout  'async     tri logic<2> ,
+    ddr_dm     : output 'fast      logic    <2> ,
+    ddr_addr   : output 'fast      logic    <14>,
+    ddr_bank   : output 'fast      logic    <3> ,
+    ddr_ras_n  : output 'fast      logic        ,
+    ddr_cas_n  : output 'fast      logic        ,
+    ddr_we_n   : output 'fast      logic        ,
+    ddr_cs_n   : output 'fast      logic        ,
+    ddr_cke    : output 'fast      logic        ,
+    ddr_odt    : output 'fast      logic        ,
+    ddr_reset_n: output 'ctrl      logic        ,
+    ddr_clk_p  : output 'fast      logic        ,
+    ddr_clk_n  : output 'fast      logic        ,
+) {
+    var por                : 'reference logic                    ;
+    var fast_clk           : 'fast      clock                    ;
+    var ctrl_clk           : 'ctrl      clock                    ;
+    var pll_locked         : 'async     logic                    ;
+    var dll_locked         : 'async     logic                    ;
+    var dll_step           : 'async     logic           <8>      ;
+    var pll_lock_sync      : 'reference logic           <2>      ;
+    var dll_lock_sync      : 'reference logic           <2>      ;
+    var startup_freeze     : 'reference logic                    ;
+    var startup_stop       : 'reference logic                    ;
+    var startup_div_reset  : 'reference logic                    ;
+    var startup_phy_reset  : 'reference logic                    ;
+    var startup_hold       : 'reference logic                    ;
+    var startup_update_n   : 'reference logic                    ;
+    var startup_ready      : 'reference logic                    ;
+    var phy_reset          : 'async     reset_async_high         ;
+    var ready_pipe         : 'ctrl      logic           <2>      ;
+    var ready_reset        : 'ctrl      reset                    ;
+    var cmd_valid          : 'ctrl      logic                    ;
+    var cmd                : 'ctrl      logic           <3>      ;
+    var bank               : 'ctrl      logic           <3>      ;
+    var addr               : 'ctrl      logic           <14>     ;
+    var reset_n            : 'ctrl      logic                    ;
+    var cke                : 'ctrl      logic                    ;
+    var done               : 'ctrl      logic                    ;
+    var status_pipe        : 'reference logic           <2>      ;
+    var status             : 'reference logic           <4>      ;
+    var ref_reset          : 'reference reset                    ;
+    var sweep_valid        : 'ctrl      logic                    ;
+    var sweep_cmd          : 'ctrl      logic           <3>      ;
+    var sweep_bank         : 'ctrl      logic           <3>      ;
+    var sweep_addr         : 'ctrl      logic           <14>     ;
+    var sweep_read         : 'ctrl      logic           <8>      ;
+    var sweep_sel          : 'ctrl      logic           <6>      ;
+    var sweep_hold         : 'ctrl      logic           <2>      ;
+    var sweep_done         : 'ctrl      logic                    ;
+    var sweep_found        : 'ctrl      logic           <2>      ;
+    var sweep_burst_seen   : 'ctrl      logic           <2>      ;
+    var sweep_valid_seen   : 'ctrl      logic           <2>      ;
+    var sweep_pattern0     : 'ctrl      logic           <8>      ;
+    var sweep_pattern1     : 'ctrl      logic           <8>      ;
+    var sweep_phase0       : 'ctrl      logic           <6>      ;
+    var sweep_phase1       : 'ctrl      logic           <6>      ;
+    var sweep_delay_target : 'ctrl      logic           <5>      ;
+    var sweep_delay_ready  : 'ctrl      logic                    ;
+    var sweep_pass_delay0  : 'ctrl      logic           <8>      ;
+    var sweep_pass_delay1  : 'ctrl      logic           <8>      ;
+    var sweep_align_pass0  : 'ctrl      logic           <3>      ;
+    var sweep_align_pass1  : 'ctrl      logic           <3>      ;
+    var array_valid        : 'ctrl      logic                    ;
+    var array_cmd          : 'ctrl      logic           <3>      ;
+    var array_addr         : 'ctrl      logic           <14>     ;
+    var array_bank         : 'ctrl      logic           <3>      ;
+    var array_read         : 'ctrl      logic           <8>      ;
+    var array_sel          : 'ctrl      logic           <6>      ;
+    var array_hold         : 'ctrl      logic           <2>      ;
+    var array_odt          : 'ctrl      logic           <4>      ;
+    var array_data         : 'ctrl      logic           <128>    ;
+    var array_mask         : 'ctrl      logic           <16>     ;
+    var array_dq_enable    : 'ctrl      logic           <4>      ;
+    var array_dqs_enable   : 'ctrl      logic           <4>      ;
+    var array_dqs_pattern  : 'ctrl      logic           <8>      ;
+    var array_done         : 'ctrl      logic                    ;
+    var array_found        : 'ctrl      logic                    ;
+    var array_burst_seen   : 'ctrl      logic           <2>      ;
+    var array_valid_seen   : 'ctrl      logic           <2>      ;
+    var array_match0       : 'ctrl      logic           <8>      ;
+    var array_match1       : 'ctrl      logic           <8>      ;
+    var array_pass_gate0   : 'ctrl      logic           <8>      ;
+    var array_pass_gate1   : 'ctrl      logic           <8>      ;
+    var array_change_gate0 : 'ctrl      logic           <8>      ;
+    var array_change_gate1 : 'ctrl      logic           <8>      ;
+    var array_col0_match0  : 'ctrl      logic           <8>      ;
+    var array_col0_match1  : 'ctrl      logic           <8>      ;
+    var array_col8_match0  : 'ctrl      logic           <8>      ;
+    var array_col8_match1  : 'ctrl      logic           <8>      ;
+    var array_first_raw0   : 'ctrl      logic           <8>      ;
+    var array_first_raw1   : 'ctrl      logic           <8>      ;
+    var array_raw0         : 'ctrl      logic           <8>      ;
+    var array_raw1         : 'ctrl      logic           <8>      ;
+    var delay_rloadn       : 'ctrl      logic                    ;
+    var delay_rmove        : 'ctrl      logic                    ;
+    var delay_rdir         : 'ctrl      logic                    ;
+    var phy_burst          : 'ctrl      logic           <2>      ;
+    var phy_valid          : 'ctrl      logic           <2>      ;
+    var phy_rflag          : 'ctrl      logic           <2>      ;
+    var phy_wflag          : 'ctrl      logic           <2>      ;
+    var phy_rpoint         : 'ctrl      logic           <6>      ;
+    var phy_wpoint         : 'ctrl      logic           <6>      ;
+    var flag_seen          : 'ctrl      logic           <4>      ;
+    var first_rpoint       : 'ctrl      logic           <6>      ;
+    var last_rpoint        : 'ctrl      logic           <6>      ;
+    var last_wpoint        : 'ctrl      logic           <6>      ;
+    var first_captured     : 'ctrl      logic           <2>      ;
+    var training_window    : 'ctrl      logic                    ;
+    var assembly_data_pipe : 'ctrl      logic           <128> [2];
+    var assembly_valid_pipe: 'ctrl      logic           <2>   [2];
+    var trained_offsets    : 'ctrl      logic           <8>      ;
+    var trained_ready      : 'ctrl      logic           <2>      ;
+    var assembled_data     : 'ctrl      logic           <128>    ;
+    var assembled_valid    : 'ctrl      logic           <2>      ;
+    var raw_captured       : 'ctrl      logic                    ;
+    var regular_captured   : 'ctrl      logic                    ;
+    var raw_word           : 'ctrl      logic           <32>     ;
+    var regular_word       : 'ctrl      logic           <32>     ;
+    var timeline_captured  : 'ctrl      logic                    ;
+    var array_expected     : 'ctrl      logic           <128>    ;
+    var timeline_word      : 'ctrl      logic           <32>     ;
+    var timeline_index     : 'reference logic           <5>      ;
+    var timeline_ready     : 'reference logic           <2>      ;
+    var normal_uart_tx     : 'reference logic                    ;
+    var timeline_uart_tx   : 'reference logic                    ;
+    var phy_data           : 'ctrl      logic           <128>    ;
+    var sweep_pipe         : 'reference logic           <2>      ;
+    var found_pipe         : 'reference logic           <2>      ;
+    var burst_pipe         : 'reference logic           <2>      ;
+    var valid_pipe         : 'reference logic           <2>      ;
+    var pattern0_meta      : 'reference logic           <8>      ;
+    var pattern0_ref       : 'reference logic           <8>      ;
+    var pattern1_meta      : 'reference logic           <8>      ;
+    var pattern1_ref       : 'reference logic           <8>      ;
+    var raw0_meta          : 'reference logic           <8>      ;
+    var raw0_ref           : 'reference logic           <8>      ;
+    var raw1_meta          : 'reference logic           <8>      ;
+    var raw1_ref           : 'reference logic           <8>      ;
+    let mpr_debug          : 'reference logic                     = RUN_READ_SWEEP != 0 || RUN_MPR != 0 || RUN_MPR_DELAY
+        != 0 || RUN_MPR_ALIGN != 0 || RUN_ARRAY != 0;
+    let use_sweep          : 'ctrl      logic                     = RUN_READ_SWEEP != 0 || RUN_MPR != 0 || RUN_MPR_DELAY
+        != 0 || RUN_MPR_ALIGN != 0 || RUN_ARRAY != 0;
+    let use_mpr            : 'ctrl      logic                     = RUN_MPR != 0 || RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN
+        != 0;
+    let sweep_active       : 'ctrl      logic                     = use_sweep && done;
+    let probe_valid        : 'ctrl      logic                     = if RUN_ARRAY != 0 ? array_valid : sweep_valid;
+    let probe_cmd          : 'ctrl      logic           <3>       = if RUN_ARRAY != 0 ? array_cmd : sweep_cmd;
+    let probe_bank         : 'ctrl      logic           <3>       = if RUN_ARRAY != 0 ? array_bank : sweep_bank;
+    let probe_addr         : 'ctrl      logic           <14>      = if RUN_ARRAY != 0 ? array_addr : sweep_addr;
+    let probe_done         : 'ctrl      logic                     = if RUN_ARRAY != 0 ? array_done : sweep_done;
+    let probe_found        : 'ctrl      logic                     = if RUN_ARRAY != 0 ?
+        array_found
+    :
+        sweep_found == 2'b11
+    ;
+    let probe_burst        : 'ctrl      logic           <2>       = if RUN_ARRAY != 0 ?
+        array_burst_seen
+    :
+        sweep_burst_seen
+    ;
+    let probe_valid_seen   : 'ctrl      logic           <2>       = if RUN_ARRAY != 0 ?
+        array_valid_seen
+    :
+        sweep_valid_seen
+    ;
+    let phy_cmd_valid      : 'ctrl      logic                     = if sweep_active ? probe_valid : cmd_valid;
+    let phy_cmd            : 'ctrl      logic           <3>       = if sweep_active ? probe_cmd : cmd;
+    let phy_bank           : 'ctrl      logic           <3>       = if sweep_active ? probe_bank : bank;
+    let phy_addr           : 'ctrl      logic           <14>      = if sweep_active ? probe_addr : addr;
+    let phy_cke            : 'ctrl      logic                     = cke && !(use_sweep && probe_done);
+    let write_slot         : 'ctrl      logic                     = RUN_ARRAY != 0 && sweep_active && phy_cmd_valid
+        && phy_cmd == 3'b100;
+    // At CL=6/AL=0, the Gowin PHY timing example launches READ in slot 2.
+    // Keep the startup sequencer in slot 0; shift diagnostic commands together.
+    let phy_addr_slots: 'ctrl logic<56> = if write_slot ?
+        {1'b0, phy_addr[12:0], 42'b0}
+    : if sweep_active ?
+        {14'b0, 1'b0, phy_addr[12:0], 28'b0}
+    :
+        {42'b0, 1'b0, phy_addr[12:0]}
+    ;
+    let phy_bank_slots: 'ctrl logic<12> = if write_slot ?
+        {phy_bank, 9'b0}
+    : if sweep_active ?
+        {3'b0, phy_bank, 6'b0}
+    :
+        {9'b0, phy_bank}
+    ;
+    let phy_cmd_slots : 'ctrl logic<12> = if write_slot ?
+        {phy_cmd, 9'b111_111_111}
+    : if sweep_active ?
+        {3'b111, phy_cmd, 6'b111_111}
+    :
+        {9'b111_111_111, phy_cmd}
+    ;
+    let phy_cs_slots  : 'ctrl logic<4>  = if phy_cmd_valid ?
+        (if write_slot ? 4'b0111 : if sweep_active ? 4'b1011 : 4'b1110)
+    :
+        4'b1111
+    ;
+
+    inst por_gen: PowerOnReset (
+        i_clk     ,
+        o_rst: por,
+    );
+    unsafe (cdc) {
+        inst clocks: TangDdrClock (
+            i_clk                                                      ,
+            i_reset    : por                                           ,
+            i_stop     : if PHY_STARTUP != 0 ? startup_stop : 1'b0,
+            i_div_reset: if PHY_STARTUP != 0 ? startup_div_reset : 1'b0,
+            o_fast     : fast_clk                                      ,
+            o_ctrl     : ctrl_clk                                      ,
+            o_locked   : pll_locked                                    ,
+        );
+    }
+    unsafe (cdc) {
+        assign ref_reset = por as reset;
+        assign phy_reset = (por
+            || (if PHY_STARTUP != 0 ? startup_phy_reset : !pll_locked || !dll_locked)) as reset_async_high;
+        always_ff (i_clk, ref_reset) {
+            if_reset {
+                pll_lock_sync = 0;
+                dll_lock_sync = 0;
+            } else {
+                pll_lock_sync = {pll_lock_sync[0], pll_locked};
+                dll_lock_sync = {dll_lock_sync[0], dll_locked};
+            }
+        }
+        inst dll: $sv::DLL #(
+            SCAL_EN : if DLL_QUARTER != 0 ? "false" : "true",
+            CODESCAL: "101"                                 ,
+        ) (
+            CLKIN   : fast_clk                                     ,
+            STOP    : if PHY_STARTUP != 0 ? startup_freeze : 1'b0,
+            UPDNCNTL: if PHY_STARTUP != 0 ? startup_update_n : 1'b0,
+            RESET   : por || !pll_locked,
+            STEP    : dll_step                                     ,
+            LOCK    : dll_locked                                   ,
+        );
+        always_ff (ctrl_clk, phy_reset) {
+            if_reset {
+                ready_pipe = 0;
+            } else {
+                ready_pipe = {ready_pipe[0], (if PHY_STARTUP != 0 ? startup_ready : 1'b1)};
+            }
+        }
+        assign ready_reset = !ready_pipe[1] as reset;
+    }
+    inst phy_startup: DdrPhyStartup (
+        i_clk                          ,
+        i_rst       : ref_reset        ,
+        i_pll_locked: pll_lock_sync[1] ,
+        i_dll_locked: dll_lock_sync[1] ,
+        o_freeze    : startup_freeze   ,
+        o_stop      : startup_stop     ,
+        o_div_reset : startup_div_reset,
+        o_phy_reset : startup_phy_reset,
+        o_hold      : startup_hold     ,
+        o_update_n  : startup_update_n ,
+        o_ready     : startup_ready    ,
+    );
+    inst startup: Ddr3Startup (
+        i_clk      : ctrl_clk     ,
+        i_rst      : ready_reset  ,
+        i_enable   : ready_pipe[1],
+        i_cmd_ready: 1'b1         ,
+        o_cmd_valid: cmd_valid    ,
+        o_cmd      : cmd          ,
+        o_bank     : bank         ,
+        o_addr     : addr         ,
+        o_reset_n  : reset_n      ,
+        o_cke      : cke          ,
+        o_done     : done         ,
+    );
+    inst sweep: DdrReadGateSweep #(
+        MPR_MODE  : if RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0 ? 1 : RUN_MPR,
+        DELAY_MODE: if RUN_MPR_ALIGN != 0 ? 1 : RUN_MPR_DELAY,
+        ALIGN_MODE: RUN_MPR_ALIGN                                            ,
+    ) (
+        i_clk         : ctrl_clk                           ,
+        i_rst         : ready_reset                        ,
+        i_enable      : done && use_sweep && RUN_ARRAY == 0,
+        i_burst       : phy_burst                          ,
+        i_valid       : phy_valid                          ,
+        i_data        : phy_data                           ,
+        i_delay_ready : sweep_delay_ready                  ,
+        o_cmd_valid   : sweep_valid                        ,
+        o_cmd         : sweep_cmd                          ,
+        o_addr        : sweep_addr                         ,
+        o_bank        : sweep_bank                         ,
+        o_read        : sweep_read                         ,
+        o_sel         : sweep_sel                          ,
+        o_hold        : sweep_hold                         ,
+        o_done        : sweep_done                         ,
+        o_found       : sweep_found                        ,
+        o_burst_seen  : sweep_burst_seen                   ,
+        o_valid_seen  : sweep_valid_seen                   ,
+        o_sample0     : _                                  ,
+        o_sample1     : _                                  ,
+        o_pattern0    : sweep_pattern0                     ,
+        o_pattern1    : sweep_pattern1                     ,
+        o_phase0      : sweep_phase0                       ,
+        o_phase1      : sweep_phase1                       ,
+        o_delay_target: sweep_delay_target                 ,
+        o_pass_delay0 : sweep_pass_delay0                  ,
+        o_pass_delay1 : sweep_pass_delay1                  ,
+        o_align_pass0 : sweep_align_pass0                  ,
+        o_align_pass1 : sweep_align_pass1                  ,
+    );
+    always_ff (ctrl_clk, ready_reset) {
+        if_reset {
+            training_window = 0;
+        } else if array_done {
+            training_window = 0;
+        } else if array_valid && array_cmd == 3'b101 {
+            training_window = array_addr == 0;
+        }
+    }
+    inst training: DdrReadTraining (
+        i_clk    : ctrl_clk       ,
+        i_rst    : ready_reset    ,
+        i_train  : training_window,
+        i_data   : phy_data       ,
+        i_valid  : phy_valid      ,
+        o_offsets: trained_offsets,
+        o_ready  : trained_ready  ,
+        o_trained: _              ,
+    );
+    always_ff (ctrl_clk, ready_reset) {
+        if_reset {
+            assembly_data_pipe[0]  = 0;
+            assembly_data_pipe[1]  = 0;
+            assembly_valid_pipe[0] = 0;
+            assembly_valid_pipe[1] = 0;
+        } else {
+            assembly_data_pipe[0]  = phy_data;
+            assembly_data_pipe[1]  = assembly_data_pipe[0];
+            assembly_valid_pipe[0] = phy_valid;
+            assembly_valid_pipe[1] = assembly_valid_pipe[0];
+        }
+    }
+    inst assembler: DdrReadAssembler #(
+        DYNAMIC: ARRAY_TRAIN,
+    ) (
+        i_offsets: trained_offsets                                                         ,
+        i_clk    : ctrl_clk                                                                ,
+        i_rst    : ready_reset                                                             ,
+        i_data   : if ARRAY_TRAIN != 0 ? assembly_data_pipe[1] : phy_data,
+        i_valid  : if ARRAY_TRAIN != 0 ? assembly_valid_pipe[1] & trained_ready : phy_valid,
+        o_data   : assembled_data                                                          ,
+        o_valid  : assembled_valid                                                         ,
+    );
+    inst array: DdrArrayProbe #(
+        MULTI_PATTERN: ARRAY_MULTI      ,
+        GATE_SCAN    : ARRAY_SCAN       ,
+        SAME_DATA    : ARRAY_SAME       ,
+        SIMPLE_DATA  : ARRAY_SIMPLE     ,
+        EARLY_GATE   : ARRAY_EARLY      ,
+        READ_SEL     : ARRAY_READ_SEL   ,
+        PHASE_SCAN   : ARRAY_PHASE_SCAN ,
+        READ_HOLD    : ARRAY_READ_HOLD  ,
+        PHASE_ALIGN  : ARRAY_PHASE_ALIGN,
+    ) (
+        i_clk         : ctrl_clk                                            ,
+        i_rst         : ready_reset                                         ,
+        i_enable      : done && RUN_ARRAY != 0,
+        i_burst       : phy_burst                                           ,
+        i_valid       : if ARRAY_ASSEMBLE != 0 ? assembled_valid : phy_valid,
+        i_data        : if ARRAY_ASSEMBLE != 0 ? assembled_data : phy_data,
+        o_cmd_valid   : array_valid                                         ,
+        o_cmd         : array_cmd                                           ,
+        o_addr        : array_addr                                          ,
+        o_bank        : array_bank                                          ,
+        o_read        : array_read                                          ,
+        o_sel         : array_sel                                           ,
+        o_hold        : array_hold                                          ,
+        o_odt         : array_odt                                           ,
+        o_data        : array_data                                          ,
+        o_mask        : array_mask                                          ,
+        o_dq_enable   : array_dq_enable                                     ,
+        o_dqs_enable  : array_dqs_enable                                    ,
+        o_dqs_pattern : array_dqs_pattern                                   ,
+        o_done        : array_done                                          ,
+        o_found       : array_found                                         ,
+        o_burst_seen  : array_burst_seen                                    ,
+        o_valid_seen  : array_valid_seen                                    ,
+        o_match0      : array_match0                                        ,
+        o_match1      : array_match1                                        ,
+        o_pass_gate0  : array_pass_gate0                                    ,
+        o_pass_gate1  : array_pass_gate1                                    ,
+        o_change_gate0: array_change_gate0                                  ,
+        o_change_gate1: array_change_gate1                                  ,
+        o_col0_match0 : array_col0_match0                                   ,
+        o_col0_match1 : array_col0_match1                                   ,
+        o_col8_match0 : array_col8_match0                                   ,
+        o_col8_match1 : array_col8_match1                                   ,
+        o_first_raw0  : array_first_raw0                                    ,
+        o_first_raw1  : array_first_raw1                                    ,
+        o_raw0        : array_raw0                                          ,
+        o_raw1        : array_raw1                                          ,
+        o_expected    : array_expected                                      ,
+    );
+    inst delay_stepper: DdrReadDelayStepper (
+        i_clk   : ctrl_clk                                                  ,
+        i_rst   : ready_reset                                               ,
+        i_enable: sweep_active && (RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0),
+        i_target: sweep_delay_target                                        ,
+        o_rloadn: delay_rloadn                                              ,
+        o_rmove : delay_rmove                                               ,
+        o_rdir  : delay_rdir                                                ,
+        o_ready : sweep_delay_ready                                         ,
+    );
+    unsafe (cdc) {
+        inst phy: TangDdrPhyIo (
+            i_clk        : ctrl_clk                             ,
+            i_fast       : fast_clk                             ,
+            i_reset      : phy_reset                            ,
+            i_dll_step   : dll_step                             ,
+            i_mem_reset_n: reset_n && !(use_sweep && probe_done),
+            i_addr       : phy_addr_slots                       ,
+            i_bank       : phy_bank_slots                       ,
+            i_cmd        : phy_cmd_slots                        ,
+            i_cs_n       : phy_cs_slots                         ,
+            i_cke        : {phy_cke, phy_cke, phy_cke, phy_cke},
+            i_odt        : if RUN_ARRAY != 0 ? array_odt : 4'b0,
+            i_hold       : if PHY_STARTUP != 0 && startup_hold ?
+                2'b11
+            : if RUN_ARRAY != 0 ?
+                array_hold
+            : if use_sweep ?
+                sweep_hold
+            :
+                2'b0
+            ,
+            i_read       : if RUN_ARRAY != 0 ? array_read : if use_sweep ? sweep_read : 8'b0,
+            i_read_sel   : if RUN_ARRAY != 0 ? array_sel : if use_sweep ? sweep_sel : 6'b0,
+            i_rloadn     : delay_rloadn                                                     ,
+            i_rmove      : delay_rmove                                                      ,
+            i_rdir       : delay_rdir                                                       ,
+            i_write_step : 16'b0                                                            ,
+            i_data       : if RUN_ARRAY != 0 ? array_data : 128'b0,
+            i_mask       : if RUN_ARRAY != 0 ? array_mask : 16'hffff,
+            i_dq_enable  : if RUN_ARRAY != 0 ? array_dq_enable : 4'b0,
+            i_dqs_enable : if RUN_ARRAY != 0 ? array_dqs_enable : 4'b0,
+            i_dqs_pattern: if RUN_ARRAY != 0 ? array_dqs_pattern : 8'b0,
+            o_data       : phy_data                                                         ,
+            o_raw        : _                                                                ,
+            o_burst      : phy_burst                                                        ,
+            o_valid      : phy_valid                                                        ,
+            o_rflag      : phy_rflag                                                        ,
+            o_wflag      : phy_wflag                                                        ,
+            o_rpoint     : phy_rpoint                                                       ,
+            o_wpoint     : phy_wpoint                                                       ,
+            ddr_dq                                                                          ,
+            ddr_dqs_p                                                                       ,
+            ddr_dqs_n                                                                       ,
+            ddr_dm                                                                          ,
+            ddr_addr                                                                        ,
+            ddr_bank                                                                        ,
+            ddr_ras_n                                                                       ,
+            ddr_cas_n                                                                       ,
+            ddr_we_n                                                                        ,
+            ddr_cs_n                                                                        ,
+            ddr_cke                                                                         ,
+            ddr_odt                                                                         ,
+            ddr_reset_n                                                                     ,
+            ddr_clk_p                                                                       ,
+            ddr_clk_n                                                                       ,
+        );
+        always_ff (ctrl_clk, ready_reset) {
+            if_reset {
+                flag_seen      = 0;
+                first_rpoint   = 0;
+                last_rpoint    = 0;
+                last_wpoint    = 0;
+                first_captured = 0;
+            } else if RUN_ARRAY != 0 && done && !array_done {
+                flag_seen = flag_seen | {phy_wflag, phy_rflag};
+                if array_dq_enable != 0 {
+                    last_wpoint = phy_wpoint;
+                }
+                if phy_valid[0] {
+                    if !first_captured[0] {
+                        first_rpoint[2:0] = phy_rpoint[2:0];
+                        first_captured[0] = 1'b1;
+                    }
+                    last_rpoint[2:0] = phy_rpoint[2:0];
+                }
+                if phy_valid[1] {
+                    if !first_captured[1] {
+                        first_rpoint[5:3] = phy_rpoint[5:3];
+                        first_captured[1] = 1'b1;
+                    }
+                    last_rpoint[5:3] = phy_rpoint[5:3];
+                }
+            }
+        }
+        always_ff (i_clk, ref_reset) {
+            if_reset {
+                status_pipe    = 0;
+                sweep_pipe     = 0;
+                found_pipe     = 0;
+                burst_pipe     = 0;
+                valid_pipe     = 0;
+                pattern0_meta  = 0;
+                pattern0_ref   = 0;
+                pattern1_meta  = 0;
+                pattern1_ref   = 0;
+                raw0_meta      = 0;
+                raw0_ref       = 0;
+                raw1_meta      = 0;
+                raw1_ref       = 0;
+                timeline_ready = 0;
+            } else {
+                status_pipe    = {status_pipe[0], done};
+                sweep_pipe     = {sweep_pipe[0], probe_done};
+                found_pipe     = {found_pipe[0], probe_found};
+                burst_pipe     = {burst_pipe[0], probe_burst == 2'b11};
+                valid_pipe     = {valid_pipe[0], probe_valid_seen == 2'b11};
+                pattern0_meta  = if ARRAY_FLAGS != 0 ?
+                    {4'b0, flag_seen}
+                : if ARRAY_MATCH != 0 ?
+                    array_col0_match0
+                : if ARRAY_TRACE != 0 ?
+                    array_first_raw0
+                : if ARRAY_SCAN != 0 ?
+                    array_pass_gate0
+                : if RUN_ARRAY != 0 ?
+                    array_first_raw0
+                : if RUN_READ_SWEEP != 0 ?
+                    {2'b0, sweep_phase0}
+                : if RUN_MPR_ALIGN != 0 ?
+                    {5'b0, sweep_align_pass0}
+                : if RUN_MPR_DELAY != 0 ?
+                    sweep_pass_delay0
+                :
+                    sweep_pattern0
+                ;
+                pattern0_ref   = pattern0_meta;
+                pattern1_meta  = if ARRAY_FLAGS != 0 ?
+                    {2'b0, last_rpoint}
+                : if ARRAY_MATCH != 0 ?
+                    array_col0_match1
+                : if ARRAY_TRACE != 0 ?
+                    array_first_raw1
+                : if ARRAY_SCAN != 0 ?
+                    array_pass_gate1
+                : if RUN_ARRAY != 0 ?
+                    array_first_raw1
+                : if RUN_READ_SWEEP != 0 ?
+                    {2'b0, sweep_phase1}
+                : if RUN_MPR_ALIGN != 0 ?
+                    {5'b0, sweep_align_pass1}
+                : if RUN_MPR_DELAY != 0 ?
+                    sweep_pass_delay1
+                :
+                    sweep_pattern1
+                ;
+                pattern1_ref   = pattern1_meta;
+                raw0_meta      = if ARRAY_FLAGS != 0 ?
+                    {2'b0, last_wpoint}
+                : if ARRAY_MATCH != 0 ?
+                    array_col8_match0
+                : if ARRAY_TRACE != 0 ?
+                    array_raw0
+                : if ARRAY_SCAN != 0 ?
+                    array_change_gate0
+                : if RUN_ARRAY != 0 ?
+                    array_raw0
+                :
+                    sweep_pattern0
+                ;
+                raw0_ref       = raw0_meta;
+                raw1_meta      = if ARRAY_FLAGS != 0 ?
+                    {2'b0, first_rpoint}
+                : if ARRAY_MATCH != 0 ?
+                    array_col8_match1
+                : if ARRAY_TRACE != 0 ?
+                    array_raw1
+                : if ARRAY_SCAN != 0 ?
+                    array_change_gate1
+                : if RUN_ARRAY != 0 ?
+                    array_raw1
+                :
+                    sweep_pattern1
+                ;
+                raw1_ref       = raw1_meta;
+                timeline_ready = {timeline_ready[0], array_done && timeline_captured};
+            }
+        }
+        assign status = if !pll_locked ?
+            4'd0
+        : if !dll_locked ?
+            4'd1
+        : if !status_pipe[1] ?
+            4'd2
+        : if !use_sweep || !sweep_pipe[1] ?
+            4'd3
+        : if found_pipe[1] ?
+            (if ARRAY_SCAN != 0 ? 4'd10 : if RUN_ARRAY != 0 ? 4'd9 : if use_mpr ? 4'd6 : 4'd4)
+        : if (use_mpr || RUN_ARRAY != 0) && valid_pipe[1] ?
+            4'd8
+        : if (use_mpr || RUN_ARRAY != 0) && burst_pipe[1] ?
+            4'd7
+        :
+            4'd5
+        ;
+    }
+    unsafe (cdc) {
+        inst timeline: DdrArrayTimeline #(
+            MATCH_ALL     : ARRAY_FULL    ,
+            MATCH_EXPECTED: ARRAY_EXPECTED,
+            ALIGN_SCAN    : ARRAY_ALIGN   ,
+        ) (
+            i_clk     : ctrl_clk                                            ,
+            i_rst     : ready_reset                                         ,
+            i_start   : RUN_ARRAY != 0 && array_valid && array_cmd == 3'b101,
+            i_gate    : |array_read                                         ,
+            i_burst   : phy_burst                                           ,
+            i_valid   : phy_valid                                           ,
+            i_data    : phy_data                                            ,
+            i_expected: array_expected                                      ,
+            i_index   : timeline_index                                      ,
+            o_sample  : regular_word                                        ,
+            o_captured: regular_captured                                    ,
+        );
+        inst raw_capture: DdrRawBurstCapture (
+            i_clk         : ctrl_clk                                            ,
+            i_rst         : ready_reset                                         ,
+            i_read_command: RUN_ARRAY != 0 && array_valid && array_cmd == 3'b101,
+            i_gate        : |array_read                                         ,
+            i_burst       : phy_burst                                           ,
+            i_valid       : phy_valid                                           ,
+            i_data        : phy_data                                            ,
+            i_index       : timeline_index                                      ,
+            o_sample      : raw_word                                            ,
+            o_captured    : raw_captured                                        ,
+        );
+        inst timeline_uart: DdrTimelineUart (
+            i_clk                      ,
+            i_rst   : ref_reset        ,
+            i_ready : timeline_ready[1],
+            i_sample: timeline_word    ,
+            o_index : timeline_index   ,
+            o_tx    : timeline_uart_tx ,
+        );
+    }
+    assign timeline_word     = if ARRAY_RAW != 0 ? raw_word : regular_word;
+    assign timeline_captured = if ARRAY_RAW != 0 ? raw_captured : regular_captured;
+    inst uart: TangDdrStatusUart (
+        i_clk                                                                     ,
+        i_rst         : ref_reset                                                 ,
+        i_status      : status                                                    ,
+        i_debug_enable: mpr_debug                                                 ,
+        i_debug_extra : RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0 || RUN_ARRAY != 0,
+        i_debug0      : pattern0_ref                                              ,
+        i_debug1      : pattern1_ref                                              ,
+        i_debug2      : raw0_ref                                                  ,
+        i_debug3      : raw1_ref                                                  ,
+        o_tx          : normal_uart_tx                                            ,
+    );
+    assign o_uart_tx = if ARRAY_TIMELINE != 0 ? timeline_uart_tx : normal_uart_tx;
+}

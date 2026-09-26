@@ -77,7 +77,7 @@ priority と threshold は 3bit の WARL (`PRIO_BITS`)、enable は実装済み�
 
 ## ツールチェーン
 
-コンテナ環境 (Ubuntu 24.04) で検証済みの固定バージョン。GitHub リリースから取得し
+コンテナ環境 (Ubuntu 24.04) で検証済みの固定バージョン。公式配布元から取得し
 SHA256 を検証している。
 
 | ツール | バージョン | 取得元 / SHA256 |
@@ -90,6 +90,7 @@ SHA256 を検証している。
 | Spike | 16c0b60 (riscv-isa-sim) | riscv-software-src/riscv-isa-sim |
 | riscv-tests | 447a5fcb8253627ddb5f6a226f64e43463afcdd5 (env: 6de71edb) | riscv-software-src/riscv-tests |
 | Linux | v6.12 (tag adc218676) | torvalds/linux |
+| GOWIN EDA (DDR3 検証用の専用コンテナ) | V1.9.11.03 Education Linux | Gowin 公式 CDN sha256:6fd392f7473b24d847b6f8ebdc7a185c591826ba35d8d0e517961030d446f9f7。[構築手順とランタイム固定値](docs/tang-linux-lcd.md#gowin-eda-による配置配線の検証) |
 | oss-cad-suite (Windows) | 2026-08-10 | YosysHQ/oss-cad-suite-build `oss-cad-suite-windows-x64-20260810.tgz` sha256:818a5bc96c0e0719e2e21da0d2cf6fbbeed959689657202b5b942cf26af4e502 — 基板への書き込み (openFPGALoader) にのみ用いる |
 
 `flake.nix` に nix devShell の定義を置くが、本セッションの検証環境には nix が
@@ -621,6 +622,9 @@ Veryl 統一コミット `4a1bd89` の CI に合格し、統合版も配置配�
 利用者による目視でも、濃青の背景とマゼンタの矩形の周期的な移動が正常であることを確認した。
 
 ### FPGA 例の制限
+
+Linux 実機起動、LCD ブートログ、GUI への拡張は [実装計画と DDR3 ツール検証](docs/tang-linux-lcd.md)
+に記録する。現時点で DDR3 の DQS プリミティブは固定 nextpnr の配置段階で未対応である。
 
 - LCD 描画はカラーバーと単一矩形のみ。フレームバッファと文字描画は未実装。
 - 外部 DRAM は繋いでいないため RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。

@@ -12,7 +12,8 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
         fpga-fw fpga-sim por-test lcd-test fpga-lcd fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
 all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
-     cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test
+     cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test \
+     ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test
 
 lint:
 	@test -z "$$(find src fpga -type f \( -name '*.sv' -o -name '*.v' \))" || \
@@ -93,6 +94,192 @@ coverage:
 	    logs/cov/*.dat 2>&1 | tee logs/cov/summary.txt
 
 # --- FPGA ports ----------------------------------------------------------
+.PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test ddr-timeline-test ddr-full-timeline-test ddr-status-uart-test
+
+.PHONY: ddr-array-phase-test
+.PHONY: ddr-phy-startup-test
+.PHONY: ddr-read-assembler-test
+.PHONY: ddr-read-training-test
+.PHONY: ddr-trained-array-test
+.PHONY: ddr-multi-array-test
+ddr-multi-array-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -GMULTI=1 --top-module tb_ddr_trained_array \
+	    -Mdir sim/obj_ddr_multi_array -o tb_ddr_multi_array \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv \
+	    target/tang_primer_20k/ddr_read_training.sv target/tang_primer_20k/ddr_read_assembler.sv tb/tb_ddr_trained_array.sv
+	sim/obj_ddr_multi_array/tb_ddr_multi_array
+
+ddr-trained-array-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_trained_array \
+	    -Mdir sim/obj_ddr_trained_array -o tb_ddr_trained_array \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv \
+	    target/tang_primer_20k/ddr_read_training.sv target/tang_primer_20k/ddr_read_assembler.sv tb/tb_ddr_trained_array.sv
+	sim/obj_ddr_trained_array/tb_ddr_trained_array
+
+ddr-read-training-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_read_training \
+	    -Mdir sim/obj_ddr_read_training -o tb_ddr_read_training \
+	    target/tang_primer_20k/ddr_read_training.sv target/tang_primer_20k/ddr_read_assembler.sv tb/tb_ddr_read_training.sv
+	sim/obj_ddr_read_training/tb_ddr_read_training
+
+ddr-read-assembler-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_read_assembler \
+	    -Mdir sim/obj_ddr_read_assembler -o tb_ddr_read_assembler \
+	    target/tang_primer_20k/ddr_read_assembler.sv tb/tb_ddr_read_assembler.sv
+	sim/obj_ddr_read_assembler/tb_ddr_read_assembler
+
+.PHONY: ddr-raw-burst-test
+ddr-raw-burst-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_raw_burst \
+	    -Mdir sim/obj_ddr_raw_burst -o tb_ddr_raw_burst \
+	    target/tang_primer_20k/ddr_raw_burst.sv tb/tb_ddr_raw_burst.sv
+	sim/obj_ddr_raw_burst/tb_ddr_raw_burst
+
+ddr-phy-startup-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_phy_startup \
+	    -Mdir sim/obj_ddr_phy_startup -o tb_ddr_phy_startup \
+	    target/tang_primer_20k/ddr_phy_startup.sv tb/tb_ddr_phy_startup.sv
+	sim/obj_ddr_phy_startup/tb_ddr_phy_startup
+
+.PHONY: ddr-array-phase-scan-test
+.PHONY: ddr-array-continuous-test
+.PHONY: ddr-array-aligned-scan-test
+ddr-array-aligned-scan-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -GPHASE_SCAN=1 -GREAD_HOLD=0 -GPHASE_ALIGN=1 --top-module tb_ddr_array_gate_scan \
+	    -Mdir sim/obj_ddr_array_aligned_scan -o tb_ddr_array_aligned_scan \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_gate_scan.sv
+	sim/obj_ddr_array_aligned_scan/tb_ddr_array_aligned_scan
+
+ddr-array-continuous-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -GPHASE_SCAN=1 -GREAD_HOLD=0 --top-module tb_ddr_array_gate_scan \
+	    -Mdir sim/obj_ddr_array_continuous -o tb_ddr_array_continuous \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_gate_scan.sv
+	sim/obj_ddr_array_continuous/tb_ddr_array_continuous
+
+ddr-array-phase-scan-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -GPHASE_SCAN=1 --top-module tb_ddr_array_gate_scan \
+	    -Mdir sim/obj_ddr_array_phase_scan -o tb_ddr_array_phase_scan \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_gate_scan.sv
+	sim/obj_ddr_array_phase_scan/tb_ddr_array_phase_scan
+
+.PHONY: ddr-alignment-test
+ddr-alignment-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_alignment \
+	    -Mdir sim/obj_ddr_alignment -o tb_ddr_alignment \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_timeline.sv tb/tb_ddr_alignment.sv
+	sim/obj_ddr_alignment/tb_ddr_alignment
+
+ddr-array-phase-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps "-GREAD_SEL=6'h24" --top-module tb_ddr_array_probe \
+	    -Mdir sim/obj_ddr_array_phase -o tb_ddr_array_phase \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_probe.sv
+	sim/obj_ddr_array_phase/tb_ddr_array_phase
+
+ddr-expected-timeline-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_expected_timeline \
+	    -Mdir sim/obj_ddr_expected_timeline -o tb_ddr_expected_timeline \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_timeline.sv tb/tb_ddr_expected_timeline.sv
+	sim/obj_ddr_expected_timeline/tb_ddr_expected_timeline
+
+.PHONY: ddr-expected-timeline-test
+
+ddr-full-timeline-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -GMATCH_ALL=1 --top-module tb_ddr_timeline \
+	    -Mdir sim/obj_ddr_full_timeline -o tb_ddr_full_timeline \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_timeline.sv tb/tb_ddr_timeline.sv
+	sim/obj_ddr_full_timeline/tb_ddr_full_timeline
+
+ddr-array-early-scan-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -GEARLY_GATE=1 --top-module tb_ddr_array_gate_scan \
+	    -Mdir sim/obj_ddr_array_early_scan -o tb_ddr_array_early_scan \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_gate_scan.sv
+	sim/obj_ddr_array_early_scan/tb_ddr_array_early_scan
+
+ddr-array-early-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -DSIMPLE_DATA -DEARLY_GATE --top-module tb_ddr_array_probe \
+	    -Mdir sim/obj_ddr_array_early -o tb_ddr_array_early \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_probe.sv
+	sim/obj_ddr_array_early/tb_ddr_array_early
+
+ddr-array-simple-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -DSIMPLE_DATA --top-module tb_ddr_array_probe \
+	    -Mdir sim/obj_ddr_array_simple -o tb_ddr_array_simple \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_probe.sv
+	sim/obj_ddr_array_simple/tb_ddr_array_simple
+
+ddr-timeline-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_timeline \
+	    -Mdir sim/obj_ddr_timeline -o tb_ddr_timeline \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_timeline.sv tb/tb_ddr_timeline.sv
+	sim/obj_ddr_timeline/tb_ddr_timeline
+
+ddr-array-same-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_array_gate_scan \
+	    -GSAME_DATA=1 -Mdir sim/obj_ddr_array_same -o tb_ddr_array_same \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_gate_scan.sv
+	sim/obj_ddr_array_same/tb_ddr_array_same
+
+ddr-array-gate-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_array_gate_scan \
+	    -Mdir sim/obj_ddr_array_gate_scan -o tb_ddr_array_gate_scan \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_gate_scan.sv
+	sim/obj_ddr_array_gate_scan/tb_ddr_array_gate_scan
+
+ddr-array-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_array_probe \
+	    -Mdir sim/obj_ddr_array_probe -o tb_ddr_array_probe \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv tb/tb_ddr_array_probe.sv
+	sim/obj_ddr_array_probe/tb_ddr_array_probe
+ddr-status-uart-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_status_uart \
+	    -Mdir sim/obj_ddr_status_uart -o tb_ddr_status_uart \
+	    target/tang_primer_20k/ddr_init_probe.sv tb/tb_ddr_status_uart.sv
+	sim/obj_ddr_status_uart/tb_ddr_status_uart
+
+ddr-mpr-delay-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mpr_delay_sweep \
+	    -Mdir sim/obj_ddr_mpr_delay_sweep -o tb_ddr_mpr_delay_sweep \
+	    target/tang_primer_20k/ddr_read_delay_stepper.sv \
+	    target/tang_primer_20k/ddr_read_gate_sweep.sv tb/tb_ddr_mpr_delay_sweep.sv
+	sim/obj_ddr_mpr_delay_sweep/tb_ddr_mpr_delay_sweep
+
+ddr-mpr-align-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mpr_align_sweep \
+	    -Mdir sim/obj_ddr_mpr_align_sweep -o tb_ddr_mpr_align_sweep \
+	    target/tang_primer_20k/ddr_read_delay_stepper.sv \
+	    target/tang_primer_20k/ddr_read_gate_sweep.sv tb/tb_ddr_mpr_align_sweep.sv
+	sim/obj_ddr_mpr_align_sweep/tb_ddr_mpr_align_sweep
+
+ddr-mpr-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mpr_sweep \
+	    -Mdir sim/obj_ddr_mpr_sweep -o tb_ddr_mpr_sweep \
+	    target/tang_primer_20k/ddr_read_gate_sweep.sv tb/tb_ddr_mpr_sweep.sv
+	sim/obj_ddr_mpr_sweep/tb_ddr_mpr_sweep
+
+ddr-read-gate-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_read_gate_sweep \
+	    -Mdir sim/obj_ddr_read_gate_sweep -o tb_ddr_read_gate_sweep \
+	    target/tang_primer_20k/ddr_read_gate_sweep.sv tb/tb_ddr_read_gate_sweep.sv
+	sim/obj_ddr_read_gate_sweep/tb_ddr_read_gate_sweep
+
+ddr-word-cdc-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_word_cdc \
+	    -Mdir sim/obj_ddr_word_cdc -o tb_ddr_word_cdc \
+	    target/tang_primer_20k/ddr_word_cdc.sv tb/tb_ddr_word_cdc.sv
+	sim/obj_ddr_word_cdc/tb_ddr_word_cdc
+	sim/obj_ddr_word_cdc/tb_ddr_word_cdc +cpu_half=3 +mem_half=11
+	sim/obj_ddr_word_cdc/tb_ddr_word_cdc +cpu_half=13 +mem_half=2
+
+ddr3-startup-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr3_startup \
+	    -Mdir sim/obj_ddr3_startup -o tb_ddr3_startup \
+	    target/tang_primer_20k/ddr3_startup.sv tb/tb_ddr3_startup.sv
+	sim/obj_ddr3_startup/tb_ddr3_startup
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr3_startup \
+	    -GREAL_TIMING=1 -Mdir sim/obj_ddr3_startup_real -o tb_ddr3_startup \
+	    target/tang_primer_20k/ddr3_startup.sv tb/tb_ddr3_startup.sv
+	sim/obj_ddr3_startup_real/tb_ddr3_startup
+
 # The board top names sim/fpga/firmware.hex as RAM_INIT, and $$readmemh
 # resolves it against the working directory, so these run from the repo root.
 

@@ -1,0 +1,389 @@
+/// Four DDR command slots per controller cycle, held for both clock edges.
+module DdrCaBit (
+    i_clk  : input  'ctrl clock   ,
+    i_fast : input  'fast clock   ,
+    i_reset: input  'ctrl logic   ,
+    i_data : input  'ctrl logic<4>,
+    o_pin  : output 'fast logic   ,
+) {
+    unsafe (cdc) {
+        inst serializer: $sv::OSER8 (
+            PCLK : i_clk    ,
+            FCLK : i_fast   ,
+            RESET: i_reset  ,
+            D0   : i_data[0],
+            D1   : i_data[0],
+            D2   : i_data[1],
+            D3   : i_data[1],
+            D4   : i_data[2],
+            D5   : i_data[2],
+            D6   : i_data[3],
+            D7   : i_data[3],
+            TX0  : 1'b0     ,
+            TX1  : 1'b0     ,
+            TX2  : 1'b0     ,
+            TX3  : 1'b0     ,
+            Q0   : o_pin    ,
+            Q1   : _        ,
+        );
+    }
+}
+
+/// One x8 byte lane. Beat 0 occupies bits 7:0 of each 64-bit data word.
+/// Enable inputs are active high; primitive TX/OEN signals are active low.
+module DdrByteLane (
+    i_clk        : input  'ctrl  clock        ,
+    i_fast       : input  'fast  clock        ,
+    i_reset      : input  'ctrl  logic        ,
+    i_dll_step   : input  'async logic    <8> ,
+    i_hold       : input  'ctrl  logic        ,
+    i_read       : input  'ctrl  logic    <4> ,
+    i_read_sel   : input  'ctrl  logic    <3> ,
+    i_rloadn     : input  'ctrl  logic        ,
+    i_rmove      : input  'ctrl  logic        ,
+    i_rdir       : input  'ctrl  logic        ,
+    i_write_step : input  'ctrl  logic    <8> ,
+    i_data       : input  'ctrl  logic    <64>,
+    i_mask       : input  'ctrl  logic    <8> ,
+    i_dq_enable  : input  'ctrl  logic    <4> ,
+    i_dqs_enable : input  'ctrl  logic    <4> ,
+    i_dqs_pattern: input  'ctrl  logic    <8> ,
+    o_data       : output 'ctrl  logic    <64>,
+    o_raw        : output 'async logic    <8> ,
+    o_burst      : output 'ctrl  logic        ,
+    o_valid      : output 'ctrl  logic        ,
+    o_rflag      : output 'ctrl  logic        ,
+    o_wflag      : output 'ctrl  logic        ,
+    o_rpoint     : output 'ctrl  logic    <3> ,
+    o_wpoint     : output 'ctrl  logic    <3> ,
+    io_dq        : inout  'async tri logic<8> ,
+    io_dqs_p     : inout  'async tri logic    ,
+    io_dqs_n     : inout  'async tri logic    ,
+    o_dm         : output 'fast  logic        ,
+) {
+    var dqsr    : 'fast  logic   ;
+    var dqsw    : 'fast  logic   ;
+    var dqsw270 : 'fast  logic   ;
+    var rd_ptr  : 'ctrl  logic<3>;
+    var wr_ptr  : 'ctrl  logic<3>;
+    var dqs_in  : 'async logic   ;
+    var dqs_out : 'fast  logic   ;
+    var dqs_oe_n: 'fast  logic   ;
+    var dq_out  : 'fast  logic<8>;
+    var dq_oe_n : 'fast  logic<8>;
+    assign o_rpoint = rd_ptr;
+    assign o_wpoint = wr_ptr;
+    unsafe (cdc) {
+        inst strobe: $sv::DQS #(
+            DQS_MODE: "X4"   ,
+            HWL     : "false",
+        ) (
+            PCLK   : i_clk       ,
+            FCLK   : i_fast      ,
+            RESET  : i_reset     ,
+            DQSIN  : dqs_in      ,
+            DLLSTEP: i_dll_step  ,
+            WSTEP  : i_write_step,
+            READ   : i_read      ,
+            RCLKSEL: i_read_sel  ,
+            HOLD   : i_hold      ,
+            RLOADN : i_rloadn    ,
+            RMOVE  : i_rmove     ,
+            RDIR   : i_rdir      ,
+            WLOADN : 1'b0        ,
+            WMOVE  : 1'b0        ,
+            WDIR   : 1'b1        ,
+            DQSR90 : dqsr        ,
+            DQSW0  : dqsw        ,
+            DQSW270: dqsw270     ,
+            RPOINT : rd_ptr      ,
+            WPOINT : wr_ptr      ,
+            RVALID : o_valid     ,
+            RBURST : o_burst     ,
+            RFLAG  : o_rflag     ,
+            WFLAG  : o_wflag     ,
+        );
+        inst dqs_serializer: $sv::OSER8_MEM #(
+            TCLK_SOURCE: "DQSW",
+            TXCLK_POL  : 1'b0  ,
+        ) (
+            PCLK : i_clk           ,
+            FCLK : i_fast          ,
+            TCLK : dqsw            ,
+            RESET: i_reset         ,
+            D0   : i_dqs_pattern[0],
+            D1   : i_dqs_pattern[1],
+            D2   : i_dqs_pattern[2],
+            D3   : i_dqs_pattern[3],
+            D4   : i_dqs_pattern[4],
+            D5   : i_dqs_pattern[5],
+            D6   : i_dqs_pattern[6],
+            D7   : i_dqs_pattern[7],
+            TX0  : !i_dqs_enable[0],
+            TX1  : !i_dqs_enable[1],
+            TX2  : !i_dqs_enable[2],
+            TX3  : !i_dqs_enable[3],
+            Q0   : dqs_out         ,
+            Q1   : dqs_oe_n        ,
+        );
+        inst dqs_buffer: $sv::ELVDS_IOBUF (
+            I  : dqs_out ,
+            OEN: dqs_oe_n,
+            O  : dqs_in  ,
+            IO : io_dqs_p,
+            IOB: io_dqs_n,
+        );
+        inst mask_serializer: $sv::OSER8_MEM #(
+            TCLK_SOURCE: "DQSW270",
+            TXCLK_POL  : 1'b0     ,
+        ) (
+            PCLK : i_clk    ,
+            FCLK : i_fast   ,
+            TCLK : dqsw270  ,
+            RESET: i_reset  ,
+            D0   : i_mask[0],
+            D1   : i_mask[1],
+            D2   : i_mask[2],
+            D3   : i_mask[3],
+            D4   : i_mask[4],
+            D5   : i_mask[5],
+            D6   : i_mask[6],
+            D7   : i_mask[7],
+            TX0  : 1'b0     ,
+            TX1  : 1'b0     ,
+            TX2  : 1'b0     ,
+            TX3  : 1'b0     ,
+            Q0   : o_dm     ,
+            Q1   : _        ,
+        );
+        for bit_index in 0..8 :dq {
+            inst serializer: $sv::OSER8_MEM #(
+                TCLK_SOURCE: "DQSW270",
+                TXCLK_POL  : 1'b0     ,
+            ) (
+                PCLK : i_clk                 ,
+                FCLK : i_fast                ,
+                TCLK : dqsw270               ,
+                RESET: i_reset               ,
+                D0   : i_data[bit_index]     ,
+                D1   : i_data[8 + bit_index] ,
+                D2   : i_data[16 + bit_index],
+                D3   : i_data[24 + bit_index],
+                D4   : i_data[32 + bit_index],
+                D5   : i_data[40 + bit_index],
+                D6   : i_data[48 + bit_index],
+                D7   : i_data[56 + bit_index],
+                TX0  : !i_dq_enable[0]       ,
+                TX1  : !i_dq_enable[1]       ,
+                TX2  : !i_dq_enable[2]       ,
+                TX3  : !i_dq_enable[3]       ,
+                Q0   : dq_out[bit_index]     ,
+                Q1   : dq_oe_n[bit_index]    ,
+            );
+            inst buffer: $sv::IOBUF (
+                I  : dq_out[bit_index] ,
+                OEN: dq_oe_n[bit_index],
+                O  : o_raw[bit_index]  ,
+                IO : io_dq[bit_index]  ,
+            );
+            inst deserializer: $sv::IDES8_MEM (
+                PCLK : i_clk                 ,
+                FCLK : i_fast                ,
+                ICLK : dqsr                  ,
+                RESET: i_reset               ,
+                CALIB: 1'b0                  ,
+                RADDR: rd_ptr                ,
+                WADDR: wr_ptr                ,
+                D    : o_raw[bit_index]      ,
+                Q0   : o_data[bit_index]     ,
+                Q1   : o_data[8 + bit_index] ,
+                Q2   : o_data[16 + bit_index],
+                Q3   : o_data[24 + bit_index],
+                Q4   : o_data[32 + bit_index],
+                Q5   : o_data[40 + bit_index],
+                Q6   : o_data[48 + bit_index],
+                Q7   : o_data[56 + bit_index],
+            );
+        }
+    }
+}
+
+/// H5TQ1G63EFR-PBC x16 physical interface, BL8, 4:1 clock ratio.
+/// No calibration or command scheduling is performed in this module.
+module TangDdrPhyIo (
+    i_clk        : input  'ctrl  clock         ,
+    i_fast       : input  'fast  clock         ,
+    i_reset      : input  'ctrl  logic         ,
+    i_dll_step   : input  'async logic    <8>  ,
+    i_mem_reset_n: input  'ctrl  logic         ,
+    i_addr       : input  'ctrl  logic    <56> ,
+    i_bank       : input  'ctrl  logic    <12> ,
+    i_cmd        : input  'ctrl  logic    <12> ,
+    i_cs_n       : input  'ctrl  logic    <4>  ,
+    i_cke        : input  'ctrl  logic    <4>  ,
+    i_odt        : input  'ctrl  logic    <4>  ,
+    i_hold       : input  'ctrl  logic    <2>  ,
+    i_read       : input  'ctrl  logic    <8>  ,
+    i_read_sel   : input  'ctrl  logic    <6>  ,
+    i_rloadn     : input  'ctrl  logic         ,
+    i_rmove      : input  'ctrl  logic         ,
+    i_rdir       : input  'ctrl  logic         ,
+    i_write_step : input  'ctrl  logic    <16> ,
+    i_data       : input  'ctrl  logic    <128>,
+    i_mask       : input  'ctrl  logic    <16> ,
+    i_dq_enable  : input  'ctrl  logic    <4>  ,
+    i_dqs_enable : input  'ctrl  logic    <4>  ,
+    i_dqs_pattern: input  'ctrl  logic    <8>  ,
+    o_data       : output 'ctrl  logic    <128>,
+    o_raw        : output 'async logic    <16> ,
+    o_burst      : output 'ctrl  logic    <2>  ,
+    o_valid      : output 'ctrl  logic    <2>  ,
+    o_rflag      : output 'ctrl  logic    <2>  ,
+    o_wflag      : output 'ctrl  logic    <2>  ,
+    o_rpoint     : output 'ctrl  logic    <6>  ,
+    o_wpoint     : output 'ctrl  logic    <6>  ,
+    ddr_dq       : inout  'async tri logic<16> ,
+    ddr_dqs_p    : inout  'async tri logic<2>  ,
+    ddr_dqs_n    : inout  'async tri logic<2>  ,
+    ddr_dm       : output 'fast  logic    <2>  ,
+    ddr_addr     : output 'fast  logic    <14> ,
+    ddr_bank     : output 'fast  logic    <3>  ,
+    ddr_ras_n    : output 'fast  logic         ,
+    ddr_cas_n    : output 'fast  logic         ,
+    ddr_we_n     : output 'fast  logic         ,
+    ddr_cs_n     : output 'fast  logic         ,
+    ddr_cke      : output 'fast  logic         ,
+    ddr_odt      : output 'fast  logic         ,
+    ddr_reset_n  : output 'ctrl  logic         ,
+    ddr_clk_p    : output 'fast  logic         ,
+    ddr_clk_n    : output 'fast  logic         ,
+) {
+    assign ddr_reset_n = i_mem_reset_n && !i_reset;
+    for lane_index in 0..2 :lanes {
+        var write_data: 'ctrl logic<64>;
+        var read_data : 'ctrl logic<64>;
+        var mask_data : 'ctrl logic<8> ;
+        for beat_index in 0..8 :beats {
+            assign write_data[8 * beat_index+:8]               = i_data[16 * beat_index + 8 * lane_index+:8];
+            assign o_data[16 * beat_index + 8 * lane_index+:8] = read_data[8 * beat_index+:8];
+            assign mask_data[beat_index]                       = i_mask[2 * beat_index + lane_index];
+        }
+        inst lane: DdrByteLane (
+            i_clk                                         ,
+            i_fast                                        ,
+            i_reset                                       ,
+            i_dll_step                                    ,
+            i_rloadn                                      ,
+            i_rmove                                       ,
+            i_rdir                                        ,
+            i_dq_enable                                   ,
+            i_dqs_enable                                  ,
+            i_dqs_pattern                                 ,
+            i_hold       : i_hold[lane_index]             ,
+            i_read       : i_read[4 * lane_index+:4]      ,
+            i_read_sel   : i_read_sel[3 * lane_index+:3]  ,
+            i_write_step : i_write_step[8 * lane_index+:8],
+            i_data       : write_data                     ,
+            i_mask       : mask_data                      ,
+            o_data       : read_data                      ,
+            o_raw        : o_raw[8 * lane_index+:8]       ,
+            o_burst      : o_burst[lane_index]            ,
+            o_valid      : o_valid[lane_index]            ,
+            o_rflag      : o_rflag[lane_index]            ,
+            o_wflag      : o_wflag[lane_index]            ,
+            o_rpoint     : o_rpoint[3 * lane_index+:3]    ,
+            o_wpoint     : o_wpoint[3 * lane_index+:3]    ,
+            io_dq        : ddr_dq[8 * lane_index+:8]      ,
+            io_dqs_p     : ddr_dqs_p[lane_index]          ,
+            io_dqs_n     : ddr_dqs_n[lane_index]          ,
+            o_dm         : ddr_dm[lane_index]             ,
+        );
+    }
+    for bit_index in 0..14 :address_bits {
+        inst pin: DdrCaBit (
+            i_clk    ,
+            i_fast   ,
+            i_reset  ,
+            i_data : {i_addr[42 + bit_index], i_addr[28 + bit_index], i_addr[14 + bit_index], i_addr[bit_index]},
+            o_pin: ddr_addr[bit_index],
+        );
+    }
+    for bit_index in 0..3 :bank_bits {
+        inst pin: DdrCaBit (
+            i_clk                                                                                            ,
+            i_fast                                                                                           ,
+            i_reset                                                                                          ,
+            i_data : {i_bank[9 + bit_index], i_bank[6 + bit_index], i_bank[3 + bit_index], i_bank[bit_index]},
+            o_pin  : ddr_bank[bit_index]                                                                     ,
+        );
+    }
+    inst ras: DdrCaBit (
+        i_clk                                             ,
+        i_fast                                            ,
+        i_reset                                           ,
+        i_data : {i_cmd[11], i_cmd[8], i_cmd[5], i_cmd[2]},
+        o_pin  : ddr_ras_n                                ,
+    );
+    inst cas: DdrCaBit (
+        i_clk                                             ,
+        i_fast                                            ,
+        i_reset                                           ,
+        i_data : {i_cmd[10], i_cmd[7], i_cmd[4], i_cmd[1]},
+        o_pin  : ddr_cas_n                                ,
+    );
+    inst we: DdrCaBit (
+        i_clk                                            ,
+        i_fast                                           ,
+        i_reset                                          ,
+        i_data : {i_cmd[9], i_cmd[6], i_cmd[3], i_cmd[0]},
+        o_pin  : ddr_we_n                                ,
+    );
+    inst cs: DdrCaBit (
+        i_clk            ,
+        i_fast           ,
+        i_reset          ,
+        i_data : i_cs_n  ,
+        o_pin  : ddr_cs_n,
+    );
+    inst cke: DdrCaBit (
+        i_clk           ,
+        i_fast          ,
+        i_reset         ,
+        i_data : i_cke  ,
+        o_pin  : ddr_cke,
+    );
+    inst odt: DdrCaBit (
+        i_clk           ,
+        i_fast          ,
+        i_reset         ,
+        i_data : i_odt  ,
+        o_pin  : ddr_odt,
+    );
+    var clock_out: 'fast logic;
+    unsafe (cdc) {
+        inst clock_serializer: $sv::OSER8 (
+            PCLK : i_clk    ,
+            FCLK : i_fast   ,
+            RESET: i_reset  ,
+            D0   : 1'b0     ,
+            D1   : 1'b1     ,
+            D2   : 1'b0     ,
+            D3   : 1'b1     ,
+            D4   : 1'b0     ,
+            D5   : 1'b1     ,
+            D6   : 1'b0     ,
+            D7   : 1'b1     ,
+            TX0  : 1'b0     ,
+            TX1  : 1'b0     ,
+            TX2  : 1'b0     ,
+            TX3  : 1'b0     ,
+            Q0   : clock_out,
+            Q1   : _        ,
+        );
+    }
+    inst clock_buffer: $sv::ELVDS_OBUF (
+        I : clock_out,
+        O : ddr_clk_p,
+        OB: ddr_clk_n,
+    );
+}

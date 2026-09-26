@@ -1,0 +1,95 @@
+/// Structural DQS/DLL and one bidirectional SERDES placement probe.
+/// No DDR timing, training or board pin constraints: never program this top.
+module TangDdrGowinProbe (
+    i_clk  : input  clock       ,
+    i_dqs  : input  logic       ,
+    i_write: input  logic       ,
+    io_dq  : inout  tri logic   ,
+    o_data : output logic    <4>,
+    o_valid: output logic       ,
+) {
+    var dll_step  : logic<8>;
+    var read_clk  : logic   ;
+    var write_clk : logic   ;
+    var read_ptr  : logic<3>;
+    var write_ptr : logic<3>;
+    var tx_data   : logic   ;
+    var tx_disable: logic   ;
+    var rx_data   : logic   ;
+
+    inst dll: $sv::DLL (
+        CLKIN   : i_clk   ,
+        STOP    : 1'b0    ,
+        UPDNCNTL: 1'b0    ,
+        RESET   : 1'b0    ,
+        STEP    : dll_step,
+        LOCK    : _       ,
+    );
+
+    inst dqs: $sv::DQS #(
+        DQS_MODE: "X2_DDR3",
+    ) (
+        PCLK   : i_clk    ,
+        FCLK   : i_clk    ,
+        RESET  : 1'b0     ,
+        DQSIN  : i_dqs    ,
+        DLLSTEP: dll_step ,
+        WSTEP  : 8'b0     ,
+        READ   : 4'hf     ,
+        RCLKSEL: 3'b0     ,
+        HOLD   : 1'b0     ,
+        RLOADN : 1'b0     ,
+        RMOVE  : 1'b0     ,
+        RDIR   : 1'b1     ,
+        WLOADN : 1'b0     ,
+        WMOVE  : 1'b0     ,
+        WDIR   : 1'b1     ,
+        DQSR90 : read_clk ,
+        DQSW0  : _        ,
+        DQSW270: write_clk,
+        RPOINT : read_ptr ,
+        WPOINT : write_ptr,
+        RVALID : o_valid  ,
+        RBURST : _        ,
+        RFLAG  : _        ,
+        WFLAG  : _        ,
+    );
+
+    inst tx: $sv::OSER4_MEM #(
+        TCLK_SOURCE: "DQSW270",
+        TXCLK_POL  : 1'b0     ,
+    ) (
+        RESET: 1'b0      ,
+        PCLK : i_clk     ,
+        FCLK : i_clk     ,
+        TCLK : write_clk ,
+        TX0  : !i_write  ,
+        TX1  : !i_write  ,
+        D0   : 1'b0      ,
+        D1   : 1'b1      ,
+        D2   : 1'b0      ,
+        D3   : 1'b1      ,
+        Q0   : tx_data   ,
+        Q1   : tx_disable,
+    );
+    inst rx: $sv::IDES4_MEM (
+        RESET: 1'b0     ,
+        PCLK : i_clk    ,
+        FCLK : i_clk    ,
+        ICLK : read_clk ,
+        RADDR: read_ptr ,
+        WADDR: write_ptr,
+        D    : rx_data  ,
+        CALIB: 1'b0     ,
+        Q0   : o_data[0],
+        Q1   : o_data[1],
+        Q2   : o_data[2],
+        Q3   : o_data[3],
+    );
+    inst pad: $sv::IOBUF (
+        I  : tx_data   ,
+        OEN: tx_disable,
+        O  : rx_data   ,
+        IO : io_dq     ,
+    );
+}
