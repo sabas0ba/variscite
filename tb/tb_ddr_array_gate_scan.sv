@@ -13,6 +13,7 @@ module tb_ddr_array_gate_scan #(
     wire [7:0] read_gate, gate0, gate1, change0, change1;
     wire [7:0] col0_match0, col0_match1, col8_match0, col8_match1;
     wire [127:0] write_data;
+    wire [127:0] expected_data;
     integer cycle=0, read_cycle=-100, write_cycle=-100;
     integer read_count=0, write_count=0, pre_count=0;
     always #5 clk=~clk;
@@ -29,7 +30,7 @@ module tb_ddr_array_gate_scan #(
         .o_change_gate0(change0), .o_change_gate1(change1),
         .o_col0_match0(col0_match0), .o_col0_match1(col0_match1),
         .o_col8_match0(col8_match0), .o_col8_match1(col8_match1),
-        .o_first_raw0(), .o_first_raw1(), .o_raw0(), .o_raw1()
+        .o_first_raw0(), .o_first_raw1(), .o_raw0(), .o_raw1(), .o_expected(expected_data)
     );
 
     always @(posedge clk) begin
@@ -74,7 +75,8 @@ module tb_ddr_array_gate_scan #(
                 $fatal(1,"WRITE burst data mismatch");
             if (read_gate!=0) begin
                 if (read_gate!=8'hff || read_count==0 ||
-                    cycle-read_cycle!=((read_count-1)/2)+(EARLY_GATE!=0 ? 1 : 2))
+                    cycle-read_cycle!=((read_count-1)/2)+(EARLY_GATE!=0 ? 1 : 2) ||
+                    expected_data!=(read_count%2==1 ? DATA_A : DATA_B))
                     $fatal(1,"gate schedule at read %0d",read_count);
                 // Only DQ0 at candidate 3 and DQ8 at candidate 5 are valid.
                 if ((read_count-1)/2==3) begin

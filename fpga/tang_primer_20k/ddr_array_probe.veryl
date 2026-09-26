@@ -46,6 +46,7 @@ module DdrArrayProbe #(
     o_first_raw1  : output logic<8>  ,
     o_raw0        : output logic<8>  ,
     o_raw1        : output logic<8>  ,
+    o_expected    : output logic<128>,
 ) {
     const DATA_A: logic<128> = if SIMPLE_DATA != 0 ? 128'b0 : 128'ha55a_5aa5_c33c_3cc3_9669_6996_f00f_0ff0;
     const DATA_B: logic<128> = if SAME_DATA != 0 ? DATA_A : ~DATA_A;
@@ -94,7 +95,7 @@ module DdrArrayProbe #(
     var raw1             : logic<8>  ;
     var first_raw0       : logic<8>  ;
     var first_raw1       : logic<8>  ;
-    let expected         : logic<128> = if state == State::sample1 ? DATA_B : DATA_A;
+    let expected         : logic<128> = if state == State::read1 || state == State::sample1 ? DATA_B : DATA_A;
     let observed         : logic<6>   = seen_matches
         | {
             previous_valid[1] && ((i_data & LANE1) == (expected & LANE1)),
@@ -435,4 +436,5 @@ module DdrArrayProbe #(
     assign o_first_raw1   = first_raw1;
     assign o_raw0         = raw0;
     assign o_raw1         = raw1;
+    assign o_expected     = expected;
 }

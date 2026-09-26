@@ -105,6 +105,7 @@ module TangDdrInitProbe #(
     param ARRAY_SIMPLE  : u32 = 0,
     param ARRAY_EARLY   : u32 = 0,
     param ARRAY_FULL    : u32 = 0,
+    param ARRAY_EXPECTED: u32 = 0,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -210,6 +211,7 @@ module TangDdrInitProbe #(
     var last_wpoint       : 'ctrl      logic           <6>  ;
     var first_captured    : 'ctrl      logic           <2>  ;
     var timeline_captured : 'ctrl      logic                ;
+    var array_expected    : 'ctrl      logic           <128>;
     var timeline_word     : 'ctrl      logic           <32> ;
     var timeline_index    : 'reference logic           <5>  ;
     var timeline_ready    : 'reference logic           <2>  ;
@@ -407,6 +409,7 @@ module TangDdrInitProbe #(
         o_first_raw1  : array_first_raw1      ,
         o_raw0        : array_raw0            ,
         o_raw1        : array_raw1            ,
+        o_expected    : array_expected        ,
     );
     inst delay_stepper: DdrReadDelayStepper (
         i_clk   : ctrl_clk                                                  ,
@@ -608,7 +611,8 @@ module TangDdrInitProbe #(
     }
     unsafe (cdc) {
         inst timeline: DdrArrayTimeline #(
-            MATCH_ALL: ARRAY_FULL,
+            MATCH_ALL     : ARRAY_FULL    ,
+            MATCH_EXPECTED: ARRAY_EXPECTED,
         ) (
             i_clk     : ctrl_clk                                            ,
             i_rst     : ready_reset                                         ,
@@ -617,6 +621,7 @@ module TangDdrInitProbe #(
             i_burst   : phy_burst                                           ,
             i_valid   : phy_valid                                           ,
             i_data    : phy_data                                            ,
+            i_expected: array_expected                                      ,
             i_index   : timeline_index                                      ,
             o_sample  : timeline_word                                       ,
             o_captured: timeline_captured                                   ,

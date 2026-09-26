@@ -2,8 +2,10 @@
 /// Each word contains {gate, burst[1:0], valid[1:0], match[2:0]}, then
 /// DQ1, DQ0, and DQ8 over eight beats. All inputs use the controller clock.
 /// MATCH_ALL enables {all-zero, lane0-all-one, lane1-all-one} in match.
+/// MATCH_EXPECTED instead compares {all, lane0, lane1} with i_expected.
 module DdrArrayTimeline #(
-    param MATCH_ALL: u32 = 0,
+    param MATCH_ALL     : u32 = 0,
+    param MATCH_EXPECTED: u32 = 0,
 ) (
     i_clk     : input  clock     ,
     i_rst     : input  reset     ,
@@ -12,6 +14,7 @@ module DdrArrayTimeline #(
     i_burst   : input  logic<2>  ,
     i_valid   : input  logic<2>  ,
     i_data    : input  logic<128>,
+    i_expected: input  logic<128>,
     i_index   : input  logic<5>  ,
     o_sample  : output logic<32> ,
     o_captured: output logic     ,
@@ -31,7 +34,9 @@ module DdrArrayTimeline #(
     };
     const LANE0      : logic<128>      = 128'h00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff;
     const LANE1      : logic<128>      = ~LANE0;
-    let   match_bits : logic<3>        = if MATCH_ALL != 0 ?
+    let   match_bits : logic<3>        = if MATCH_EXPECTED != 0 ?
+        {i_data == i_expected, (i_data & LANE0) == (i_expected & LANE0), (i_data & LANE1) == (i_expected & LANE1)}
+    : if MATCH_ALL != 0 ?
         {i_data == 128'b0, (i_data & LANE0) == LANE0, (i_data & LANE1) == LANE1}
     :
         3'b0

@@ -13,7 +13,7 @@ module tb_ddr_timeline #(parameter int unsigned MATCH_ALL=0);
     rv32ima_DdrArrayTimeline #(.MATCH_ALL(MATCH_ALL)) recorder (
         .i_clk(clk), .i_rst(rst), .i_start(start), .i_gate(gate),
         .i_burst(burst), .i_valid(valid),
-        .i_data(data), .i_index(sample_index),
+        .i_data(data), .i_expected(128'b0), .i_index(sample_index),
         .o_sample(sample), .o_captured(captured)
     );
     rv32ima_DdrTimelineUart uart (

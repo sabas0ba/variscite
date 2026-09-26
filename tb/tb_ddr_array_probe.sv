@@ -24,6 +24,7 @@ module tb_ddr_array_probe;
     wire [1:0] hold_gate, burst_seen, valid_seen;
     wire [3:0] odt, dq_enable, dqs_enable;
     wire [127:0] write_data;
+    wire [127:0] expected_data;
     wire [15:0] mask;
     integer cycle=0, command_index=0, write_count=0, read_count=0;
     integer write_cycle=-100, read_cycle=-100, pending=0;
@@ -50,7 +51,7 @@ module tb_ddr_array_probe;
         .o_change_gate0(), .o_change_gate1(),
         .o_col0_match0(), .o_col0_match1(), .o_col8_match0(), .o_col8_match1(),
         .o_first_raw0(first_raw0), .o_first_raw1(first_raw1),
-        .o_raw0(raw0), .o_raw1(raw1)
+        .o_raw0(raw0), .o_raw1(raw1), .o_expected(expected_data)
     );
 
     always @(posedge clk) begin
@@ -106,7 +107,8 @@ module tb_ddr_array_probe;
             if (cycle-write_cycle==3 && (dqs_enable!=4'b0001 || dq_enable!=0))
                 $fatal(1,"DQS postamble timing");
             if (read_gate!=0 && (read_gate!=8'hff || sel!={3'd4,3'd0} ||
-                                  cycle-read_cycle!=(EARLY != 0 ? 1 : 2) || dq_enable!=0))
+                                  cycle-read_cycle!=(EARLY != 0 ? 1 : 2) || dq_enable!=0 ||
+                                  expected_data!=(read_count==1 ? DATA_A : DATA_B)))
                 $fatal(1,"READ gate timing");
             if (done && (cmd_valid || dq_enable!=0 || dqs_enable!=0))
                 $fatal(1,"activity after completion");

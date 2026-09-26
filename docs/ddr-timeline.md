@@ -24,7 +24,7 @@ RTL は Veryl、テストベンチは SystemVerilog。`make ddr-timeline-test` �
 
 ## 全128 bitの一致フラグ
 
-`DdrArrayFullTimeline` は全0/全1の書込みと通常ゲートを使い、UART wordの既存reserved 3 bitを上位から `all_zero`、`lane0_all_one`、`lane1_all_one` に置き換える。`all_zero` は全128 bitが0の場合だけ1、各laneの `all_one` はそのlaneの64 bitがすべて1の場合だけ1である。両laneの `all_one` が1なら全128 bitが1となる。フラグとDQパターンは同じcontroller cycleから記録する。他のtimelineモードではこの3 bitを引き続き0に固定する。
+`DdrArrayFullTimeline` は全0/全1の書込みと通常ゲートを使い、UART wordの既存reserved 3 bitを上位から `all_zero`、`lane0_all_one`、`lane1_all_one` に置き換える。`all_zero` は全128 bitが0の場合だけ1、各laneの `all_one` はそのlaneの64 bitがすべて1の場合だけ1である。両laneの `all_one` が1なら全128 bitが1となる。フラグとDQパターンは同じcontroller cycleから記録する。期待値比較を有効にしない他のtimelineモードではこの3 bitを引き続き0に固定する。
 
 `DDR_ARRAY_FULL_TIMELINE=1 bash scripts/build_ddr_mpr.sh` と `scripts/test-ddr-init-board.ps1 -Mode DdrArrayFullTimeline` を使う。デコーダは `zero`、`one0`、`one1` 列にフラグを表示する。旧モードの0は判定無効を意味するので、旧bitstreamのログから全幅不一致を推定しない。`make ddr-full-timeline-test` は全0、全1、片laneだけの全1、DQ15またはDQ0の1bit不一致をUARTフレーム全体で検証する。
 
@@ -41,3 +41,21 @@ USB再接続後の再試行 `logs/board/20260926-112659-DdrArrayFullTimeline-*` 
 | 120732 | 7 | 1 | 20 | 1/1 |
 
 列8のcycle 20では3回とも両laneの全1一致が得られた。初回だけ `RVALID` がcycle 21へ遅れ、その時点ではlane0のDQ1/DQ0が`3F/3F`に変化していた。後の2回は全32 cycle記録が同じだった。全幅の全0/全1パターンを観測できたが、有効位置がロード間で変わり、列0の全0はアイドル値とも一致するため、これだけで安定したDDR3 RAM動作とは判定しない。複雑なパターンと反復読書き、起動時の受信位置校正が引き続き必要である。
+
+## 複雑な書込みパターンとの全幅比較
+
+`DdrArrayExpectedTimeline` は通常の `DATA_A` / `DATA_B` を列0 / 列8へ書き込み、reserved 3 bitを `all_match`、`lane0_match`、`lane1_match` に置き換える。期待値は `DdrArrayProbe` の出力を使い、各READ指令から対応するサンプル状態の終了まで列の値を選ぶ。lane0は各16 bit beatの下位8 bit、lane1は上位8 bitであり、それぞれ64 bit全体を比較する。一致フラグは `RVALID` と独立して記録するため、読出し成功の判定では有効フラグも確認する。
+
+構築は `DDR_ARRAY_EXPECTED_TIMELINE=1 bash scripts/build_ddr_mpr.sh`、実機取得は `scripts/test-ddr-init-board.ps1 -Mode DdrArrayExpectedTimeline`、デコードは `scripts/decode-ddr-timeline.py --expected <uart.bin>` を使う。`make ddr-expected-timeline-test` は2つの複雑な期待値、片laneの1 bit不一致、lane全体の不一致、別列の古い値、記録後の入力変更を検証する。既存array試験もREADゲート時の期待値選択を検証する。CIのFPGA試験へ新規試験を追加した。
+
+2026-09-26に `make lint ddr-expected-timeline-test ddr-timeline-test ddr-full-timeline-test ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test` と配置配線を通過した。setup/hold違反は0。bitstream SHA256は `87887198f1d5e0305a460d485873f8b0d3c20cc2a6f6eefc9b4dc2ea18547fa7`。
+
+| 記録 | 列0の `RVALID=3` cycle | 全幅/lane0/lane1一致 | DQ1/DQ0/DQ8 | 列8の `RVALID=3` cycle | 全幅/lane0/lane1一致 | DQ1/DQ0/DQ8 |
+| --- | ---: | --- | --- | ---: | --- | --- |
+| 160540 | 7 | 0/0/0 | `5A/6A/95` | 20 | 0/0/0 | `A5/95/6A` |
+| 160616 | 8 | 0/0/1 | `16/1A/A5` | 21 | 0/0/1 | `29/25/5A` |
+| 160651 | 7 | 0/0/0 | `5A/6A/95` | 20 | 0/0/0 | `A5/95/6A` |
+
+ログは `logs/board/20260926-160540-DdrArrayExpectedTimeline-*`、`160616`、`160651`。初回のFTDI初期化は一度失敗したが、スクリプトの再試行でロードできた。3回とも完全なUARTフレームを取得し、測定後の既知LCD SoC復帰とUART検査も通過した。初回と3回目の32 wordは同一だった。
+
+全32 cycleで全幅一致とlane0一致は一度も得られない。一方、2回目は異なる2列の複雑なパターンがlane1の64 bit全体で有効cycleに一致した。この観測はlane1の書込み・保持・読出し経路が少なくともこの条件で機能することを支持するが、安定動作やlane0の故障原因までは確定しない。有効位置の起動間変動が残るため、次はレーンごとのDQS捕捉位置・beat整列・有効判定とWRITE送出の確認を行う。Linux用RAMとして使える段階には達していない。
