@@ -29,3 +29,5 @@ RTL は Veryl、テストベンチは SystemVerilog。`make ddr-timeline-test` �
 `DDR_ARRAY_FULL_TIMELINE=1 bash scripts/build_ddr_mpr.sh` と `scripts/test-ddr-init-board.ps1 -Mode DdrArrayFullTimeline` を使う。デコーダは `zero`、`one0`、`one1` 列にフラグを表示する。旧モードの0は判定無効を意味するので、旧bitstreamのログから全幅不一致を推定しない。`make ddr-full-timeline-test` は全0、全1、片laneだけの全1、DQ15またはDQ0の1bit不一致をUARTフレーム全体で検証する。
 
 2026-09-26にVeryl lint、既存timeline試験、新しい全幅試験、配置配線・setup/hold検証を通過した。bitstream SHA256は `4af9977423d16f86b7b61a2dd91a70e36603a98d7061195377c018fe7ddb8121`。初回実機試行はJTAG検出時の `usb bulk read failed` により書込み前に失敗し、その後のLCD SoC復帰試行もJTAG検出時に失敗した。ログは `logs/board/20260926-110359-DdrArrayFullTimeline-*` と同試行のLCD SoCログに保存した。WindowsはFTDIとCOM4を認識しているが、全幅の実機データは未取得である。
+
+USB再接続後の再試行 `logs/board/20260926-112659-DdrArrayFullTimeline-*` は `device not found` で書込み前に失敗した。その時点のWindows接続済み機器一覧にはFTDIが存在せず、JTAG用USBと電源の確認待ちとなった。この試行のLCD SoC復帰検出も失敗しており、実機データと現在のLCD表示は未確認である。
