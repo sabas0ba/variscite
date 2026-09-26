@@ -1,0 +1,45 @@
+/// Assemble each byte lane at a configured beat offset in two adjacent words.
+/// No expected data enters this module. Each lane is sampled only on its RVALID.
+module DdrReadAssembler #(
+    param OFFSET0: u32 = 6,
+    param OFFSET1: u32 = 6,
+    param DYNAMIC: u32 = 0,
+) (
+    i_clk    : input  clock     ,
+    i_rst    : input  reset     ,
+    i_data   : input  logic<128>,
+    i_valid  : input  logic<2>  ,
+    i_offsets: input  logic<8>  ,
+    o_data   : output logic<128>,
+    o_valid  : output logic<2>  ,
+) {
+    var previous : logic<128>;
+    var assembled: logic<128>;
+    for lane in 0..2 :lanes {
+        const OFFSET  : u32        = if lane == 0 ? OFFSET0 : OFFSET1;
+        let   selected: logic<4>   = if DYNAMIC != 0 ? i_offsets[4 * lane+:4] : OFFSET as 4;
+        var   window  : logic<128>;
+        for beat in 0..8 :beats {
+            assign window[8 * beat+:8]                = previous[16 * beat + 8 * lane+:8];
+            assign window[64 + 8 * beat+:8]           = i_data[16 * beat + 8 * lane+:8];
+            assign assembled[16 * beat + 8 * lane+:8] = window[8 * (selected as u32 + beat)+:8];
+        }
+    }
+    always_ff {
+        if_reset {
+            previous = 0;
+            o_data   = 0;
+            o_valid  = 0;
+        } else {
+            previous = i_data;
+            o_valid  = i_valid;
+            for lane in 0..2 {
+                if i_valid[lane] {
+                    for beat in 0..8 {
+                        o_data[16 * beat + 8 * lane+:8] = assembled[16 * beat + 8 * lane+:8];
+                    }
+                }
+            }
+        }
+    }
+}

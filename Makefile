@@ -98,6 +98,28 @@ coverage:
 
 .PHONY: ddr-array-phase-test
 .PHONY: ddr-phy-startup-test
+.PHONY: ddr-read-assembler-test
+.PHONY: ddr-read-training-test
+.PHONY: ddr-trained-array-test
+ddr-trained-array-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_trained_array \
+	    -Mdir sim/obj_ddr_trained_array -o tb_ddr_trained_array \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv \
+	    target/tang_primer_20k/ddr_read_training.sv target/tang_primer_20k/ddr_read_assembler.sv tb/tb_ddr_trained_array.sv
+	sim/obj_ddr_trained_array/tb_ddr_trained_array
+
+ddr-read-training-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_read_training \
+	    -Mdir sim/obj_ddr_read_training -o tb_ddr_read_training \
+	    target/tang_primer_20k/ddr_read_training.sv target/tang_primer_20k/ddr_read_assembler.sv tb/tb_ddr_read_training.sv
+	sim/obj_ddr_read_training/tb_ddr_read_training
+
+ddr-read-assembler-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_read_assembler \
+	    -Mdir sim/obj_ddr_read_assembler -o tb_ddr_read_assembler \
+	    target/tang_primer_20k/ddr_read_assembler.sv tb/tb_ddr_read_assembler.sv
+	sim/obj_ddr_read_assembler/tb_ddr_read_assembler
+
 .PHONY: ddr-raw-burst-test
 ddr-raw-burst-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_raw_burst \

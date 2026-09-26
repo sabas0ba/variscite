@@ -11,6 +11,8 @@ add_file -type verilog [file join $root target tang_primer_20k ddr_array_probe.s
 add_file -type verilog [file join $root target tang_primer_20k ddr_burst_alignment.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_timeline.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_raw_burst.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_read_assembler.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_read_training.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_init_probe.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_phy_startup.sv]
 add_file -type cst [file join $out ddr_init.cst]

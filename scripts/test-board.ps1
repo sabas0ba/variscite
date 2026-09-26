@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -36,6 +36,8 @@ $images = @{
     DdrArrayEarlyTimeline = 'sim/fpga/ddr_array_early_timeline/impl/pnr/ddr_array_early_timeline.fs'
     DdrArrayFullTimeline = 'sim/fpga/ddr_array_full_timeline/impl/pnr/ddr_array_full_timeline.fs'
     DdrArrayRawScaled = 'sim/fpga/ddr_array_raw_scaled/impl/pnr/ddr_array_raw_scaled.fs'
+    DdrArrayTrained = 'sim/fpga/ddr_array_trained/impl/pnr/ddr_array_trained.fs'
+    DdrArrayAssembled = 'sim/fpga/ddr_array_assembled/impl/pnr/ddr_array_assembled.fs'
     DdrArrayRawBurst = 'sim/fpga/ddr_array_raw_burst/impl/pnr/ddr_array_raw_burst.fs'
     DdrArrayStartupScan = 'sim/fpga/ddr_array_startup_scan/impl/pnr/ddr_array_startup_scan.fs'
     DdrArrayAlignedScan = 'sim/fpga/ddr_array_aligned_scan/impl/pnr/ddr_array_aligned_scan.fs'
@@ -140,7 +142,7 @@ try {
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'M' }).Count -eq 0
         }
-        DdrArray {
+        { $_ -in @('DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained') } {
             # A proves both columns matched in the same cycle position per lane.
             # Four bytes report DQ0/DQ8 at RVALID for columns 0 and 8.
             $frames = @([regex]::Matches($received, '[PLIRABVE][0-9A-F]{8}') |
