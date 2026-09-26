@@ -4,14 +4,15 @@
 /// deliberately leaves refresh and data-eye training to later stages and
 /// resets DRAM when finished.
 module DdrArrayProbe #(
-    param GATE_SCAN  : u32      = 0    ,
-    param SAME_DATA  : u32      = 0    ,
-    param SIMPLE_DATA: u32      = 0    ,
-    param EARLY_GATE : u32      = 32'd0,
-    param READ_SEL   : logic<6> = 6'h20,
-    param PHASE_SCAN : u32      = 0    ,
-    param READ_HOLD  : u32      = 1    ,
-    param PHASE_ALIGN: u32      = 0    ,
+    param GATE_SCAN    : u32      = 0    ,
+    param SAME_DATA    : u32      = 0    ,
+    param SIMPLE_DATA  : u32      = 0    ,
+    param EARLY_GATE   : u32      = 32'd0,
+    param READ_SEL     : logic<6> = 6'h20,
+    param PHASE_SCAN   : u32      = 0    ,
+    param READ_HOLD    : u32      = 1    ,
+    param PHASE_ALIGN  : u32      = 0    ,
+    param MULTI_PATTERN: u32      = 0    ,
 ) (
     i_clk         : input  clock     ,
     i_rst         : input  reset     ,
@@ -53,7 +54,6 @@ module DdrArrayProbe #(
     o_expected    : output logic<128>,
 ) {
     const DATA_A: logic<128> = if SIMPLE_DATA != 0 ? 128'b0 : 128'ha55a_5aa5_c33c_3cc3_9669_6996_f00f_0ff0;
-    const DATA_B: logic<128> = if SAME_DATA != 0 ? DATA_A : ~DATA_A;
     const LANE0 : logic<128> = 128'h00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff;
     const LANE1 : logic<128> = ~LANE0;
     enum State: logic<4>   {
@@ -73,6 +73,15 @@ module DdrArrayProbe #(
         done,
     }
     var state            : State     ;
+    var round_index      : logic<3>  ;
+    var pattern_seed     : logic<32> ;
+    var failed           : logic     ;
+    let data_a           : logic<128> = if MULTI_PATTERN == 0 || round_index == 0 ?
+        DATA_A
+    :
+        {pattern_seed, pattern_seed[23:0], pattern_seed[31:24], ~pattern_seed, pattern_seed[15:0], pattern_seed[31:16]}
+    ;
+    let data_b           : logic<128> = if SAME_DATA != 0 ? data_a : ~data_a;
     var elapsed          : logic<4>  ;
     var previous_data    : logic<128>;
     var previous_valid   : logic<2>  ;
@@ -99,7 +108,8 @@ module DdrArrayProbe #(
     var raw1             : logic<8>  ;
     var first_raw0       : logic<8>  ;
     var first_raw1       : logic<8>  ;
-    let expected         : logic<128> = if state == State::read1 || state == State::sample1 ? DATA_B : DATA_A;
+    let expected         : logic<128> = if state == State::read1 || state == State::sample1 ? data_b : data_a;
+    let pair_found       : logic      = (|(match0[2:0] & match1[2:0])) && (|(match0[5:3] & match1[5:3]));
     let observed         : logic<6>   = seen_matches
         | {
             previous_valid[1] && ((i_data & LANE1) == (expected & LANE1)),
@@ -181,6 +191,9 @@ module DdrArrayProbe #(
     always_ff {
         if_reset {
             state          = State::idle;
+            round_index    = 0;
+            pattern_seed   = 32'h1ace_b00c;
+            failed         = 0;
             elapsed        = 0;
             previous_data  = 0;
             previous_valid = 0;
@@ -209,6 +222,9 @@ module DdrArrayProbe #(
             first_raw1     = 0;
         } else if !i_enable {
             state          = State::idle;
+            round_index    = 0;
+            pattern_seed   = 32'h1ace_b00c;
+            failed         = 0;
             elapsed        = 0;
             previous_data  = 0;
             previous_valid = 0;
@@ -380,7 +396,19 @@ module DdrArrayProbe #(
                 }
                 State::pre_wait: {
                     if elapsed == 2 {
-                        state = State::done;
+                        if MULTI_PATTERN != 0 {
+                            failed = failed || !pair_found;
+                        }
+                        if MULTI_PATTERN != 0 && round_index != 7 {
+                            round_index  = round_index + 3'd1;
+                            pattern_seed = {
+                                pattern_seed[30:0],
+                                pattern_seed[31] ^ pattern_seed[21] ^ pattern_seed[1] ^ pattern_seed[0]
+                            };
+                            state        = State::activate;
+                        } else {
+                            state = State::done;
+                        }
                     } else {
                         elapsed = elapsed + 4'd1;
                     }
@@ -394,7 +422,7 @@ module DdrArrayProbe #(
         o_cmd_valid   = 1'b0;
         o_cmd         = 3'b111;
         o_addr        = 0;
-        o_bank        = 0;
+        o_bank        = if MULTI_PATTERN != 0 ? round_index : 3'b0;
         o_read        = 0;
         o_sel         = if PHASE_SCAN != 0 ? {gate_index, gate_index} : READ_SEL;
         o_hold        = 0;
@@ -408,6 +436,7 @@ module DdrArrayProbe #(
             State::activate: {
                 o_cmd_valid = 1'b1;
                 o_cmd       = 3'b011;
+                o_addr      = if MULTI_PATTERN != 0 ? {11'b0, round_index} : 14'b0;
             }
             State::write0: {
                 o_cmd_valid = 1'b1;
@@ -425,7 +454,7 @@ module DdrArrayProbe #(
                 if elapsed == 0 {
                     o_dqs_enable = 4'b1000;
                 } else if elapsed == 1 {
-                    o_data        = if state == State::wave0 ? DATA_A : DATA_B;
+                    o_data        = if state == State::wave0 ? data_a : data_b;
                     o_mask        = 0;
                     o_dq_enable   = 4'b1111;
                     o_dqs_enable  = 4'b1111;
@@ -461,11 +490,7 @@ module DdrArrayProbe #(
         }
     }
     assign o_done         = state == State::done;
-    assign o_found        = if GATE_SCAN != 0 ?
-        (|pass_gate0) && (|pass_gate1)
-    :
-        (|(match0[2:0] & match1[2:0])) && (|(match0[5:3] & match1[5:3]))
-    ;
+    assign o_found        = if GATE_SCAN != 0 ? (|pass_gate0) && (|pass_gate1) : pair_found && !failed;
     assign o_burst_seen   = burst_seen;
     assign o_valid_seen   = valid_seen;
     assign o_match0       = {2'b0, match0};

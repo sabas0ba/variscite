@@ -101,6 +101,14 @@ coverage:
 .PHONY: ddr-read-assembler-test
 .PHONY: ddr-read-training-test
 .PHONY: ddr-trained-array-test
+.PHONY: ddr-multi-array-test
+ddr-multi-array-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps -GMULTI=1 --top-module tb_ddr_trained_array \
+	    -Mdir sim/obj_ddr_multi_array -o tb_ddr_multi_array \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv \
+	    target/tang_primer_20k/ddr_read_training.sv target/tang_primer_20k/ddr_read_assembler.sv tb/tb_ddr_trained_array.sv
+	sim/obj_ddr_multi_array/tb_ddr_multi_array
+
 ddr-trained-array-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_trained_array \
 	    -Mdir sim/obj_ddr_trained_array -o tb_ddr_trained_array \
