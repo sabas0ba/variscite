@@ -10,6 +10,54 @@ RTL は DDR3 制御、LCD 読み出し、基板トップまで Veryl で実装�
 Linux はシミュレータ上で起動済みだが、実機のCPUからDDR3への接続、カーネル転送、
 Linux用フレームバッファは未実装である。DDR3は下記の独立診断で実機検証を進めている。
 
+## 今回の取り込み範囲
+
+この変更の完成単位は、DDR3のPHY・初期化・受信trainingと、単独で実行できる診断である。
+既存CPU/LCD SoCのメモリ構成は変更していない。合成対象はGowinプリミティブの接続まで
+Verylで実装し、SVはテストベンチとVerylの生成物に限る。
+
+| 項目 | 確認済みの範囲 | 記録 |
+| --- | --- | --- |
+| PHYと初期化 | 固定GOWIN環境で396/99 MHz、RESET/CKE/MR/ZQCL、PHY起動順序 | 本書、[PHY起動](ddr-phy-startup.md) |
+| 読出し | lane別の拍位置trainingとburst組立、後続データで校正値を保持 | [読出しtraining](ddr-read-training.md) |
+| 保持と部分書込み | 約127 msのrefresh保持、burst内全16 byte位置のDM選択を各3回実機検証 | [アレイ診断](ddr-multi-pattern.md) |
+| アドレス | 23本の有効アドレスbitと公称容量末尾を含む48 burst、全96 READを3回実機検証 | [アレイ診断](ddr-multi-pattern.md) |
+| CPU側の受渡し | `DdrWordCdc`の32/128 bit変換とクロック間要求・応答をシミュレーションで検証 | 本書の初期化・CDCの検証記録、[RTL](../fpga/tang_primer_20k/ddr_word_cdc.veryl) |
+
+最新の各実機診断は配置配線のsetup/hold違反0を確認し、診断後に既知のLCD SoCへ戻して
+UART検査を行った。これは限定アドレス・単一基板での確認であり、全セル走査、任意の
+アドレス結合故障、データアイの余裕、温度・電圧変動に対する保証ではない。
+
+### 検証と再現
+
+通常CIの`verify`ジョブはCPU回帰とFPGA platform試験を実行し、DDRの単体・結合試験も含む。
+`fpga-synth`と`linux-boot`はschedule／workflow_dispatch用であり、通常PRではskipされる。
+GOWINでの配置配線とUSB実機試験はローカルで行い、CI成功と区別して記録する。
+
+直近の診断を再実行する場合、固定開発コンテナ内で次を実行する。
+
+```bash
+make lint ddr-read-training-test ddr-read-assembler-test ddr-trained-array-test \
+    ddr-retain-array-test ddr-refresh-array-test ddr-refresh-duration-test \
+    ddr-mask-array-test ddr-address-array-test ddr-status-uart-test
+```
+
+GOWIN用コンテナの構築手順は本書の「GOWIN EDA による配置配線の検証」、診断別のbuild指定と
+実機実行モードは[アレイ診断](ddr-multi-pattern.md)を参照する。実機ログとbitstreamは
+git ignoreされた`logs/board/`、`sim/fpga/`に保存し、測定時のSHA256と結果を文書に残す。
+これらの生成物はcloneには含まれない。実機実行には、復帰用の検証済みLCD SoC bitstreamも必要である。
+
+### 次のPRで行う作業
+
+1. 任意のメモリ要求と周期的refreshを仲裁するDDR controllerを実装する。
+   応答待ち・停止中にもrefresh期限を守り、timeoutやreset時の扱いを検証する。
+2. `DdrWordCdc`とCPUバスへ接続し、可変レイテンシ、byte strobe、境界アクセスを検証する。
+   接続後に全容量走査と継続アクセスを実機で確認する。
+3. UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、Linuxの`/init`到達を確認する。
+
+LCDのframebuffer/DMA、fbconによるbootlog、LinuxユーザプロセスによるGUIは、
+Linux実機起動後の段階として扱う。
+
 ## 最初の実測: DDR3 PHY のツール対応
 
 2026-09-07、既存の固定コンテナ内で `DQS` の最小 Veryl インスタンスを合成・配置した。
@@ -215,7 +263,8 @@ SHA256 `ff4506d300ce092e6c171ae7aa966518fdc7122218df2f31f41cb56feccada44`
 scripts/test-ddr-init-board.ps1 -Suite C:/Users/sabas/repos/hello_veryl/tools/oss-cad-suite -Port COM4
 ```
 
-DQS/READ ゲートの実機検出結果は [DDR3 読出し DQS ゲート検証](ddr-read-gate.md) に記録した。次は DQ データアイ、write leveling、実メモリの読み書き、refresh を確認する。
+DQS/READ ゲートの初期の実機検出結果は [DDR3 読出し DQS ゲート検証](ddr-read-gate.md) に記録した。
+その後の読書き・refresh検証は下記の2026-10-05時点の結果を参照する。
 
 MPR の既知パターンによる DQ 受信診断と配置依存の実機結果は
 [DDR3 MPR 読出し診断](ddr-mpr.md) に記録した。MPR の安定受信と

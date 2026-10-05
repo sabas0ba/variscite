@@ -623,11 +623,14 @@ Veryl 統一コミット `4a1bd89` の CI に合格し、統合版も配置配�
 
 ### FPGA 例の制限
 
-Linux 実機起動、LCD ブートログ、GUI への拡張は [実装計画と DDR3 ツール検証](docs/tang-linux-lcd.md)
-に記録する。現時点で DDR3 の DQS プリミティブは固定 nextpnr の配置段階で未対応である。
+Linux 実機起動、LCD ブートログ、GUI への拡張は [実装範囲・検証結果と今後の計画](docs/tang-linux-lcd.md)
+に記録する。固定 nextpnr では DDR3 の DQS 配置が未対応のため、DDR診断には固定した
+GOWIN専用コンテナを使う。Veryl製PHY・初期化・受信trainingと独立診断を実装済みであり、
+[refresh保持、byte mask、アドレスbitと容量末尾](docs/ddr-multi-pattern.md)の試験は
+それぞれ実機3回で成功している。CPUからDDR3への接続とLinuxの実機起動は未完了である。
 
 - LCD 描画はカラーバーと単一矩形のみ。フレームバッファと文字描画は未実装。
-- 外部 DRAM は繋いでいないため RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
+- 基本SoCとLCD SoCは外部 DRAM に接続していないため、RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
   Linux は載らず、ベアメタル専用である
 - Tang の PMP は 4 エントリである (上記)。ベアメタルのファームウェアは M-mode のみで
   動き PMP を既定の全許可のままにするため、機能上の差は出ない
