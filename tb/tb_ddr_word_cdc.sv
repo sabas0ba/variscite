@@ -2,10 +2,12 @@ module tb_ddr_word_cdc;
     reg cpu_clk=0, mem_clk=0, reset=1, mem_run=1;
     integer cpu_half=5, mem_half=3, cpu_ticks=0, mem_ticks=0;
     reg valid=0, req_ready=0, rsp_valid=0;
+    reg rsp_error=0;
     reg [31:0] addr=0, wdata=0;
     reg [3:0] wstrb=0;
     reg [127:0] rsp_data=0;
     wire ready, req_valid;
+    wire error, rsp_ready;
     wire [31:0] rdata, req_addr;
     wire [127:0] req_wdata;
     wire [15:0] req_wstrb;
@@ -28,16 +30,18 @@ module tb_ddr_word_cdc;
     rv32ima_DdrWordCdc dut (
         .i_cpu_clk(cpu_clk), .i_mem_clk(mem_clk), .i_reset(reset),
         .i_valid(valid), .i_addr(addr), .i_wdata(wdata), .i_wstrb(wstrb),
-        .o_ready(ready), .o_rdata(rdata), .o_req_valid(req_valid),
+        .o_ready(ready), .o_rdata(rdata), .o_error(error), .o_req_valid(req_valid),
         .i_req_ready(req_ready), .o_req_addr(req_addr),
         .o_req_wdata(req_wdata), .o_req_wstrb(req_wstrb),
-        .i_rsp_valid(rsp_valid), .i_rsp_data(rsp_data)
+        .i_rsp_valid(rsp_valid), .o_rsp_ready(rsp_ready),
+        .i_rsp_data(rsp_data), .i_rsp_error(rsp_error)
     );
     always @(posedge mem_clk)
         if (!reset && req_valid && req_ready) accepted=accepted+1;
 
     task automatic transfer(input integer word_index, input [31:0] data,
-                            input [3:0] mask, input integer delay_cycles);
+                            input [3:0] mask, input integer delay_cycles,
+                            input bit inject_error=0);
         reg [175:0] saved;
         reg [31:0] before_value;
         integer before_accepted;
@@ -49,6 +53,7 @@ module tb_ddr_word_cdc;
             begin
                 do @(posedge cpu_clk); while (!ready);
                 if (rdata !== before_value) $fatal(1,"read mismatch word=%0d got=%h expected=%h",word_index,rdata,before_value);
+                if (error !== inject_error) $fatal(1,"response error lost or stale");
                 @(negedge cpu_clk); valid=0;
             end
             begin
@@ -64,18 +69,23 @@ module tb_ddr_word_cdc;
                 if (req_wstrb !== (16'(mask) << ((word_index%4)*4))) $fatal(1,"byte strobes");
                 if (req_wdata !== (128'(data) << ((word_index%4)*32))) $fatal(1,"word placement");
                 rsp_data=memory[word_index/4];
+                rsp_error=inject_error;
                 req_ready=1;
                 rsp_valid=(delay_cycles==0);
                 @(posedge mem_clk);
+                if (rsp_valid && !rsp_ready) $fatal(1,"immediate response not accepted");
                 for (integer b=0; b<16; b=b+1)
                     if (req_wstrb[b]) memory[word_index/4][b*8+:8]=req_wdata[b*8+:8];
                 @(negedge mem_clk); req_ready=0;
                 if (delay_cycles!=0) begin
                     repeat (delay_cycles) @(negedge mem_clk);
                     rsp_valid=1;
+                    @(posedge mem_clk);
+                    if (!rsp_ready) $fatal(1,"delayed response not accepted");
                     @(negedge mem_clk);
                 end
                 rsp_valid=0;
+                rsp_error=0;
             end
         join
         for (integer b=0; b<4; b=b+1)
@@ -98,6 +108,14 @@ module tb_ddr_word_cdc;
         // Exercise the last burst in the model as well as address bit changes.
         transfer(255,32'hcafebabe,4'hf,31);
         transfer(255,0,0,0);
+        // Error is carried with the selected word, including a zero-latency
+        // backend. A successful response must not inherit the previous error.
+        for (integer lane=0; lane<4; lane=lane+1) begin
+            transfer(lane,0,0,0,1);
+            transfer(lane,0,0,7);
+            transfer(lane,0,0,11,1);
+            transfer(lane,0,0,0);
+        end
         // Cancel an accepted read while the destination clock is stopped.
         @(negedge cpu_clk); valid=1; addr=32'h80000000; wstrb=0;
         wait(req_valid);
@@ -105,7 +123,7 @@ module tb_ddr_word_cdc;
         @(negedge mem_clk); req_ready=0; mem_run=0;
         @(negedge cpu_clk); reset=1; valid=0;
         #1;
-        if (ready || req_valid) $fatal(1,"reset needs stopped memory clock");
+        if (ready || req_valid || rsp_ready || error) $fatal(1,"reset needs stopped memory clock");
         repeat (4) @(negedge cpu_clk);
         mem_run=1;
         repeat (4) @(negedge cpu_clk);

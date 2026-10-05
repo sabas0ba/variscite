@@ -320,7 +320,15 @@ ddr-read-gate-test: veryl-build
 	    target/tang_primer_20k/ddr_read_gate_sweep.sv tb/tb_ddr_read_gate_sweep.sv
 	sim/obj_ddr_read_gate_sweep/tb_ddr_read_gate_sweep
 
-ddr-word-cdc-test: veryl-build
+.PHONY: ddr-cdc-controller-test
+ddr-cdc-controller-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_cdc_controller \
+	    -Mdir sim/obj_ddr_cdc_controller -o tb_ddr_cdc_controller \
+	    target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_cdc_controller.sv
+	sim/obj_ddr_cdc_controller/tb_ddr_cdc_controller
+
+ddr-word-cdc-test: veryl-build ddr-cdc-controller-test
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_word_cdc \
 	    -Mdir sim/obj_ddr_word_cdc -o tb_ddr_word_cdc \
 	    target/tang_primer_20k/ddr_word_cdc.sv tb/tb_ddr_word_cdc.sv

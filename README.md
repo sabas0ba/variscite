@@ -18,7 +18,7 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
 | DDR3 PHY・初期化・読出しtraining | 独立診断で実機確認済み | Veryl実装。GOWINによる配置配線とlane別の拍位置校正 |
 | DDR3保持・部分書込み・アドレス | 限定範囲で実機確認済み | 約127 ms保持、16 byte位置のDM選択、23アドレスbitと容量末尾。全セル走査は未実施 |
 | DDR burst controller | 単体試験・独立診断で実機確認済み | 要求とrefreshの仲裁、応答保持、timeout/reset。32箇所への書込みと100 ms保持後の読戻し |
-| CPUからDDR3への接続 | 一部実装・未接続 | `DdrWordCdc`は単体検証済み。controllerとの結合、error伝達、CPUへの組込みが残る |
+| CPUからDDR3への接続 | 一部実装・未接続 | CDCのerror伝達とcontroller結合読出しをシミュレーションで検証。アドレス範囲検査、CPU例外への変換、実機への組込みが残る |
 | Linux実機起動・LCD bootlog・GUI | 未実装 | カーネル転送、実機ブート、framebuffer/DMA、fbcon、GUIを順に追加する |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。

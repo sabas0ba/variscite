@@ -79,10 +79,24 @@ Linux実機起動後の段階として扱う。
 | `o_rsp_data` / `o_rsp_error` | READは全128 bit、WRITEは0。非整列要求とread valid timeoutはerror=1/data=0 |
 | `i_read_data` / `i_read_valid[1:0]` | training済みassemblerのlane別応答。各laneの最初のvalidだけを採用 |
 
-CPUの絶対アドレスの範囲検査・相対化、errorのCPU側への伝達は接続側で実装する。
-`DdrWordCdc`は現状error伝達ポートを持たないため、単にresponse validを配線して
-timeoutを正常完了として扱う接続は行わない。`i_enable`解除/resetは未完了要求・応答を破棄する。
+CPUの絶対アドレスの範囲検査・相対化、errorのCPU例外への変換は接続側で実装する。
+`DdrWordCdc`は`i_rsp_error`を応答mailboxに保持し、CPU側の`o_ready`と同時に
+`o_error`へ伝える。`o_rsp_ready`は要求受理サイクルまたは応答待ち中だけ立つ。
+CPUコア自体にはまだ外部メモリエラー入力がなく、timeoutを正常完了として扱う接続は行わない。
+`i_enable`解除/resetは未完了要求・応答を破棄する。
 独立した片側resetやDRAM内容の保持は契約に含めない。
+
+### CDCとの結合試験
+
+`make ddr-cdc-controller-test`は実際の`DdrWordCdc`と`DdrBurstController`を接続し、
+PHYのtraining済み読出し出力だけをテストベンチで供給する。初期化完了前の要求保持、
+4 word laneの抽出、片lane欠落によるtimeout/error伝達、後続正常読出し、
+要求・応答の一対一対応、15種類の書込みstrobeと4 word laneの組合せ、
+各部分書込み後の全4 word読戻し、要求がない期間のrefresh、READ受理後の共通resetと復帰を検査する。
+`ddr-word-cdc-test`の依存先に含め、`make all`と既存CIの両方から実行する。
+結合試験はシミュレーション限定であり、CPUコア、アドレス範囲検査、実PHYは含まない。
+strobe=0は読出しとして検証する。メモリモデルは1 burstに限定し、容量境界やbank切替は
+controller単体試験の対象とする。
 
 ### コマンドとrefresh
 
@@ -129,7 +143,7 @@ controllerのREAD件数やrefresh件数ではない。
 独立した実機書込み3回で全32 READが一致し、UARTは全回`!A5AA5A55A`だった。
 全回LCD SoCへの復帰とUART検査も成功した。実機ログは
 `logs/board/20261005-174426-DdrController-*`、174527、174548。
-CPUからのアクセス、CDCとcontrollerの結合、errorのCPUへの伝達、全容量走査、
+CPUからのアクセス、errorのCPU例外への変換、全容量走査、
 LCD DMAとの仲裁と必要帯域はまだ検証していない。
 
 ## 最初の実測: DDR3 PHY のツール対応
@@ -255,7 +269,7 @@ DDR3 の実メモリ試験に先立ち、以下を独立した Veryl モジュ�
 | モジュール | 内容 | 検証 |
 |---|---|---|
 | `Ddr3Startup` | RESET 保持、RESET 解除後待ち、CKE、MR2→MR3→MR1→MR0、ZQCL、完了待ち | 短縮/実時間相当の 2 設定で各 9 回の初期化。コマンド受理待ち、途中リセット、PHY readiness 喪失を検査 |
-| `DdrWordCdc` | CPU 32 bit と DDR 128 bit バースト間のメールボックス CDC | 3 種類のクロック比で各 133 トランザクション。全 16 通りの byte mask と 4 word lane、遅延応答、同時応答、停止クロック中の共通リセットを検査 |
+| `DdrWordCdc` | CPU 32 bit と DDR 128 bit バースト間のメールボックス CDC | 3 種類のクロック比で各149トランザクション。全16通りのbyte maskと4 word lane、遅延・同時応答、error伝達と後続正常応答、停止クロック中の共通resetを検査 |
 | `TangDdrClock` | 27 MHz → PLL 396 MHz → DHCEN → CLKDIV /4 → 99 MHz | SERDES を負荷とする検証トップで GOWIN 合成・配置配線。派生クロック周期 2.525 ns / 10.101 ns の認識を確認 |
 
 ```bash
