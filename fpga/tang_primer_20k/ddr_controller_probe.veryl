@@ -1,0 +1,143 @@
+/// Exercise the request/response controller after external PHY training.
+/// Write 32 locations, retain for 100 ms under refresh, then read without rewriting.
+module DdrControllerProbe #(
+    param HOLD_CYCLES: u32 = 9_900_000,
+) (
+    i_clk        : input  clock     ,
+    i_rst        : input  reset     ,
+    i_enable     : input  logic     ,
+    i_read_data  : input  logic<128>,
+    i_read_valid : input  logic<2>  ,
+    o_done       : output logic     ,
+    o_found      : output logic     ,
+    o_cmd_valid  : output logic     ,
+    o_cmd        : output logic<3>  ,
+    o_addr       : output logic<14> ,
+    o_bank       : output logic<3>  ,
+    o_read       : output logic<8>  ,
+    o_odt        : output logic<4>  ,
+    o_data       : output logic<128>,
+    o_mask       : output logic<16> ,
+    o_dq_enable  : output logic<4>  ,
+    o_dqs_enable : output logic<4>  ,
+    o_dqs_pattern: output logic<8>  ,
+) {
+    enum State: logic<3> {
+        write_req,
+        write_wait,
+        hold,
+        read_req,
+        read_wait,
+        check,
+        done,
+    }
+    var state         : State     ;
+    var index         : logic<5>  ;
+    var elapsed       : logic<24> ;
+    var failed        : logic     ;
+    var returned      : logic<128>;
+    var returned_error: logic     ;
+    var req_ready     : logic     ;
+    var rsp_valid     : logic     ;
+    var rsp_error     : logic     ;
+    var rsp_data      : logic<128>;
+    let req_valid     : logic      = state == State::write_req || state == State::read_req;
+    let rsp_ready     : logic      = (state == State::write_wait && elapsed == 0) || state == State::read_wait;
+    let word          : logic<32>  = 32'h193a_70c5 ^ {index, index, index, index, index, index, 2'b01};
+    let pattern       : logic<128> = {word, ~word, word[15:0], word[31:16], word[7:0], word[31:8]};
+
+    inst controller: DdrBurstController (
+        i_clk                                                         ,
+        i_rst                                                         ,
+        i_enable                                                      ,
+        i_req_valid  : req_valid                                      ,
+        o_req_ready  : req_ready                                      ,
+        i_req_addr   : {index[2:0], 8'b0, index, 2'b0, index, 4'b0},
+        i_req_data   : pattern                                        ,
+        i_req_strb   : if state == State::write_req ? 16'hffff : 16'b0,
+        o_rsp_valid  : rsp_valid                                      ,
+        i_rsp_ready  : rsp_ready                                      ,
+        o_rsp_data   : rsp_data                                       ,
+        o_rsp_error  : rsp_error                                      ,
+        i_read_data                                                   ,
+        i_read_valid                                                  ,
+        o_cmd_valid                                                   ,
+        o_cmd                                                         ,
+        o_addr                                                        ,
+        o_bank                                                        ,
+        o_read                                                        ,
+        o_odt                                                         ,
+        o_data                                                        ,
+        o_mask                                                        ,
+        o_dq_enable                                                   ,
+        o_dqs_enable                                                  ,
+        o_dqs_pattern                                                 ,
+    );
+    always_ff {
+        if_reset {
+            state          = State::write_req;
+            index          = 0;
+            elapsed        = 0;
+            failed         = 0;
+            returned       = 0;
+            returned_error = 0;
+        } else if !i_enable {
+            state          = State::write_req;
+            index          = 0;
+            elapsed        = 0;
+            failed         = 0;
+            returned       = 0;
+            returned_error = 0;
+        } else {
+            case state {
+                State::write_req : if req_ready {
+                    elapsed = if index == 0 ? 24'd1024 : 24'd0;
+                    state   = State::write_wait;
+                }
+                State::write_wait: {
+                    if elapsed != 0 {
+                        elapsed = elapsed - 24'd1;
+                    } else if rsp_valid {
+                        failed = failed || rsp_error;
+                        if index == 31 {
+                            index   = 0;
+                            elapsed = 0;
+                            state   = State::hold;
+                        } else {
+                            index = index + 5'd1;
+                            state = State::write_req;
+                        }
+                    }
+                }
+                State::hold: {
+                    if {8'b0, elapsed} == HOLD_CYCLES - 1 {
+                        state = State::read_req;
+                    } else {
+                        elapsed = elapsed + 24'd1;
+                    }
+                }
+                State::read_req : if req_ready {
+                    state = State::read_wait;
+                }
+                State::read_wait: if rsp_valid {
+                    returned       = rsp_data;
+                    returned_error = rsp_error;
+                    state          = State::check;
+                }
+                State::check    : {
+                    failed = failed || returned_error || returned != pattern;
+                    if index == 31 {
+                        state = State::done;
+                    } else {
+                        index = index + 5'd1;
+                        state = State::read_req;
+                    }
+                }
+                State::done: {}
+                default: state = State::write_req;
+            }
+        }
+    }
+    assign o_done  = state == State::done;
+    assign o_found = o_done && !failed;
+}

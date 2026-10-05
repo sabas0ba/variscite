@@ -17,7 +17,8 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
 | Tangの基本SoC・800×480 LCD | 実機動作確認済み | オンチップRAM 32 KiB、ベアメタルの矩形表示。Linuxによる描画は未実装 |
 | DDR3 PHY・初期化・読出しtraining | 独立診断で実機確認済み | Veryl実装。GOWINによる配置配線とlane別の拍位置校正 |
 | DDR3保持・部分書込み・アドレス | 限定範囲で実機確認済み | 約127 ms保持、16 byte位置のDM選択、23アドレスbitと容量末尾。全セル走査は未実施 |
-| CPUからDDR3への接続 | 一部実装・未接続 | `DdrWordCdc`は単体検証済み。汎用controller、要求とrefreshの仲裁、CPUへの組込みが残る |
+| DDR burst controller | 単体試験・独立診断で実機確認済み | 要求とrefreshの仲裁、応答保持、timeout/reset。32箇所への書込みと100 ms保持後の読戻し |
+| CPUからDDR3への接続 | 一部実装・未接続 | `DdrWordCdc`は単体検証済み。controllerとの結合、error伝達、CPUへの組込みが残る |
 | Linux実機起動・LCD bootlog・GUI | 未実装 | カーネル転送、実機ブート、framebuffer/DMA、fbcon、GUIを順に追加する |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
@@ -26,18 +27,18 @@ DDRの測定条件、bitstream SHA256、再現手順は
 
 ## ロードマップ
 
-現在はDDRの独立診断を終え、CPUから継続的に使えるメモリ接続へ進む段階である。
+現在は要求・応答型DDR controllerの独立実機診断まで終え、CDCとCPUバスへの接続へ進む段階である。
 以下は実装順序と完了条件であり、日程の確約ではない。
 
 | 順序 | 次の成果 | 完了条件 |
 | --- | --- | --- |
-| 1 | DDR controller | 任意の読書き要求とrefreshを仲裁し、応答待ち中のrefresh期限、timeout、resetを検証する |
+| 1（単独検証済み） | DDR controller | 任意の読書き要求とrefreshを仲裁し、応答待ち中のrefresh期限、timeout、resetを検証する |
 | 2 | CPUとDDR3の接続 | CDC、可変レイテンシ、byte strobe、境界アクセスを接続し、実機で全容量走査と継続アクセスを通す |
 | 3 | Linux実機起動 | UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、`/init`とUARTシェルへ到達する |
 | 4 | LCDブートログ | DDR上のframebuffer、LCD DMA・FIFO、fbconを実装し、連続スクロールでも表示が欠落しないことを確認する |
 | 5 | Linux GUI | Linuxユーザプロセスから`/dev/fb0`へ描画し、UART入力に応答する |
 
-次のPRはDDR controllerとCPU接続を中心に進める。詳細な設計条件と段階別の検証方針は
+継続中のPRはDDR controllerとCPU接続を扱う。詳細な設計条件と段階別の検証方針は
 [Tang Primer 20KのLinux/LCD計画](docs/tang-linux-lcd.md)を参照する。
 各段階の検証完了時に、このステータス表と関連する検証記録を更新する。
 

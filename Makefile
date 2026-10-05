@@ -13,7 +13,8 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
 
 all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
      cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test \
-     ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test
+     ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test \
+     ddr-burst-controller-test ddr-controller-probe-test
 
 lint:
 	@test -z "$$(find src fpga -type f \( -name '*.sv' -o -name '*.v' \))" || \
@@ -94,6 +95,20 @@ coverage:
 	    logs/cov/*.dat 2>&1 | tee logs/cov/summary.txt
 
 # --- FPGA ports ----------------------------------------------------------
+.PHONY: ddr-burst-controller-test
+.PHONY: ddr-controller-probe-test
+ddr-controller-probe-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_controller_probe \
+	    -Mdir sim/obj_ddr_controller_probe -o tb_ddr_controller_probe \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_controller_probe.sv tb/tb_ddr_controller_probe.sv
+	sim/obj_ddr_controller_probe/tb_ddr_controller_probe
+
+ddr-burst-controller-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_burst_controller \
+	    -Mdir sim/obj_ddr_burst_controller -o tb_ddr_burst_controller \
+	    target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_burst_controller.sv
+	sim/obj_ddr_burst_controller/tb_ddr_burst_controller
+
 .PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test ddr-timeline-test ddr-full-timeline-test ddr-status-uart-test
 
 .PHONY: ddr-array-phase-test

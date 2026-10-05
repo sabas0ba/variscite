@@ -13,7 +13,7 @@ RTL は DDR3 制御、LCD 読み出し、基板トップまで Veryl で実装�
 Linux はシミュレータ上で起動済みだが、実機のCPUからDDR3への接続、カーネル転送、
 Linux用フレームバッファは未実装である。DDR3は下記の独立診断で実機検証を進めている。
 
-## 今回の取り込み範囲
+## DDR基礎実装の範囲 (PR #5)
 
 この変更の完成単位は、DDR3のPHY・初期化・受信trainingと、単独で実行できる診断である。
 既存CPU/LCD SoCのメモリ構成は変更していない。合成対象はGowinプリミティブの接続まで
@@ -50,16 +50,87 @@ GOWIN用コンテナの構築手順は本書の「GOWIN EDA による配置配�
 git ignoreされた`logs/board/`、`sim/fpga/`に保存し、測定時のSHA256と結果を文書に残す。
 これらの生成物はcloneには含まれない。実機実行には、復帰用の検証済みLCD SoC bitstreamも必要である。
 
-### 次のPRで行う作業
+### 継続作業
 
-1. 任意のメモリ要求と周期的refreshを仲裁するDDR controllerを実装する。
-   応答待ち・停止中にもrefresh期限を守り、timeoutやreset時の扱いを検証する。
+1. DDR controllerの単体・独立実機検証は下記のとおり完了した。
+   応答待ち中にもrefresh期限を守ること、timeoutやreset時の扱いを検証した。
 2. `DdrWordCdc`とCPUバスへ接続し、可変レイテンシ、byte strobe、境界アクセスを検証する。
    接続後に全容量走査と継続アクセスを実機で確認する。
 3. UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、Linuxの`/init`到達を確認する。
 
 LCDのframebuffer/DMA、fbconによるbootlog、LinuxユーザプロセスによるGUIは、
 Linux実機起動後の段階として扱う。
+
+## 要求・応答型DDR controller (2026-10-05)
+
+`DdrBurstController`は初期化とtrainingが完了したPHYへ、任意のBL8要求を1件ずつ発行する。
+各要求の終了時にall-bank PRECHARGEし、tRP待機後に応答する。rowを開いたままにする
+最適化、複数outstanding要求、CPU/DMA仲裁は含まない。既存CPUトップへの接続は未完了である。
+
+### 接続契約
+
+| 信号 | 意味 |
+| --- | --- |
+| `i_enable` | PHY初期化・trainingとPRE/tRPが完了して使用可能。解除時はDRAM/PHYも共通resetする |
+| `i_req_valid` / `o_req_ready` | 同一cycleで1のとき要求を受理し、address/data/strobeを内部に保持 |
+| `i_req_addr[26:0]` | 128 MiB内の相対byte address。16 byte整列必須。bank=[26:24]、row=[23:11]、burst列=[10:4] |
+| `i_req_data[127:0]` / `i_req_strb[15:0]` | byte enableは正極性でPHYのDMへ反転。strobe=0はREAD、非0はWRITE |
+| `o_rsp_valid` / `i_rsp_ready` | 応答受理までvalid/data/errorを保持。その間は次要求を受理しない |
+| `o_rsp_data` / `o_rsp_error` | READは全128 bit、WRITEは0。非整列要求とread valid timeoutはerror=1/data=0 |
+| `i_read_data` / `i_read_valid[1:0]` | training済みassemblerのlane別応答。各laneの最初のvalidだけを採用 |
+
+CPUの絶対アドレスの範囲検査・相対化、errorのCPU側への伝達は接続側で実装する。
+`DdrWordCdc`は現状error伝達ポートを持たないため、単にresponse validを配線して
+timeoutを正常完了として扱う接続は行わない。`i_enable`解除/resetは未完了要求・応答を破棄する。
+独立した片側resetやDRAM内容の保持は契約に含めない。
+
+### コマンドとrefresh
+
+99 MHz制御、396 MHz DDR clock、CL=6/CWL=5を使用する。WRITEはCA slot 3、他のアクセス
+コマンドはslot 2で発行し、DQS preamble/data/postambleは既存診断と同じ配置を使う。
+ACT後4 controller cycleでREAD/WRITEし、WRITE後10 cycleでPRECHARGE、READは12 cycleの
+受信窓を終えてPRECHARGEする。両laneが揃わない場合も窓を延長せずerrorを返す。
+
+開始時にREFRESHし、以後は前回REFから256 cycle以上経過すると、新規要求よりrefreshを
+優先する。処理中の1要求はPRE/tRPまで完了してからREFへ進む。REF後は32 cycle（約323 ns）
+待機する。これは[Hynix資料](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf)
+page 14の1 Gbit向けIDD測定条件（nRFC=59 CK @1.875 ns等）より長く取った保守的な待機値である。
+試験ではREF間隔が384 cycle（約3.879 µs）を超えないことを監視する。
+未消費の応答は独立レジスタに保持し、その間もidle/REFの処理を継続する。
+
+### 検証と実機診断
+
+```bash
+make ddr-burst-controller-test ddr-controller-probe-test
+DDR_CONTROLLER=1 bash scripts/build_ddr_mpr.sh  # 固定GOWINコンテナ
+```
+
+controller単体試験では全有効アドレスbit・容量末尾、16位置のbyte strobe、非整列要求、
+応答backpressure、idle中のrefresh、lane別valid、重複valid、片lane／全laneのtimeout、
+要求処理中・応答保留中のresetを検査する。応答の保持、1要求1応答、CA/DQS/DMの順序・
+間隔とrefresh期限をモデルで監視する。
+
+`DdrControllerProbe`は32箇所を書き、100 ms保持してから再書込みなしで32 READを照合する。
+最初のWRITE応答は1,024 cycle保留し、その間もrefreshを継続させる。
+短縮した保持時間で、正常系、途中のデータ破損、valid欠落の3ケースをシミュレーションする。
+`TangDdrControllerTop`は既存の2列診断でPHYをtrainingした後にcontrollerへ引き渡す。
+trainingまたはcontroller照合が失敗すれば成功statusにはならない。
+
+実機は`scripts/test-ddr-init-board.ps1 -Mode DdrController`で検査する。
+合格には開始記号付きUARTフレームの直近3個がすべて`!A`で始まることを要求し、
+終了後は既知のLCD SoCへ復帰する。status後の8桁はtraining診断の値であり、
+controllerのREAD件数やrefresh件数ではない。
+
+2026-10-05、lint、controller単体試験、診断3ケース、UART両形式、CDCの3クロック比、
+既存trained/address/PHY起動回帰試験が通過した。ログは`sim/controller-regression.log`と
+`sim/controller-final-tests.log`。新規2試験を`make all`とCIへ追加した。
+実機用回路は配置配線のsetup/hold違反0、bitstream SHA256は
+`169049dbbb7bcb5b09c98db7d7262f0cabe6368c4ef06b455bec862d5fbd2ca2`。
+独立した実機書込み3回で全32 READが一致し、UARTは全回`!A5AA5A55A`だった。
+全回LCD SoCへの復帰とUART検査も成功した。実機ログは
+`logs/board/20261005-174426-DdrController-*`、174527、174548。
+CPUからのアクセス、CDCとcontrollerの結合、errorのCPUへの伝達、全容量走査、
+LCD DMAとの仲裁と必要帯域はまだ検証していない。
 
 ## 最初の実測: DDR3 PHY のツール対応
 
