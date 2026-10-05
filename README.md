@@ -5,6 +5,42 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
 コシミュレーション一致、Verilator シミュレーション上での Linux 起動とユーザ
 アプリケーションの実行までを含む。
 
+## 実装ステータス
+
+更新日: 2026-10-05。Linuxはシミュレーション上で起動済み。Tang Primer 20K実機では
+ベアメタルのLCD矩形表示と、独立したDDR3診断まで確認済みであり、Linux実機起動は未達である。
+
+| 項目 | 状態 | 確認済みの範囲・残る作業 |
+| --- | --- | --- |
+| RV32IMAコア・CLINT/PLIC・PMP | シミュレーション検証済み | 命令試験、Spike照合、例外・割り込み・アクセス制御 |
+| Linux・ユーザランド | シミュレーション動作確認済み | NOMMU / M-mode Linuxとユーザアプリケーションの実行 |
+| Tangの基本SoC・800×480 LCD | 実機動作確認済み | オンチップRAM 32 KiB、ベアメタルの矩形表示。Linuxによる描画は未実装 |
+| DDR3 PHY・初期化・読出しtraining | 独立診断で実機確認済み | Veryl実装。GOWINによる配置配線とlane別の拍位置校正 |
+| DDR3保持・部分書込み・アドレス | 限定範囲で実機確認済み | 約127 ms保持、16 byte位置のDM選択、23アドレスbitと容量末尾。全セル走査は未実施 |
+| CPUからDDR3への接続 | 一部実装・未接続 | `DdrWordCdc`は単体検証済み。汎用controller、要求とrefreshの仲裁、CPUへの組込みが残る |
+| Linux実機起動・LCD bootlog・GUI | 未実装 | カーネル転送、実機ブート、framebuffer/DMA、fbcon、GUIを順に追加する |
+
+「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
+DDRの測定条件、bitstream SHA256、再現手順は
+[DDR診断の検証記録](docs/ddr-multi-pattern.md)にまとめる。
+
+## ロードマップ
+
+現在はDDRの独立診断を終え、CPUから継続的に使えるメモリ接続へ進む段階である。
+以下は実装順序と完了条件であり、日程の確約ではない。
+
+| 順序 | 次の成果 | 完了条件 |
+| --- | --- | --- |
+| 1 | DDR controller | 任意の読書き要求とrefreshを仲裁し、応答待ち中のrefresh期限、timeout、resetを検証する |
+| 2 | CPUとDDR3の接続 | CDC、可変レイテンシ、byte strobe、境界アクセスを接続し、実機で全容量走査と継続アクセスを通す |
+| 3 | Linux実機起動 | UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、`/init`とUARTシェルへ到達する |
+| 4 | LCDブートログ | DDR上のframebuffer、LCD DMA・FIFO、fbconを実装し、連続スクロールでも表示が欠落しないことを確認する |
+| 5 | Linux GUI | Linuxユーザプロセスから`/dev/fb0`へ描画し、UART入力に応答する |
+
+次のPRはDDR controllerとCPU接続を中心に進める。詳細な設計条件と段階別の検証方針は
+[Tang Primer 20KのLinux/LCD計画](docs/tang-linux-lcd.md)を参照する。
+各段階の検証完了時に、このステータス表と関連する検証記録を更新する。
+
 ## 構成
 
 - コア: マルチサイクル (fetch / execute / mem_access / mem_access2 / amo_write /
@@ -77,7 +113,7 @@ priority と threshold は 3bit の WARL (`PRIO_BITS`)、enable は実装済み�
 
 ## ツールチェーン
 
-コンテナ環境 (Ubuntu 24.04) で検証済みの固定バージョン。GitHub リリースから取得し
+コンテナ環境 (Ubuntu 24.04) で検証済みの固定バージョン。公式配布元から取得し
 SHA256 を検証している。
 
 | ツール | バージョン | 取得元 / SHA256 |
@@ -90,6 +126,7 @@ SHA256 を検証している。
 | Spike | 16c0b60 (riscv-isa-sim) | riscv-software-src/riscv-isa-sim |
 | riscv-tests | 447a5fcb8253627ddb5f6a226f64e43463afcdd5 (env: 6de71edb) | riscv-software-src/riscv-tests |
 | Linux | v6.12 (tag adc218676) | torvalds/linux |
+| GOWIN EDA (DDR3 検証用の専用コンテナ) | V1.9.11.03 Education Linux | Gowin 公式 CDN sha256:6fd392f7473b24d847b6f8ebdc7a185c591826ba35d8d0e517961030d446f9f7。[構築手順とランタイム固定値](docs/tang-linux-lcd.md#gowin-eda-による配置配線の検証) |
 | oss-cad-suite (Windows) | 2026-08-10 | YosysHQ/oss-cad-suite-build `oss-cad-suite-windows-x64-20260810.tgz` sha256:818a5bc96c0e0719e2e21da0d2cf6fbbeed959689657202b5b942cf26af4e502 — 基板への書き込み (openFPGALoader) にのみ用いる |
 
 `flake.nix` に nix devShell の定義を置くが、本セッションの検証環境には nix が
@@ -622,8 +659,14 @@ Veryl 統一コミット `4a1bd89` の CI に合格し、統合版も配置配�
 
 ### FPGA 例の制限
 
+Linux 実機起動、LCD ブートログ、GUI への拡張は [実装範囲・検証結果と今後の計画](docs/tang-linux-lcd.md)
+に記録する。固定 nextpnr では DDR3 の DQS 配置が未対応のため、DDR診断には固定した
+GOWIN専用コンテナを使う。Veryl製PHY・初期化・受信trainingと独立診断を実装済みであり、
+[refresh保持、byte mask、アドレスbitと容量末尾](docs/ddr-multi-pattern.md)の試験は
+それぞれ実機3回で成功している。CPUからDDR3への接続とLinuxの実機起動は未完了である。
+
 - LCD 描画はカラーバーと単一矩形のみ。フレームバッファと文字描画は未実装。
-- 外部 DRAM は繋いでいないため RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
+- 基本SoCとLCD SoCは外部 DRAM に接続していないため、RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
   Linux は載らず、ベアメタル専用である
 - Tang の PMP は 4 エントリである (上記)。ベアメタルのファームウェアは M-mode のみで
   動き PMP を既定の全許可のままにするため、機能上の差は出ない

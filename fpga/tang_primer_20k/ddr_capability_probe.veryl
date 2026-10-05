@@ -1,0 +1,37 @@
+/// Structural toolchain probe for the GW2A DDR3 DQS primitive.
+/// This is not a DDR controller or a functional PHY. Never program this top.
+/// Reuse the UART probe pin names solely to check device-cell placement.
+module TangDdrCapabilityProbe (
+    i_clk    : input  clock,
+    i_uart_rx: input  logic,
+    o_uart_tx: output logic,
+) {
+    inst dqs: $sv::DQS #(
+        DQS_MODE: "X2_DDR3",
+    ) (
+        PCLK   : i_clk    ,
+        FCLK   : i_clk    ,
+        RESET  : 1'b0     ,
+        DQSIN  : i_uart_rx,
+        DLLSTEP: 8'b0     ,
+        WSTEP  : 8'b0     ,
+        READ   : 4'hf     ,
+        RCLKSEL: 3'b0     ,
+        HOLD   : 1'b0     ,
+        RLOADN : 1'b0     ,
+        RMOVE  : 1'b0     ,
+        RDIR   : 1'b1     ,
+        WLOADN : 1'b0     ,
+        WMOVE  : 1'b0     ,
+        WDIR   : 1'b1     ,
+        DQSR90 : _        ,
+        DQSW0  : _        ,
+        DQSW270: _        ,
+        RPOINT : _        ,
+        WPOINT : _        ,
+        RVALID : o_uart_tx,
+        RBURST : _        ,
+        RFLAG  : _        ,
+        WFLAG  : _        ,
+    );
+}

@@ -1,0 +1,78 @@
+/// Capture previous/current/next 128-bit words around the first lane RVALID
+/// after each of two READ commands. UART reads the memory only after completion.
+module DdrRawBurstCapture (
+    i_clk         : input  clock     ,
+    i_rst         : input  reset     ,
+    i_read_command: input  logic     ,
+    i_gate        : input  logic     ,
+    i_burst       : input  logic<2>  ,
+    i_valid       : input  logic<2>  ,
+    i_data        : input  logic<128>,
+    i_index       : input  logic<5>  ,
+    o_sample      : output logic<32> ,
+    o_captured    : output logic     ,
+) {
+    var samples        : logic<32>  [32];
+    var previous_data  : logic<128>     ;
+    var previous_status: logic<32>      ;
+    var seen_read      : logic          ;
+    var column         : logic          ;
+    var armed          : logic          ;
+    var tail           : logic          ;
+    var captured       : logic          ;
+    var elapsed        : logic<8>       ;
+    var completed      : logic<2>       ;
+    var read_count     : logic<2>       ;
+    let base           : logic<5>        = {column, 4'b0};
+    let status         : logic<32>       = {19'b0, elapsed, i_gate, i_burst, i_valid};
+    always_ff {
+        if_reset {
+            previous_data   = 0;
+            previous_status = 0;
+            seen_read       = 0;
+            column          = 0;
+            armed           = 0;
+            tail            = 0;
+            captured        = 0;
+            elapsed         = 0;
+            completed       = 0;
+            read_count      = 0;
+            for index in 0..32 {
+                samples[index] = 0;
+            }
+        } else if !captured {
+            previous_data   = i_data;
+            previous_status = status;
+            if seen_read && elapsed != 8'hff {
+                elapsed = elapsed + 8'd1;
+            }
+            if i_read_command && read_count != 2 {
+                column     = seen_read;
+                seen_read  = 1;
+                elapsed    = 1;
+                armed      = 1;
+                tail       = 0;
+                read_count = read_count + 2'd1;
+            } else if armed && (|i_valid) {
+                for chunk in 0..4 {
+                    samples[base + chunk as 5]        = previous_data[32 * chunk+:32];
+                    samples[base + 5'd4 + chunk as 5] = i_data[32 * chunk+:32];
+                }
+                samples[base + 5'd12] = previous_status;
+                samples[base + 5'd13] = status;
+                armed                 = 0;
+                tail                  = 1;
+            } else if tail {
+                for chunk in 0..4 {
+                    samples[base + 5'd8 + chunk as 5] = i_data[32 * chunk+:32];
+                }
+                samples[base + 5'd14] = status;
+                tail                  = 0;
+                completed[column]     = 1;
+                captured              = column && completed[0];
+            }
+        }
+    }
+    assign o_sample   = samples[i_index];
+    assign o_captured = captured;
+}

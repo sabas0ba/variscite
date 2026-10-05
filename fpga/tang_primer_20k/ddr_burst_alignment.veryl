@@ -1,0 +1,21 @@
+/// Compare each lane's eight-beat pattern at all offsets in two adjacent words.
+/// Offset zero starts at beat zero of i_previous; offset seven ends in i_current.
+module DdrBurstAlignment (
+    i_previous: input  logic<128>,
+    i_current : input  logic<128>,
+    i_expected: input  logic<128>,
+    o_offsets : output logic<16> ,
+) {
+    for lane in 0..2 :lanes {
+        var window  : logic<128>;
+        var expected: logic<64> ;
+        for beat in 0..8 :beats {
+            assign window[8 * beat+:8]      = i_previous[16 * beat + 8 * lane+:8];
+            assign window[64 + 8 * beat+:8] = i_current[16 * beat + 8 * lane+:8];
+            assign expected[8 * beat+:8]    = i_expected[16 * beat + 8 * lane+:8];
+        }
+        for offset in 0..8 :offsets {
+            assign o_offsets[8 * lane + offset] = window[8 * offset+:64] == expected;
+        }
+    }
+}

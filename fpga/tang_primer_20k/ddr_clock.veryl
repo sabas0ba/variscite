@@ -1,0 +1,52 @@
+/// 27 MHz reference -> 396 MHz DDR clock and 99 MHz controller clock.
+/// DHCEN CE is active high STOP, as defined by the vendor primitive model.
+module TangDdrClock (
+    i_clk      : input  'reference clock,
+    i_reset    : input  'async     logic,
+    i_stop     : input  'reference logic,
+    i_div_reset: input  'reference logic,
+    o_fast     : output 'fast      clock,
+    o_ctrl     : output 'ctrl      clock,
+    o_locked   : output 'async     logic,
+) {
+    var pll_clk: 'fast clock;
+    unsafe (cdc) {
+        inst pll: $sv::rPLL #(
+            FCLKIN   : "27"      ,
+            IDIV_SEL : 2         ,
+            FBDIV_SEL: 43        ,
+            ODIV_SEL : 2         ,
+            CLKFB_SEL: "internal",
+            DEVICE   : "GW2A-18C",
+        ) (
+            CLKIN   : i_clk   ,
+            CLKOUT  : pll_clk ,
+            LOCK    : o_locked,
+            RESET   : i_reset ,
+            RESET_P : 1'b0    ,
+            CLKFB   : 1'b0    ,
+            FBDSEL  : 6'b0    ,
+            IDSEL   : 6'b0    ,
+            ODSEL   : 6'b0    ,
+            PSDA    : 4'b0    ,
+            DUTYDA  : 4'b0    ,
+            FDLY    : 4'b0    ,
+            CLKOUTP : _       ,
+            CLKOUTD : _       ,
+            CLKOUTD3: _       ,
+        );
+        inst gate: $sv::DHCEN (
+            CLKIN : pll_clk,
+            CE    : i_stop ,
+            CLKOUT: o_fast ,
+        );
+        inst divider: $sv::CLKDIV #(
+            DIV_MODE: "4",
+        ) (
+            HCLKIN: o_fast                                ,
+            RESETN: !(i_reset || i_div_reset || !o_locked),
+            CALIB : 1'b0                                  ,
+            CLKOUT: o_ctrl                                ,
+        );
+    }
+}

@@ -1,0 +1,44 @@
+/// Runs DDR power-up and reads the predefined DDR3 MPR pattern on DQ0/DQ8.
+/// UART reports M for two matching lanes and E if the scan does not match.
+/// This is a read-receive test; it does not write or validate DRAM array data.
+module TangDdrMprProbe (
+    i_clk      : input  'reference clock        ,
+    o_uart_tx  : output 'reference logic        ,
+    ddr_dq     : inout  'async     tri logic<16>,
+    ddr_dqs_p  : inout  'async     tri logic<2> ,
+    ddr_dqs_n  : inout  'async     tri logic<2> ,
+    ddr_dm     : output 'fast      logic    <2> ,
+    ddr_addr   : output 'fast      logic    <14>,
+    ddr_bank   : output 'fast      logic    <3> ,
+    ddr_ras_n  : output 'fast      logic        ,
+    ddr_cas_n  : output 'fast      logic        ,
+    ddr_we_n   : output 'fast      logic        ,
+    ddr_cs_n   : output 'fast      logic        ,
+    ddr_cke    : output 'fast      logic        ,
+    ddr_odt    : output 'fast      logic        ,
+    ddr_reset_n: output 'ctrl      logic        ,
+    ddr_clk_p  : output 'fast      logic        ,
+    ddr_clk_n  : output 'fast      logic        ,
+) {
+    inst probe: TangDdrInitProbe #(
+        RUN_MPR: 1,
+    ) (
+        i_clk        ,
+        o_uart_tx    ,
+        ddr_dq       ,
+        ddr_dqs_p    ,
+        ddr_dqs_n    ,
+        ddr_dm       ,
+        ddr_addr     ,
+        ddr_bank     ,
+        ddr_ras_n    ,
+        ddr_cas_n    ,
+        ddr_we_n     ,
+        ddr_cs_n     ,
+        ddr_cke      ,
+        ddr_odt      ,
+        ddr_reset_n  ,
+        ddr_clk_p    ,
+        ddr_clk_n    ,
+    );
+}

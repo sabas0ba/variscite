@@ -1,0 +1,10 @@
+*
+!logs/
+logs/*
+!logs/Gowin_V1.9.11.03_Education_Linux.tar.gz
+!logs/gowin-runtime/
+logs/gowin-runtime/*
+!logs/gowin-runtime/*.deb
+!container/
+container/*
+!container/gowin-runtime.sha256

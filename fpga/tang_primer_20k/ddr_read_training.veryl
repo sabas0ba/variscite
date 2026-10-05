@@ -1,0 +1,76 @@
+/// Determine lane offsets once from a training burst. Later reads never retrain.
+/// The first RVALID for each lane is the only calibration attempt until reset.
+module DdrReadTraining #(
+    param PATTERN: logic<128> = 128'ha55a_5aa5_c33c_3cc3_9669_6996_f00f_0ff0,
+) (
+    i_clk    : input  clock     ,
+    i_rst    : input  reset     ,
+    i_train  : input  logic     ,
+    i_data   : input  logic<128>,
+    i_valid  : input  logic<2>  ,
+    o_offsets: output logic<8>  ,
+    o_ready  : output logic<2>  ,
+    o_trained: output logic<2>  ,
+) {
+    var previous  : logic<128>;
+    var attempted : logic<2>  ;
+    var trained   : logic<2>  ;
+    var offsets   : logic<8>  ;
+    var candidates: logic<8>  ;
+    var found     : logic<2>  ;
+    var pending   : logic<2>  ;
+    for lane in 0..2 :lanes {
+        var window    : logic<128>;
+        var expected  : logic<64> ;
+        var match_bits: logic<9>  ;
+        for beat in 0..8 :beats {
+            assign window[8 * beat+:8]      = previous[16 * beat + 8 * lane+:8];
+            assign window[64 + 8 * beat+:8] = i_data[16 * beat + 8 * lane+:8];
+            assign expected[8 * beat+:8]    = PATTERN[16 * beat + 8 * lane+:8];
+        }
+        always_ff {
+            if_reset {
+                match_bits = 0;
+            } else if i_train && !attempted[lane] && i_valid[lane] {
+                for offset in 0..9 {
+                    match_bits[offset] = window[8 * offset+:64] == expected;
+                }
+            }
+        }
+        always_comb {
+            candidates[4 * lane+:4] = 0;
+            found[lane]             = 0;
+            for offset in 0..9 {
+                if !found[lane] && match_bits[offset] {
+                    candidates[4 * lane+:4] = offset as 4;
+                    found[lane]             = 1;
+                }
+            }
+            o_offsets[4 * lane+:4] = offsets[4 * lane+:4];
+            o_ready[lane]          = trained[lane];
+        }
+    }
+    always_ff {
+        if_reset {
+            previous  = 0;
+            attempted = 0;
+            trained   = 0;
+            offsets   = 0;
+            pending   = 0;
+        } else {
+            previous = i_data;
+            pending  = 0;
+            for lane in 0..2 {
+                if i_train && !attempted[lane] && i_valid[lane] {
+                    attempted[lane] = 1;
+                    pending[lane]   = 1;
+                }
+                if pending[lane] {
+                    trained[lane]        = found[lane];
+                    offsets[4 * lane+:4] = candidates[4 * lane+:4];
+                }
+            }
+        }
+    }
+    assign o_trained = trained;
+}

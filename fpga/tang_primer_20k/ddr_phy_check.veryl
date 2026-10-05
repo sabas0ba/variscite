@@ -1,0 +1,118 @@
+/// Full x16 DDR PHY placement check. The generated bitstream is not a DRAM controller.
+/// Arbitrary commands and data are generated solely to retain all I/O primitives.
+/// Never program this top on a board.
+module TangDdrPhyCheck (
+    i_clk      : input  'reference clock        ,
+    i_reset    : input  'async     logic        ,
+    o_probe    : output 'ctrl      logic        ,
+    ddr_dq     : inout  'async     tri logic<16>,
+    ddr_dqs_p  : inout  'async     tri logic<2> ,
+    ddr_dqs_n  : inout  'async     tri logic<2> ,
+    ddr_dm     : output 'fast      logic    <2> ,
+    ddr_addr   : output 'fast      logic    <14>,
+    ddr_bank   : output 'fast      logic    <3> ,
+    ddr_ras_n  : output 'fast      logic        ,
+    ddr_cas_n  : output 'fast      logic        ,
+    ddr_we_n   : output 'fast      logic        ,
+    ddr_cs_n   : output 'fast      logic        ,
+    ddr_cke    : output 'fast      logic        ,
+    ddr_odt    : output 'fast      logic        ,
+    ddr_reset_n: output 'ctrl      logic        ,
+    ddr_clk_p  : output 'fast      logic        ,
+    ddr_clk_n  : output 'fast      logic        ,
+) {
+    var fast_clk  : 'fast  clock                ;
+    var ctrl_clk  : 'ctrl  clock                ;
+    var locked    : 'async logic                ;
+    var dll_step  : 'async logic           <8>  ;
+    var counter   : 'ctrl  logic           <32> ;
+    var read_data : 'ctrl  logic           <128>;
+    var raw_data  : 'async logic           <16> ;
+    var burst     : 'ctrl  logic           <2>  ;
+    var valid     : 'ctrl  logic           <2>  ;
+    var ctrl_reset: 'async reset_async_high     ;
+
+    inst clocks: TangDdrClock (
+        i_clk                ,
+        i_reset              ,
+        i_stop     : 1'b0    ,
+        i_div_reset: 1'b0    ,
+        o_fast     : fast_clk,
+        o_ctrl     : ctrl_clk,
+        o_locked   : locked  ,
+    );
+    unsafe (cdc) {
+        assign ctrl_reset = (i_reset || !locked) as reset_async_high;
+        inst dll: $sv::DLL #(
+            SCAL_EN : "true",
+            CODESCAL: "101" ,
+        ) (
+            CLKIN   : fast_clk  ,
+            STOP    : 1'b0      ,
+            UPDNCNTL: 1'b0      ,
+            RESET   : ctrl_reset,
+            STEP    : dll_step  ,
+            LOCK    : _         ,
+        );
+        always_ff (ctrl_clk, ctrl_reset) {
+            if_reset {
+                counter = 0;
+            } else {
+                counter = counter + 32'd1;
+            }
+        }
+    }
+    unsafe (cdc) {
+        inst phy: TangDdrPhyIo (
+            i_clk        : ctrl_clk                                                                         ,
+            i_fast       : fast_clk                                                                         ,
+            i_reset      : ctrl_reset                                                                       ,
+            i_dll_step   : dll_step                                                                         ,
+            i_mem_reset_n: counter[0]                                                                       ,
+            i_addr       : {counter[27:0], counter[27:0]},
+            i_bank       : counter[11:0]                                                                    ,
+            i_cmd        : counter[11:0]                                                                    ,
+            i_cs_n       : counter[3:0]                                                                     ,
+            i_cke        : counter[7:4]                                                                     ,
+            i_odt        : counter[11:8]                                                                    ,
+            i_hold       : 2'b00                                                                            ,
+            i_read       : counter[7:0]                                                                     ,
+            i_read_sel   : counter[5:0]                                                                     ,
+            i_rloadn     : 1'b0                                                                             ,
+            i_rmove      : 1'b0                                                                             ,
+            i_rdir       : 1'b1                                                                             ,
+            i_write_step : counter[15:0]                                                                    ,
+            i_data       : {counter, counter ^ 32'h59a6390c, counter ^ 32'h36e54d27, counter ^ 32'hb7c14983},
+            i_mask       : counter[15:0]                                                                    ,
+            i_dq_enable  : counter[3:0]                                                                     ,
+            i_dqs_enable : counter[7:4]                                                                     ,
+            i_dqs_pattern: counter[7:0]                                                                     ,
+            o_data       : read_data                                                                        ,
+            o_raw        : raw_data                                                                         ,
+            o_burst      : burst                                                                            ,
+            o_valid      : valid                                                                            ,
+            o_rflag      : _                                                                                ,
+            o_wflag      : _                                                                                ,
+            o_rpoint     : _                                                                                ,
+            o_wpoint     : _                                                                                ,
+            ddr_dq                                                                                          ,
+            ddr_dqs_p                                                                                       ,
+            ddr_dqs_n                                                                                       ,
+            ddr_dm                                                                                          ,
+            ddr_addr                                                                                        ,
+            ddr_bank                                                                                        ,
+            ddr_ras_n                                                                                       ,
+            ddr_cas_n                                                                                       ,
+            ddr_we_n                                                                                        ,
+            ddr_cs_n                                                                                        ,
+            ddr_cke                                                                                         ,
+            ddr_odt                                                                                         ,
+            ddr_reset_n                                                                                     ,
+            ddr_clk_p                                                                                       ,
+            ddr_clk_n                                                                                       ,
+        );
+    }
+    unsafe (cdc) {
+        assign o_probe = read_data[counter[6:0]] ^ raw_data[counter[3:0]] ^ burst[0] ^ valid[1];
+    }
+}
