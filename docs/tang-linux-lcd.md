@@ -219,11 +219,23 @@ DQS/READ ゲートの実機検出結果は [DDR3 読出し DQS ゲート検証](
 
 MPR の既知パターンによる DQ 受信診断と配置依存の実機結果は
 [DDR3 MPR 読出し診断](ddr-mpr.md) に記録した。MPR の安定受信と
-DRAM アレイの読み書きは未達成であり、Linux 用 RAM としては使用できない。
+当初のDRAMアレイ診断結果は以下に記録する。Linux用RAMとしての接続は未完了である。
 RVALID と DQ の前後 1 controller cycle の比較は
 [DDR3 MPR サイクル位置診断](ddr-mpr-align.md) に記録した。
 2 列への反転パターン書込みと読戻しの初期結果は
 [DDR3 アレイ書込み・読戻し診断](ddr-array.md) に記録した。
+
+## 2026-10-05時点のDDR実機検証
+
+VerylでPHY起動制御、lane別の拍位置training、読出し組立を実装した。
+[trainingと単体・結合試験](ddr-read-training.md) および
+[複数pattern・全書込み後の再読出し](ddr-multi-pattern.md) に結果を記録する。
+疎な8組のbank/rowへ16 burstを書き、全書込み後の再読出しを含む32 READが
+3回の独立したFPGA書込みで一致した。各回LCD SoCへの復帰も成功した。
+
+これは短時間・限定アドレスの診断である。次にrefresh保持、byte mask、
+アドレス範囲の拡大を検証し、CPUから使えるDDRメモリ制御へ接続する。
+Linux実機boot、LCD上のLinux bootlog/GUIはまだ達成していない。
 
 ## 一次資料
 

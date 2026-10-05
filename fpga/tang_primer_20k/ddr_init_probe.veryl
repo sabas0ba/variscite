@@ -101,6 +101,7 @@ module TangDdrInitProbe #(
     param ARRAY_TRACE      : u32      = 0    ,
     param ARRAY_MATCH      : u32      = 0    ,
     param ARRAY_FLAGS      : u32      = 0    ,
+    param ARRAY_RETAIN     : u32      = 0    ,
     param ARRAY_MULTI      : u32      = 0    ,
     param ARRAY_TRAIN      : u32      = 0    ,
     param ARRAY_ASSEMBLE   : u32      = 0    ,
@@ -477,6 +478,7 @@ module TangDdrInitProbe #(
         o_valid  : assembled_valid                                                         ,
     );
     inst array: DdrArrayProbe #(
+        RETAIN_CHECK : ARRAY_RETAIN     ,
         MULTI_PATTERN: ARRAY_MULTI      ,
         GATE_SCAN    : ARRAY_SCAN       ,
         SAME_DATA    : ARRAY_SAME       ,
