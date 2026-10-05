@@ -5,6 +5,7 @@
 /// E=read DQS gate or MPR pattern timeout.
 module TangDdrStatusUart #(
     param GAP_BITS: u32 = 22,
+    param FRAMED  : u32 = 0 ,
 ) (
     i_clk         : input  'reference clock   ,
     i_rst         : input  'reference reset   ,
@@ -26,6 +27,9 @@ module TangDdrStatusUart #(
     var   status_data  : 'reference logic<8>       ;
     var   debug_nibble : 'reference logic<4>       ;
     var   report_index : 'reference logic<4>       ;
+    let   payload_index: 'reference logic<4>        = if FRAMED != 0 ? report_index - 4'd1 : report_index;
+    let   last_payload : 'reference logic<4>        = if i_debug_enable ? (if i_debug_extra ? 4'd8 : 4'd4) : 4'd0;
+    let   last_index   : 'reference logic<4>        = last_payload + (if FRAMED != 0 ? 4'd1 : 4'd0);
     let   decimal_digit: 'reference logic           = debug_nibble <: 4'd10;
     let   debug_ascii  : 'reference logic<8>        = if decimal_digit ?
         8'h30 + {4'b0, debug_nibble}
@@ -47,7 +51,7 @@ module TangDdrStatusUart #(
             4'd10  : status_data = 8'h54; // T: DQ0 and DQ8 pass a gate timing candidate
             default: status_data = 8'h45; // E: DQS gate timeout
         }
-        case report_index {
+        case payload_index {
             4'd1   : debug_nibble = i_debug0[7:4];
             4'd2   : debug_nibble = i_debug0[3:0];
             4'd3   : debug_nibble = i_debug1[7:4];
@@ -57,7 +61,13 @@ module TangDdrStatusUart #(
             4'd7   : debug_nibble = i_debug3[7:4];
             default: debug_nibble = i_debug3[3:0];
         }
-        data = if i_debug_enable && report_index != 0 ? debug_ascii : status_data;
+        data = if FRAMED != 0 && report_index == 0 ?
+            8'h21
+        : if i_debug_enable && payload_index != 0 ?
+            debug_ascii
+        :
+            status_data
+        ;
     }
     always_ff (i_clk, i_rst) {
         if_reset {
@@ -72,8 +82,8 @@ module TangDdrStatusUart #(
                 shift    = {1'b1, data, 1'b0};
                 bits     = 4'd10;
                 bit_time = 0;
-                if i_debug_enable {
-                    report_index = if report_index == (if i_debug_extra ? 4'd8 : 4'd4) ? 0 : report_index + 4'd1;
+                if i_debug_enable || FRAMED != 0 {
+                    report_index = if report_index == last_index ? 0 : report_index + 4'd1;
                 }
             }
         } else if bit_time == BIT_CYCLES - 1 {
@@ -101,6 +111,7 @@ module TangDdrInitProbe #(
     param ARRAY_TRACE      : u32      = 0    ,
     param ARRAY_MATCH      : u32      = 0    ,
     param ARRAY_FLAGS      : u32      = 0    ,
+    param ARRAY_ADDRESS    : u32      = 0    ,
     param ARRAY_BYTE_MASK  : u32      = 0    ,
     param ARRAY_REFRESH    : u32      = 0    ,
     param ARRAY_RETAIN     : u32      = 0    ,
@@ -480,6 +491,7 @@ module TangDdrInitProbe #(
         o_valid  : assembled_valid                                                         ,
     );
     inst array: DdrArrayProbe #(
+        ADDRESS_CHECK : ARRAY_ADDRESS    ,
         BYTE_MASK     : ARRAY_BYTE_MASK  ,
         REFRESH_ROUNDS: ARRAY_REFRESH    ,
         RETAIN_CHECK  : ARRAY_RETAIN     ,
@@ -779,7 +791,9 @@ module TangDdrInitProbe #(
     }
     assign timeline_word     = if ARRAY_RAW != 0 ? raw_word : regular_word;
     assign timeline_captured = if ARRAY_RAW != 0 ? raw_captured : regular_captured;
-    inst uart: TangDdrStatusUart (
+    inst uart: TangDdrStatusUart #(
+        FRAMED: ARRAY_ADDRESS,
+    ) (
         i_clk                                                                     ,
         i_rst         : ref_reset                                                 ,
         i_status      : status                                                    ,

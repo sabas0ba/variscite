@@ -104,6 +104,14 @@ coverage:
 .PHONY: ddr-multi-array-test
 .PHONY: ddr-retain-array-test
 .PHONY: ddr-mask-array-test
+.PHONY: ddr-address-array-test
+ddr-address-array-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_address_array \
+	    -Mdir sim/obj_ddr_address_array -o tb_ddr_address_array \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv \
+	    target/tang_primer_20k/ddr_read_training.sv target/tang_primer_20k/ddr_read_assembler.sv tb/tb_ddr_address_array.sv
+	sim/obj_ddr_address_array/tb_ddr_address_array
+
 ddr-mask-array-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mask_array \
 	    -Mdir sim/obj_ddr_mask_array -o tb_ddr_mask_array \
@@ -266,6 +274,10 @@ ddr-status-uart-test: veryl-build
 	    -Mdir sim/obj_ddr_status_uart -o tb_ddr_status_uart \
 	    target/tang_primer_20k/ddr_init_probe.sv tb/tb_ddr_status_uart.sv
 	sim/obj_ddr_status_uart/tb_ddr_status_uart
+	verilator --binary --timing --timescale 1ns/1ps -GFRAMED=1 --top-module tb_ddr_status_uart \
+	    -Mdir sim/obj_ddr_status_uart_framed -o tb_ddr_status_uart_framed \
+	    target/tang_primer_20k/ddr_init_probe.sv tb/tb_ddr_status_uart.sv
+	sim/obj_ddr_status_uart_framed/tb_ddr_status_uart_framed
 
 ddr-mpr-delay-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mpr_delay_sweep \

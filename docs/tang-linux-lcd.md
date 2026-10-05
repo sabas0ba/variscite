@@ -7,8 +7,8 @@
 RTL は DDR3 制御、LCD 読み出し、基板トップまで Veryl で実装する。
 
 現在の実機はオンチップ RAM 32 KiB とベアメタルの矩形表示で動作している。
-Linux はシミュレータ上で起動済みだが、実機の DDR3、カーネル転送、フレームバッファは
-未実装である。本書と capability probe の追加だけで Linux が実機起動するわけではない。
+Linux はシミュレータ上で起動済みだが、実機のCPUからDDR3への接続、カーネル転送、
+Linux用フレームバッファは未実装である。DDR3は下記の独立診断で実機検証を進めている。
 
 ## 最初の実測: DDR3 PHY のツール対応
 
@@ -236,9 +236,12 @@ VerylでPHY起動制御、lane別の拍位置training、読出し組立を実装
 全32 READ一致も、独立した実機書込み3回で確認した。
 DMによる1 byte更新もburst内の全16位置で検証し、非選択byteの保持を含む
 全32 READが実機3回とも一致した。
+さらにbank 3 bit・row 13 bit・burst列7 bitを個別に変え、公称128 MiBの
+最後の2 burstを含む48 burstを書いた後の全96 READ一致を実機3回で確認した。
+この診断は各アドレス組の間にもrefreshを発行し、UARTには明示的な開始記号を付けている。
 
-これは限定アドレスの診断である。次にアドレス範囲の拡大を検証し、
-継続的なrefreshと要求処理を仲裁するcontroller、CPUのbyte strobe変換、
+これは限定アドレスの診断であり、全容量の全セル走査は未実施である。
+次に継続的なrefreshと要求処理を仲裁するcontroller、CPUのbyte strobe変換、
 応答待ちを実装して、CPUから使えるDDRメモリ制御へ接続する。
 Linux実機boot、LCD上のLinux bootlog/GUIはまだ達成していない。
 

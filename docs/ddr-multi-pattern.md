@@ -141,3 +141,62 @@ retain/multi/trained/array/aligned-scan回帰試験が通過した（`sim/mask-r
 独立した実機書込み3回はいずれも全32 READが一致し、UARTは`A9DA5EAA5`となった。
 全回LCD SoC復帰・UART検査も成功した。ログは
 `logs/board/20261005-160812-DdrArrayMask-*`、163217、163236。
+
+## アドレスbitと容量末尾の再照合
+
+`DdrArrayAddress` は24組のbank/row/columnに48 burstを書き、直後の読戻しに加え、
+全書込み後に再書込みなしで全組を照合する。全96 READが一致した場合のみ成功とする。
+各burstには異なるpatternを与え、途中の失敗は後続の一致で消去しない。
+
+[SK hynix H5TQ1G63EFR Rev. 1.1](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf)
+PDF page 9のx16列は8 bank、row A0..A12、column A0..A9を示す。
+この診断の組合せは以下であり、各組の列CとC+8をBL8で扱う。
+
+| 組 | bank | row | 列C |
+| --- | --- | --- | --- |
+| 0 | 0 | 0 | 0 |
+| 1..3 | 1、2、4 | 0 | 0 |
+| 4..16 | 0 | 1、2、4、…、4096 | 0 |
+| 17..22 | 0 | 0 | 16、32、64、128、256、512 |
+| 23 | 7 | 8191 | 1008 |
+
+bank 3 bit、row 13 bit、burst列7 bit（column A3..A9）を個別に変える。
+最終組の列1008と1016は、公称128 MiBの最後の2 burstに相当する。
+column A0..A2はBL8内の拍であり、非整列開始列はこの診断の対象外である。
+
+長時間の無refresh区間を作らないよう、各組のall-bank PRECHARGEとtRP待機後に
+REFRESHを発行する。REF後は256 controller cycle（99 MHzで約2.586 µs）待機する。
+以後の短い読書きシーケンスを含めてもREF間隔は384 cycle（約3.879 µs）以内に収まる。
+最後の組では再REFせず診断を終了し、既存の処理でDRAMをresetする。
+全体は48 WRITE、96 READ、48 ACT/PRE、47 REF、14,073 cycle（約142.15 µs）となる。
+これは要求処理を仲裁する汎用controllerではなく、固定シーケンスの診断である。
+
+```bash
+make ddr-address-array-test
+DDR_ARRAY_ADDRESS=1 bash scripts/build_ddr_mpr.sh
+```
+
+実機測定は `scripts/test-ddr-init-board.ps1 -Mode DdrArrayAddress` を使う。
+この診断のUARTは`!`、status 1文字、16進数8桁の形式であり、直近3個の完全な
+フレームがすべて`!A`で始まることを合格条件とする。デバッグ値に`A`/`B`/`E`が
+含まれてもstatusと誤認しないよう、開始記号を必須とする。受信は8秒間行う。
+従来診断のUART形式は維持し、両形式を`make ddr-status-uart-test`で検証する。
+テストベンチはACTで開いたbank/rowとREAD/WRITEのcolumnから実際の格納先を計算し、
+疎な連想配列へデータを保存する。transaction番号を格納先の代用にはしない。
+正常系、23 bitそれぞれの切断によるalias、検証passでのvalid欠落とbit破損、
+初回trainingの破損を含む27ケースを検証する。
+列A3以外のaliasでは初回の即時読戻しが成功し、全書込み後の照合で失敗することも検査する。
+加えてREFの期限、PRE/tRP、REF後の待機、bus非駆動、再書込み禁止、patternの一意性、
+各コマンドのアドレスと回数を監視する。
+
+成功しても全容量の全セルを走査したことにはならない。任意のアドレスbit間の結合故障、
+非整列burst、長期保持、温度・電圧変動に対する動作保証は別途検証が必要である。
+
+2026-10-05、27ケースのアドレス診断、既存mask/refresh/retain/multi/trained/array/
+aligned-scan回帰試験、lintとUART両形式の試験が通過した。
+ログは`sim/address-regression.log`、`sim/address-uart-test.log`。
+最終bitstreamはsetup/hold違反0、SHA256
+`7c255b03cc55815a5a6566c3aca716860dc0322aec4c7431aa750a463fcff27d`。
+独立した実機書込み3回で全96 READが一致し、UARTは全回`!AE37A1C85`だった。
+全回LCD SoCへの復帰・UART検査も成功した。実機ログは
+`logs/board/20261005-170745-DdrArrayAddress-*`、170805、170826。

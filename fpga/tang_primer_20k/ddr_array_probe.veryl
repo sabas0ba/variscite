@@ -4,7 +4,9 @@
 /// optionally retains data under periodic refresh between passes and resets
 /// DRAM when finished. This is not a general memory controller.
 module DdrArrayProbe #(
-    param BYTE_MASK: u32 = 0,
+    // 24 address pairs, with refresh between pairs; requires MULTI_PATTERN/RETAIN_CHECK.
+    param ADDRESS_CHECK: u32 = 0,
+    param BYTE_MASK    : u32 = 0,
     // Requires RETAIN_CHECK and MULTI_PATTERN. Supported range: 0..65535.
     param REFRESH_ROUNDS: u32      = 0    ,
     param RETAIN_CHECK  : u32      = 0    ,
@@ -79,8 +81,29 @@ module DdrArrayProbe #(
         refresh_wait,
         done,
     }
-    var state            : State     ;
-    var round_index      : logic<3>  ;
+    var state         : State    ;
+    var round_index   : logic<5> ;
+    let short_index   : logic<3>  = round_index[2:0];
+    let last_round    : logic<5>  = if ADDRESS_CHECK != 0 ? 5'd23 : 5'd7;
+    var address_bank  : logic<3> ;
+    var address_row   : logic<14>;
+    var address_column: logic<14>;
+    always_comb {
+        address_bank   = 0;
+        address_row    = 0;
+        address_column = 0;
+        if round_index >= 1 && round_index <= 3 {
+            address_bank = 3'b1 << (round_index - 5'd1);
+        } else if round_index >= 4 && round_index <= 16 {
+            address_row = 14'b1 << (round_index - 5'd4);
+        } else if round_index >= 17 && round_index <= 22 {
+            address_column = 14'd16 << (round_index - 5'd17);
+        } else if round_index == 23 {
+            address_bank   = 3'd7;
+            address_row    = 14'd8191;
+            address_column = 14'd1008;
+        }
+    }
     var pattern_seed     : logic<32> ;
     var failed           : logic     ;
     var verify_phase     : logic     ;
@@ -93,8 +116,8 @@ module DdrArrayProbe #(
         {pattern_seed, pattern_seed[23:0], pattern_seed[31:24], ~pattern_seed, pattern_seed[15:0], pattern_seed[31:16]}
     ;
     let data_b           : logic<128> = if SAME_DATA != 0 ? data_a : ~data_a;
-    let change_a         : logic<128> = 128'hff << {round_index, 3'b000};
-    let change_b         : logic<128> = 128'hff << {1'b1, round_index, 3'b000};
+    let change_a         : logic<128> = 128'hff << {short_index, 3'b000};
+    let change_b         : logic<128> = 128'hff << {1'b1, short_index, 3'b000};
     let expected_a       : logic<128> = if BYTE_MASK != 0 && masked_phase ? data_a ^ change_a : data_a;
     let expected_b       : logic<128> = if BYTE_MASK != 0 && masked_phase ? data_b ^ change_b : data_b;
     var elapsed          : logic<4>  ;
@@ -431,18 +454,22 @@ module DdrArrayProbe #(
                         if MULTI_PATTERN != 0 {
                             failed = failed || !pair_found;
                         }
-                        if MULTI_PATTERN != 0 && round_index != 7 {
-                            round_index  = round_index + 3'd1;
+                        if MULTI_PATTERN != 0 && round_index != last_round {
+                            round_index  = round_index + 5'd1;
                             pattern_seed = {
                                 pattern_seed[30:0],
                                 pattern_seed[31] ^ pattern_seed[21] ^ pattern_seed[1] ^ pattern_seed[0]
                             };
-                            state        = State::activate;
+                            state        = if ADDRESS_CHECK != 0 ? State::refresh : State::activate;
                         } else if MULTI_PATTERN != 0 && RETAIN_CHECK != 0 && !verify_phase {
                             verify_phase = 1;
                             round_index  = 0;
                             pattern_seed = 32'h1ace_b00c;
-                            state        = if REFRESH_ROUNDS != 0 ? State::refresh : State::activate;
+                            state        = if ADDRESS_CHECK != 0 || REFRESH_ROUNDS != 0 ?
+                                State::refresh
+                            :
+                                State::activate
+                            ;
                         } else {
                             state = State::done;
                         }
@@ -456,9 +483,16 @@ module DdrArrayProbe #(
                     state           = State::refresh_wait;
                 }
                 State::refresh_wait: {
-                    // REF-to-REF / final REF-to-ACT: 384 controller cycles.
-                    // At 99 MHz this is 3.879 us, including the entire tRFC wait.
-                    if refresh_elapsed == 382 {
+                    // Retention-only mode waits 384 cycles per REF (3.879 us).
+                    if ADDRESS_CHECK != 0 {
+                        // Between address pairs: 256 cycles of REF recovery. The
+                        // following transaction completes before the 384-cycle deadline.
+                        if refresh_elapsed == 254 {
+                            state = State::activate;
+                        } else {
+                            refresh_elapsed = refresh_elapsed + 9'd1;
+                        }
+                    } else if refresh_elapsed == 382 {
                         state = if {16'b0, refresh_count} == REFRESH_ROUNDS ? State::activate : State::refresh;
                     } else {
                         refresh_elapsed = refresh_elapsed + 9'd1;
@@ -473,14 +507,17 @@ module DdrArrayProbe #(
         o_cmd_valid = 1'b0;
         o_cmd       = 3'b111;
         o_addr      = 0;
-        o_bank      = if MULTI_PATTERN != 0 ? round_index : 3'b0;
+        o_bank      = if MULTI_PATTERN != 0 ? short_index : 3'b0;
         if MULTI_PATTERN != 0 && RETAIN_CHECK != 0 {
-            case round_index {
+            case short_index {
                 3'd1   : o_bank = 3'd1;
                 3'd2   : o_bank = 3'd2;
                 3'd3   : o_bank = 3'd4;
                 default: o_bank = 0;
             }
+        }
+        if ADDRESS_CHECK != 0 {
+            o_bank = address_bank;
         }
         o_read        = 0;
         o_sel         = if PHASE_SCAN != 0 ? {gate_index, gate_index} : READ_SEL;
@@ -495,9 +532,9 @@ module DdrArrayProbe #(
             State::activate: {
                 o_cmd_valid = 1'b1;
                 o_cmd       = 3'b011;
-                o_addr      = if MULTI_PATTERN != 0 ? {11'b0, round_index} : 14'b0;
+                o_addr      = if MULTI_PATTERN != 0 ? {11'b0, short_index} : 14'b0;
                 if MULTI_PATTERN != 0 && RETAIN_CHECK != 0 {
-                    case round_index {
+                    case short_index {
                         3'd4   : o_addr = 14'd1;
                         3'd5   : o_addr = 14'd2;
                         3'd6   : o_addr = 14'd4;
@@ -505,17 +542,26 @@ module DdrArrayProbe #(
                         default: o_addr = 0;
                     }
                 }
+                if ADDRESS_CHECK != 0 {
+                    o_addr = address_row;
+                }
             }
             State::write0: {
                 o_cmd_valid = 1'b1;
                 o_cmd       = 3'b100;
                 o_odt       = 4'b1111;
+                if ADDRESS_CHECK != 0 {
+                    o_addr = address_column;
+                }
             }
             State::write1: {
                 o_cmd_valid = 1'b1;
                 o_cmd       = 3'b100;
                 o_addr      = 14'd8;
-                o_odt       = 4'b1111;
+                if ADDRESS_CHECK != 0 {
+                    o_addr = address_column | 14'd8;
+                }
+                o_odt = 4'b1111;
             }
             State::wave0, State::wave1: {
                 o_odt = 4'b1111;
@@ -527,7 +573,7 @@ module DdrArrayProbe #(
                     if BYTE_MASK != 0 && masked_phase {
                         // Drive the inverse on every byte; DM must preserve all but one.
                         o_data = if state == State::wave0 ? ~data_a : ~data_b;
-                        o_mask = ~(16'b1 << (if state == State::wave0 ? {1'b0, round_index} : {1'b1, round_index}));
+                        o_mask = ~(16'b1 << (if state == State::wave0 ? {1'b0, short_index} : {1'b1, short_index}));
                     }
                     o_dq_enable   = 4'b1111;
                     o_dqs_enable  = 4'b1111;
@@ -540,7 +586,10 @@ module DdrArrayProbe #(
                 o_cmd_valid = 1'b1;
                 o_cmd       = 3'b101;
                 o_addr      = if state == State::read1 ? 14'd8 : 14'd0;
-                o_hold      = if READ_HOLD != 0 ? 2'b11 : 2'b00;
+                if ADDRESS_CHECK != 0 {
+                    o_addr = address_column | (if state == State::read1 ? 14'd8 : 14'd0);
+                }
+                o_hold = if READ_HOLD != 0 ? 2'b11 : 2'b00;
             }
             State::sample0, State::sample1: {
                 if elapsed

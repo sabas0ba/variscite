@@ -1,11 +1,11 @@
-module tb_ddr_status_uart;
+module tb_ddr_status_uart #(parameter FRAMED = 0);
     reg clk=0, rst=1, extra=1;
     reg [3:0] status=6;
     wire tx;
     byte actual, expected;
     always #5 clk=~clk;
 
-    rv32ima_TangDdrStatusUart #(.GAP_BITS(8)) dut (
+    rv32ima_TangDdrStatusUart #(.GAP_BITS(8), .FRAMED(FRAMED)) dut (
         .i_clk(clk), .i_rst(rst), .i_status(status),
         .i_debug_enable(1'b1), .i_debug_extra(extra),
         .i_debug0(8'h12), .i_debug1(8'hab),
@@ -27,6 +27,10 @@ module tb_ddr_status_uart;
     initial begin
         repeat (4) @(negedge clk);
         rst=0;
+        if (FRAMED) begin
+            read_byte(actual);
+            if (actual != "!") $fatal(1, "missing extended frame marker");
+        end
         for (int i=0; i<9; i++) begin
             read_byte(actual);
             case (i)
@@ -45,6 +49,10 @@ module tb_ddr_status_uart;
         end
         extra=0;
         status=9;
+        if (FRAMED) begin
+            read_byte(actual);
+            if (actual != "!") $fatal(1, "missing ordinary frame marker");
+        end
         for (int i=0; i<5; i++) begin
             read_byte(actual);
             case (i)
@@ -59,6 +67,10 @@ module tb_ddr_status_uart;
         end
         extra=1;
         status=10;
+        if (FRAMED) begin
+            read_byte(actual);
+            if (actual != "!") $fatal(1, "missing scan frame marker");
+        end
         for (int i=0; i<9; i++) begin
             read_byte(actual);
             case (i)
