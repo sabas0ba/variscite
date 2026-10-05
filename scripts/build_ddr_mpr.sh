@@ -3,7 +3,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_ARRAY_REFRESH:-0}" == 1 ]]; then
+if [[ "${DDR_ARRAY_MASK:-0}" == 1 ]]; then
+    name=ddr_array_mask
+    top=rv32ima_TangDdrArrayMaskProbe
+elif [[ "${DDR_ARRAY_REFRESH:-0}" == 1 ]]; then
     name=ddr_array_refresh
     top=rv32ima_TangDdrArrayRefreshProbe
 elif [[ "${DDR_ARRAY_RETAIN:-0}" == 1 ]]; then
@@ -95,7 +98,7 @@ mkdir -p "$out"
 veryl build > "$out/veryl.log" 2>&1
 cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/ddr_probe_uart.cst > "$out/$name.cst"
 cat fpga/tang_primer_20k/ddr_read_probe.sdc > "$out/$name.sdc"
-if [[ "$name" == ddr_array_startup_scan || "$name" == ddr_array_raw_* || "$name" == ddr_array_assembled || "$name" == ddr_array_trained || "$name" == ddr_array_multi || "$name" == ddr_array_retain || "$name" == ddr_array_refresh ]]; then
+if [[ "$name" == ddr_array_startup_scan || "$name" == ddr_array_raw_* || "$name" == ddr_array_assembled || "$name" == ddr_array_trained || "$name" == ddr_array_multi || "$name" == ddr_array_retain || "$name" == ddr_array_refresh || "$name" == ddr_array_mask ]]; then
     cat fpga/tang_primer_20k/ddr_phy_startup.sdc >> "$out/$name.sdc"
 fi
 cd "$out"

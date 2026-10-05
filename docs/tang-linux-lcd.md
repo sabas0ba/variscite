@@ -234,9 +234,12 @@ VerylでPHY起動制御、lane別の拍位置training、読出し組立を実装
 3回の独立したFPGA書込みで一致した。各回LCD SoCへの復帰も成功した。
 さらにREFRESHを約3.88 µs間隔で32,768回発行し、約127 ms保持した後の
 全32 READ一致も、独立した実機書込み3回で確認した。
+DMによる1 byte更新もburst内の全16位置で検証し、非選択byteの保持を含む
+全32 READが実機3回とも一致した。
 
-これは限定アドレスの診断である。次にbyte mask、
-アドレス範囲の拡大を検証し、CPUから使えるDDRメモリ制御へ接続する。
+これは限定アドレスの診断である。次にアドレス範囲の拡大を検証し、
+継続的なrefreshと要求処理を仲裁するcontroller、CPUのbyte strobe変換、
+応答待ちを実装して、CPUから使えるDDRメモリ制御へ接続する。
 Linux実機boot、LCD上のLinux bootlog/GUIはまだ達成していない。
 
 ## 一次資料

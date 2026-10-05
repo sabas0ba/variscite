@@ -103,6 +103,14 @@ coverage:
 .PHONY: ddr-trained-array-test
 .PHONY: ddr-multi-array-test
 .PHONY: ddr-retain-array-test
+.PHONY: ddr-mask-array-test
+ddr-mask-array-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mask_array \
+	    -Mdir sim/obj_ddr_mask_array -o tb_ddr_mask_array \
+	    target/tang_primer_20k/ddr_burst_alignment.sv target/tang_primer_20k/ddr_array_probe.sv \
+	    target/tang_primer_20k/ddr_read_training.sv target/tang_primer_20k/ddr_read_assembler.sv tb/tb_ddr_mask_array.sv
+	sim/obj_ddr_mask_array/tb_ddr_mask_array
+
 .PHONY: ddr-refresh-array-test ddr-refresh-duration-test
 ddr-refresh-array-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps -GMULTI=1 -GRETAIN=1 -GREFRESH=4 --top-module tb_ddr_trained_array \

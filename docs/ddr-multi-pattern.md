@@ -103,3 +103,41 @@ bash scripts/read-reference-pdf.sh logs/ddr-reference/sk_hynix.pdf logs/ddr-refe
 
 出力には原本のSHA256とPDF page番号を含む。回転表は既定のlayout抽出では欠落するため
 `--plain`を使い、数値の単位と列見出しを合わせて確認する。
+
+## DMによる部分書込み
+
+`DdrArrayMask` はmulti診断の各bank/row組で、2列の全byte書込み・読戻しを行った後、
+同じ2列へDMでbyteを選択して再書込みし、全128 bitを再照合する。
+DQには元データの全bit反転を出し、DMで選択した1 byteだけを更新する。
+他の15 byteは元の値を保持しなければ合格しない。最初の読戻しでtrainingを終え、
+その拍位置を部分書込み後の読戻しでも使用する。初期読戻しの失敗は再書込みでも消去しない。
+
+組番号0..7に対し、列0ではbyte 0..7、列8ではbyte 8..15を順に選択する。
+byte番号は`DQ[8*b +: 8]`の順であり、これにより両lane・8 beatの全16位置を通す。
+全32 WRITE/32 READ、8 ACT/PRE、761 controller cycle（99 MHzで約7.69 µs）で終了する。
+この診断自体はrefreshを発行しない。
+
+```bash
+make ddr-mask-array-test
+DDR_ARRAY_MASK=1 bash scripts/build_ddr_mpr.sh
+```
+
+実機には `scripts/test-ddr-init-board.ps1 -Mode DdrArrayMask` を用いる。
+合格には全読出し一致のUART status `A` が必要である。テストベンチは実際に出力された
+DMをbyteごとに適用するモデルを使い、WRITE/READのbank/column、更新byteの全位置到達、
+初期値と反転値、コマンド回数を別途検査する。中間の1組に対するDM無視、更新禁止、
+lane入替え、beat位置ずれ、および初期読戻し・部分書込み後の読戻しのbit破損を注入し、
+後続の正常結果で失敗が隠れないことを確認する。
+初期読戻しの失敗判定は比較結果を登録した次のcycleで更新し、128 bit比較から
+失敗フラグまでの組合せ経路を分割する。
+
+この試験はDMの1 byte選択を検証する。任意の複数byte mask、CPUのアドレスとbyte strobeの
+変換、CPUバス接続、全容量の健全性は別途検証が必要である。
+
+2026-10-05、lint、7ケースの部分書込み試験、refresh（短縮版と32,768回の実時間版）/
+retain/multi/trained/array/aligned-scan回帰試験が通過した（`sim/mask-regression.log`）。
+配置配線のsetup/hold違反は0。bitstream SHA256は
+`da6b1836509b5d4e630311cd1bc58661a205dbe9bf3002942088e6436fb98106`。
+独立した実機書込み3回はいずれも全32 READが一致し、UARTは`A9DA5EAA5`となった。
+全回LCD SoC復帰・UART検査も成功した。ログは
+`logs/board/20261005-160812-DdrArrayMask-*`、163217、163236。

@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -36,6 +36,7 @@ $images = @{
     DdrArrayEarlyTimeline = 'sim/fpga/ddr_array_early_timeline/impl/pnr/ddr_array_early_timeline.fs'
     DdrArrayFullTimeline = 'sim/fpga/ddr_array_full_timeline/impl/pnr/ddr_array_full_timeline.fs'
     DdrArrayRawScaled = 'sim/fpga/ddr_array_raw_scaled/impl/pnr/ddr_array_raw_scaled.fs'
+    DdrArrayMask = 'sim/fpga/ddr_array_mask/impl/pnr/ddr_array_mask.fs'
     DdrArrayRefresh = 'sim/fpga/ddr_array_refresh/impl/pnr/ddr_array_refresh.fs'
     DdrArrayRetain = 'sim/fpga/ddr_array_retain/impl/pnr/ddr_array_retain.fs'
     DdrArrayMulti = 'sim/fpga/ddr_array_multi/impl/pnr/ddr_array_multi.fs'
@@ -145,7 +146,7 @@ try {
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'M' }).Count -eq 0
         }
-        { $_ -in @('DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh') } {
+        { $_ -in @('DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask') } {
             # A proves both columns matched in the same cycle position per lane.
             # Four bytes report DQ0/DQ8 at RVALID for columns 0 and 8.
             $frames = @([regex]::Matches($received, '[PLIRABVE][0-9A-F]{8}') |

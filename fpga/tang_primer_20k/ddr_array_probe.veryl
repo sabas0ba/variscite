@@ -4,6 +4,7 @@
 /// optionally retains data under periodic refresh between passes and resets
 /// DRAM when finished. This is not a general memory controller.
 module DdrArrayProbe #(
+    param BYTE_MASK: u32 = 0,
     // Requires RETAIN_CHECK and MULTI_PATTERN. Supported range: 0..65535.
     param REFRESH_ROUNDS: u32      = 0    ,
     param RETAIN_CHECK  : u32      = 0    ,
@@ -59,7 +60,7 @@ module DdrArrayProbe #(
     const DATA_A: logic<128> = if SIMPLE_DATA != 0 ? 128'b0 : 128'ha55a_5aa5_c33c_3cc3_9669_6996_f00f_0ff0;
     const LANE0 : logic<128> = 128'h00ff_00ff_00ff_00ff_00ff_00ff_00ff_00ff;
     const LANE1 : logic<128> = ~LANE0;
-    enum State: logic<4>   {
+    enum State: logic<5>   {
         idle,
         activate,
         act_wait,
@@ -71,6 +72,7 @@ module DdrArrayProbe #(
         sample0,
         read1,
         sample1,
+        mask_check,
         precharge,
         pre_wait,
         refresh,
@@ -82,6 +84,7 @@ module DdrArrayProbe #(
     var pattern_seed     : logic<32> ;
     var failed           : logic     ;
     var verify_phase     : logic     ;
+    var masked_phase     : logic     ;
     var refresh_count    : logic<16> ;
     var refresh_elapsed  : logic<9>  ;
     let data_a           : logic<128> = if MULTI_PATTERN == 0 || round_index == 0 ?
@@ -90,6 +93,10 @@ module DdrArrayProbe #(
         {pattern_seed, pattern_seed[23:0], pattern_seed[31:24], ~pattern_seed, pattern_seed[15:0], pattern_seed[31:16]}
     ;
     let data_b           : logic<128> = if SAME_DATA != 0 ? data_a : ~data_a;
+    let change_a         : logic<128> = 128'hff << {round_index, 3'b000};
+    let change_b         : logic<128> = 128'hff << {1'b1, round_index, 3'b000};
+    let expected_a       : logic<128> = if BYTE_MASK != 0 && masked_phase ? data_a ^ change_a : data_a;
+    let expected_b       : logic<128> = if BYTE_MASK != 0 && masked_phase ? data_b ^ change_b : data_b;
     var elapsed          : logic<4>  ;
     var previous_data    : logic<128>;
     var previous_valid   : logic<2>  ;
@@ -116,7 +123,7 @@ module DdrArrayProbe #(
     var raw1             : logic<8>  ;
     var first_raw0       : logic<8>  ;
     var first_raw1       : logic<8>  ;
-    let expected         : logic<128> = if state == State::read1 || state == State::sample1 ? data_b : data_a;
+    let expected         : logic<128> = if state == State::read1 || state == State::sample1 ? expected_b : expected_a;
     let pair_found       : logic      = (|(match0[2:0] & match1[2:0])) && (|(match0[5:3] & match1[5:3]));
     let observed         : logic<6>   = seen_matches
         | {
@@ -203,6 +210,7 @@ module DdrArrayProbe #(
             pattern_seed    = 32'h1ace_b00c;
             failed          = 0;
             verify_phase    = 0;
+            masked_phase    = 0;
             refresh_count   = 0;
             refresh_elapsed = 0;
             elapsed         = 0;
@@ -237,6 +245,7 @@ module DdrArrayProbe #(
             pattern_seed    = 32'h1ace_b00c;
             failed          = 0;
             verify_phase    = 0;
+            masked_phase    = 0;
             refresh_count   = 0;
             refresh_elapsed = 0;
             elapsed         = 0;
@@ -269,8 +278,9 @@ module DdrArrayProbe #(
             case state {
                 State::idle    : state = State::activate;
                 State::activate: {
-                    elapsed = 0;
-                    state   = State::act_wait;
+                    masked_phase = verify_phase;
+                    elapsed      = 0;
+                    state        = State::act_wait;
                 }
                 State::act_wait: {
                     if elapsed == 2 {
@@ -397,12 +407,20 @@ module DdrArrayProbe #(
                         if GATE_SCAN != 0 && gate_index != 3'd7 {
                             gate_index = gate_index + 3'd1;
                             state      = State::read0;
+                        } else if BYTE_MASK != 0 && !masked_phase {
+                            state = State::mask_check;
                         } else {
                             state = State::precharge;
                         }
                     } else {
                         elapsed = elapsed + 4'd1;
                     }
+                }
+                State::mask_check: {
+                    // Use registered match results, avoiding a comparator-to-failure path.
+                    failed       = failed || !pair_found;
+                    masked_phase = 1;
+                    state        = State::write0;
                 }
                 State::precharge: {
                     elapsed = 0;
@@ -504,8 +522,13 @@ module DdrArrayProbe #(
                 if elapsed == 0 {
                     o_dqs_enable = 4'b1000;
                 } else if elapsed == 1 {
-                    o_data        = if state == State::wave0 ? data_a : data_b;
-                    o_mask        = 0;
+                    o_data = if state == State::wave0 ? data_a : data_b;
+                    o_mask = 0;
+                    if BYTE_MASK != 0 && masked_phase {
+                        // Drive the inverse on every byte; DM must preserve all but one.
+                        o_data = if state == State::wave0 ? ~data_a : ~data_b;
+                        o_mask = ~(16'b1 << (if state == State::wave0 ? {1'b0, round_index} : {1'b1, round_index}));
+                    }
                     o_dq_enable   = 4'b1111;
                     o_dqs_enable  = 4'b1111;
                     o_dqs_pattern = 8'haa;

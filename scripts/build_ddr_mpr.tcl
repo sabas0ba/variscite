@@ -43,6 +43,7 @@ add_file -type verilog [file join $root target tang_primer_20k ddr_array_trained
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_multi_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_retain_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_refresh_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_array_mask_top.sv]
 add_file -type cst [file join $out "$::env(DDR_MPR_NAME).cst"]
 add_file -type sdc [file join $out "$::env(DDR_MPR_NAME).sdc"]
 set_option -top_module $::env(DDR_MPR_TOP)
