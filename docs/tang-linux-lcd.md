@@ -1,5 +1,8 @@
 # Tang Primer 20K: Linux、LCD コンソール、GUI
 
+全体の現在地と実装順序はREADMEの[実装ステータス](../README.md#実装ステータス)と
+[ロードマップ](../README.md#ロードマップ)を参照する。本書は設計条件と検証範囲を記録する。
+
 ## 目的と現状
 
 既存の Veryl RV32IMA コアで NOMMU / M-mode Linux を実機起動し、800×480 LCD に
