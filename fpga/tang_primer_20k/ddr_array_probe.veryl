@@ -1,19 +1,21 @@
 /// One short DDR3 array transaction. WRITE commands occupy CA slot 3 for
 /// CWL=5; READ commands occupy slot 2 for CL=6. The data burst occupies one
 /// controller cycle, with a one-CK DQS preamble and postamble. This probe
-/// deliberately leaves refresh and data-eye training to later stages and
-/// resets DRAM when finished.
+/// optionally retains data under periodic refresh between passes and resets
+/// DRAM when finished. This is not a general memory controller.
 module DdrArrayProbe #(
-    param RETAIN_CHECK : u32      = 0    ,
-    param GATE_SCAN    : u32      = 0    ,
-    param SAME_DATA    : u32      = 0    ,
-    param SIMPLE_DATA  : u32      = 0    ,
-    param EARLY_GATE   : u32      = 32'd0,
-    param READ_SEL     : logic<6> = 6'h20,
-    param PHASE_SCAN   : u32      = 0    ,
-    param READ_HOLD    : u32      = 1    ,
-    param PHASE_ALIGN  : u32      = 0    ,
-    param MULTI_PATTERN: u32      = 0    ,
+    // Requires RETAIN_CHECK and MULTI_PATTERN. Supported range: 0..65535.
+    param REFRESH_ROUNDS: u32      = 0    ,
+    param RETAIN_CHECK  : u32      = 0    ,
+    param GATE_SCAN     : u32      = 0    ,
+    param SAME_DATA     : u32      = 0    ,
+    param SIMPLE_DATA   : u32      = 0    ,
+    param EARLY_GATE    : u32      = 32'd0,
+    param READ_SEL      : logic<6> = 6'h20,
+    param PHASE_SCAN    : u32      = 0    ,
+    param READ_HOLD     : u32      = 1    ,
+    param PHASE_ALIGN   : u32      = 0    ,
+    param MULTI_PATTERN : u32      = 0    ,
 ) (
     i_clk         : input  clock     ,
     i_rst         : input  reset     ,
@@ -71,6 +73,8 @@ module DdrArrayProbe #(
         sample1,
         precharge,
         pre_wait,
+        refresh,
+        refresh_wait,
         done,
     }
     var state            : State     ;
@@ -78,6 +82,8 @@ module DdrArrayProbe #(
     var pattern_seed     : logic<32> ;
     var failed           : logic     ;
     var verify_phase     : logic     ;
+    var refresh_count    : logic<16> ;
+    var refresh_elapsed  : logic<9>  ;
     let data_a           : logic<128> = if MULTI_PATTERN == 0 || round_index == 0 ?
         DATA_A
     :
@@ -192,69 +198,73 @@ module DdrArrayProbe #(
 
     always_ff {
         if_reset {
-            state          = State::idle;
-            round_index    = 0;
-            pattern_seed   = 32'h1ace_b00c;
-            failed         = 0;
-            verify_phase   = 0;
-            elapsed        = 0;
-            previous_data  = 0;
-            previous_valid = 0;
-            seen_matches   = 0;
-            match0         = 0;
-            match1         = 0;
-            gate_index     = 0;
-            bit_seen       = 0;
-            bit_match0     = 0;
-            pass_gate0     = 0;
-            pass_gate1     = 0;
-            change_gate0   = 0;
-            change_gate1   = 0;
-            col0_match0    = 0;
-            col0_match1    = 0;
-            col8_match0    = 0;
-            col8_match1    = 0;
-            first_valid    = 0;
-            first_elapsed0 = 0;
-            first_elapsed1 = 0;
-            burst_seen     = 0;
-            valid_seen     = 0;
-            raw0           = 0;
-            raw1           = 0;
-            first_raw0     = 0;
-            first_raw1     = 0;
+            state           = State::idle;
+            round_index     = 0;
+            pattern_seed    = 32'h1ace_b00c;
+            failed          = 0;
+            verify_phase    = 0;
+            refresh_count   = 0;
+            refresh_elapsed = 0;
+            elapsed         = 0;
+            previous_data   = 0;
+            previous_valid  = 0;
+            seen_matches    = 0;
+            match0          = 0;
+            match1          = 0;
+            gate_index      = 0;
+            bit_seen        = 0;
+            bit_match0      = 0;
+            pass_gate0      = 0;
+            pass_gate1      = 0;
+            change_gate0    = 0;
+            change_gate1    = 0;
+            col0_match0     = 0;
+            col0_match1     = 0;
+            col8_match0     = 0;
+            col8_match1     = 0;
+            first_valid     = 0;
+            first_elapsed0  = 0;
+            first_elapsed1  = 0;
+            burst_seen      = 0;
+            valid_seen      = 0;
+            raw0            = 0;
+            raw1            = 0;
+            first_raw0      = 0;
+            first_raw1      = 0;
         } else if !i_enable {
-            state          = State::idle;
-            round_index    = 0;
-            pattern_seed   = 32'h1ace_b00c;
-            failed         = 0;
-            verify_phase   = 0;
-            elapsed        = 0;
-            previous_data  = 0;
-            previous_valid = 0;
-            seen_matches   = 0;
-            match0         = 0;
-            match1         = 0;
-            gate_index     = 0;
-            bit_seen       = 0;
-            bit_match0     = 0;
-            pass_gate0     = 0;
-            pass_gate1     = 0;
-            change_gate0   = 0;
-            change_gate1   = 0;
-            col0_match0    = 0;
-            col0_match1    = 0;
-            col8_match0    = 0;
-            col8_match1    = 0;
-            first_valid    = 0;
-            first_elapsed0 = 0;
-            first_elapsed1 = 0;
-            burst_seen     = 0;
-            valid_seen     = 0;
-            raw0           = 0;
-            raw1           = 0;
-            first_raw0     = 0;
-            first_raw1     = 0;
+            state           = State::idle;
+            round_index     = 0;
+            pattern_seed    = 32'h1ace_b00c;
+            failed          = 0;
+            verify_phase    = 0;
+            refresh_count   = 0;
+            refresh_elapsed = 0;
+            elapsed         = 0;
+            previous_data   = 0;
+            previous_valid  = 0;
+            seen_matches    = 0;
+            match0          = 0;
+            match1          = 0;
+            gate_index      = 0;
+            bit_seen        = 0;
+            bit_match0      = 0;
+            pass_gate0      = 0;
+            pass_gate1      = 0;
+            change_gate0    = 0;
+            change_gate1    = 0;
+            col0_match0     = 0;
+            col0_match1     = 0;
+            col8_match0     = 0;
+            col8_match1     = 0;
+            first_valid     = 0;
+            first_elapsed0  = 0;
+            first_elapsed1  = 0;
+            burst_seen      = 0;
+            valid_seen      = 0;
+            raw0            = 0;
+            raw1            = 0;
+            first_raw0      = 0;
+            first_raw1      = 0;
         } else {
             case state {
                 State::idle    : state = State::activate;
@@ -414,12 +424,26 @@ module DdrArrayProbe #(
                             verify_phase = 1;
                             round_index  = 0;
                             pattern_seed = 32'h1ace_b00c;
-                            state        = State::activate;
+                            state        = if REFRESH_ROUNDS != 0 ? State::refresh : State::activate;
                         } else {
                             state = State::done;
                         }
                     } else {
                         elapsed = elapsed + 4'd1;
+                    }
+                }
+                State::refresh: {
+                    refresh_count   = refresh_count + 16'd1;
+                    refresh_elapsed = 0;
+                    state           = State::refresh_wait;
+                }
+                State::refresh_wait: {
+                    // REF-to-REF / final REF-to-ACT: 384 controller cycles.
+                    // At 99 MHz this is 3.879 us, including the entire tRFC wait.
+                    if refresh_elapsed == 382 {
+                        state = if {16'b0, refresh_count} == REFRESH_ROUNDS ? State::activate : State::refresh;
+                    } else {
+                        refresh_elapsed = refresh_elapsed + 9'd1;
                     }
                 }
                 State::done: {}
@@ -511,6 +535,10 @@ module DdrArrayProbe #(
                 o_cmd_valid = 1'b1;
                 o_cmd       = 3'b010;
                 o_addr      = 14'h0400;
+            }
+            State::refresh: {
+                o_cmd_valid = 1'b1;
+                o_cmd       = 3'b001;
             }
             default: {}
         }

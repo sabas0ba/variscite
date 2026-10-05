@@ -232,8 +232,10 @@ VerylでPHY起動制御、lane別の拍位置training、読出し組立を実装
 [複数pattern・全書込み後の再読出し](ddr-multi-pattern.md) に結果を記録する。
 疎な8組のbank/rowへ16 burstを書き、全書込み後の再読出しを含む32 READが
 3回の独立したFPGA書込みで一致した。各回LCD SoCへの復帰も成功した。
+さらにREFRESHを約3.88 µs間隔で32,768回発行し、約127 ms保持した後の
+全32 READ一致も、独立した実機書込み3回で確認した。
 
-これは短時間・限定アドレスの診断である。次にrefresh保持、byte mask、
+これは限定アドレスの診断である。次にbyte mask、
 アドレス範囲の拡大を検証し、CPUから使えるDDRメモリ制御へ接続する。
 Linux実機boot、LCD上のLinux bootlog/GUIはまだ達成していない。
 

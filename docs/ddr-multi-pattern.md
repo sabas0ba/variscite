@@ -48,3 +48,58 @@ DDR_ARRAY_RETAIN=1 bash scripts/build_ddr_mpr.sh
 2026-10-05、lintと7ケースの結合試験、配置配線（setup/hold違反0）を通過した。bitstream SHA256は `82c280478ba265e587bf8c454acc9b83298df96a36c26b1e151d5b6f4872ae62`。実機では独立した3回の書込みで全32 READが一致し、UART statusは全回 `A95A56AA5` となった。全回LCD SoCへの復帰とUART検査も通過した。ログは `sim/retain-alias-test.log`、構築結果は `sim/fpga/ddr_array_retain/` にある。
 
 実機ログは logs/board/20261005-145629-DdrArrayRetain-*、145910、145956。既存のmulti/trained/array/aligned-scan回帰試験も通過した（sim/retain-regression.log）。
+
+## Refreshを継続した保持試験
+
+`DdrArrayRefresh` はretain診断の2つのpassの間にREFRESH期間を挿入する。
+全bankをPRECHARGEして既存のtRP待機を終えた後、384 controller cycleごとに
+32,768回のREFRESHを発行する。最後のREFRESH後も384 cycle待ってからACTIVATEする。
+99 MHzでは間隔3.8788 µs、保持期間127.1001 msとなる。保持期間中のWRITE、
+DQ/DQSの駆動、ODT、終了によるDRAM resetは行わない。
+
+[SK hynix H5TQ1G63EFR Rev. 1.1](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf)
+のPDF page 1と10は、通常温度範囲のrefresh間隔7.8 µs、拡張温度範囲3.9 µsを示す。
+page 14のIDD測定条件は1 GbitのnRFCを59 CK（tCK=1.875 ns）、88 CK（1.25 ns）等とする。
+本診断はREF後3.8788 µsの全期間を待機し、これらの測定条件より十分長く確保する。
+この表を汎用controllerのtRFC最小値規定として扱ってはいない。
+REF commandの符号はpage 22の測定シーケンス（CS/RAS/CAS/WE = 0/0/0/1）とも照合した。
+
+```bash
+make ddr-refresh-array-test ddr-refresh-duration-test
+DDR_ARRAY_REFRESH=1 bash scripts/build_ddr_mpr.sh
+```
+
+実機測定は `scripts/test-ddr-init-board.ps1 -Mode DdrArrayRefresh` を使い、
+全32 READ一致を表すUART status `A` を要求する。短縮試験では4回のREFRESHで
+既存の7ケースと保持中のbit破損を検査する。別の正常系試験では実機と同じ32,768回を
+発行し、カウンタの桁境界、総待機期間、最終REF後の待機を検証する。
+テストベンチはREFRESHの回数・間隔、全bank閉鎖とtRP、保持中のバス非駆動、
+再書込み禁止、保持後の一致判定を監視する。DRAMセルの物理的な電荷減衰はモデル化しない。
+
+対象はretain診断と同じ16 burstに限る。全容量、温度・電圧変動、連続CPUアクセスと
+refreshの仲裁を保証する試験ではない。
+
+2026-10-05、lint、保持試験8ケース、32,768回の発行試験、既存retain/multi/trained/
+array/aligned-scan回帰試験が通過した（`sim/refresh-regression.log`）。実機と同じ設定の
+シミュレーションは12,583,593 controller cycle、16 WRITE/32 READ/32,768 REFだった。
+配置配線のsetup/hold違反は0。bitstream SHA256は
+`65b2f51742d4c3df2797cacf0884c6fec28db7ad904f5d7dec0d21a8f0c0bd72`。
+独立した実機書込み3回でUARTは全回`A95A56AA5`となり、全32 READが一致した。
+各回ともLCD SoCへの復帰・UART検査も成功した。ログは
+`logs/board/20261005-153443-DdrArrayRefresh-*`、153606、153624。
+
+### 保存済みPDFの再読取り
+
+資料のSHA256は `9da32b94e76f6bf98848e8eb703fc0b008b282ffed6adc8a506572ad217cb9b4`。
+`scripts/read-reference-pdf.sh` は任意の資料読取り用であり、通常のbuild/CIには不要である。
+利用者承認のもとpypdf 6.19.0のwheelを`logs/pdf-tools/`へ取得し、SHA256
+`7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14`を検証して
+固定開発コンテナ内のPythonから直接読む。pip installやホスト環境変更は行わない。
+取得済みならネットワークを無効にして再実行できる。
+
+```bash
+bash scripts/read-reference-pdf.sh logs/ddr-reference/sk_hynix.pdf logs/ddr-reference/sk_hynix-plain.txt --plain
+```
+
+出力には原本のSHA256とPDF page番号を含む。回転表は既定のlayout抽出では欠落するため
+`--plain`を使い、数値の単位と列見出しを合わせて確認する。
