@@ -46,7 +46,7 @@ module tb_ddr_full_probe #(
             memory.delete();
         end else begin
             cycles++;
-            if (cycles-last_ref>384) $fatal(1,"refresh deadline");
+            if (cycles-last_ref>315) $fatal(1,"refresh deadline");
             if (pending!=0) begin
                 if (pending==1) begin
                     read_data<=returning;

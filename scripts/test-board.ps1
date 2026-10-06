@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrFull', 'DdrFullShift', 'DdrFullMixed', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrFull', 'DdrFullShift', 'DdrFullMixed', 'DdrFullSlow', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 600)]
     [int]$Seconds = 5
@@ -41,6 +41,7 @@ $images = @{
     DdrFull = 'sim/fpga/ddr_full/impl/pnr/ddr_full.fs'
     DdrFullShift = 'sim/fpga/ddr_full_shift/impl/pnr/ddr_full_shift.fs'
     DdrFullMixed = 'sim/fpga/ddr_full_mixed/impl/pnr/ddr_full_mixed.fs'
+    DdrFullSlow = 'sim/fpga/ddr_full_slow/impl/pnr/ddr_full_slow.fs'
     DdrArrayAddress = 'sim/fpga/ddr_array_address/impl/pnr/ddr_array_address.fs'
     DdrArrayMask = 'sim/fpga/ddr_array_mask/impl/pnr/ddr_array_mask.fs'
     DdrArrayRefresh = 'sim/fpga/ddr_array_refresh/impl/pnr/ddr_array_refresh.fs'
@@ -71,7 +72,7 @@ $capture = New-Object System.IO.MemoryStream
 $passed = $false
 $failure = $null
 $timer = $null
-$framePattern = if ($Mode -in @('DdrFull', 'DdrFullShift', 'DdrFullMixed')) { '![PLIRABVE][0-9A-F]{16}' } else { '![PLIRABVE][0-9A-F]{8}' }
+$framePattern = if ($Mode -in @('DdrFull', 'DdrFullShift', 'DdrFullMixed', 'DdrFullSlow')) { '![PLIRABVE][0-9A-F]{16}' } else { '![PLIRABVE][0-9A-F]{8}' }
 try {
     $env:PATH = (Join-Path $Suite 'bin') + ';' + (Join-Path $Suite 'lib') + ';' + $env:PATH
     & $loader --detect -b tangprimer20k 2>&1 | Tee-Object -FilePath "$prefix-jtag.log"
@@ -115,7 +116,7 @@ try {
             $count = $serial.Read($buffer, 0, [Math]::Min($buffer.Length, $serial.BytesToRead))
             $capture.Write($buffer, 0, $count)
         }
-        if ($Mode -in @('DdrFull', 'DdrFullShift', 'DdrFullMixed')) {
+        if ($Mode -in @('DdrFull', 'DdrFullShift', 'DdrFullMixed', 'DdrFullSlow')) {
             $liveText = [System.Text.Encoding]::ASCII.GetString($capture.ToArray())
             $liveFrames = @([regex]::Matches($liveText, $framePattern) | Select-Object -Last 3)
             if ($timer.Elapsed.TotalSeconds -ge $nextReportSeconds) {
@@ -171,7 +172,7 @@ try {
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'M' }).Count -eq 0
         }
-        { $_ -in @('DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrFull', 'DdrFullShift', 'DdrFullMixed') } {
+        { $_ -in @('DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrFull', 'DdrFullShift', 'DdrFullMixed', 'DdrFullSlow') } {
             # Explicit start marker prevents a hexadecimal payload from being mistaken for status.
             $frames = @([regex]::Matches($received, $framePattern) |
                 Select-Object -Last 3)

@@ -41,7 +41,7 @@ module tb_ddr_burst_controller;
             active=0; pending=0; was_held=0; accepts=0; responses=0; refreshes=0;
         end else begin
             cycles++;
-            if (cycles-last_ref > 384) $fatal(1,"refresh overdue, including backpressure");
+            if (cycles-last_ref > 315) $fatal(1,"refresh overdue, including backpressure");
             if (was_held && (!rsp_valid || rsp_data !== held_data || rsp_error !== held_error))
                 $fatal(1,"response changed under backpressure");
             was_held = rsp_valid && !rsp_ready;

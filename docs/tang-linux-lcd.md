@@ -310,6 +310,30 @@ trainingを通過したが、`20261006-120325-DdrFullMixed`で`!V8359303AFFEF80E
 両回路はsetup/hold違反0件、全試験後のLCD復帰とUART検査は成功。
 従来patternの全容量成功を、追加patternや別の回路構成へ一般化しない。
 
+#### 324/81 MHzでの比較
+
+`TangDdrFullSlowTop`はmixed patternでPLL倍率を44/3から36/3へ変更する。
+DDR clockは324 MHz、controllerは81 MHz、要求元とUARTは27 MHzである。
+[H5TQ1G63EFR-PBCの速度表](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf)
+のCL=6/CWL=5ではtCK(AVG)=2.5〜3.3 nsであり、3.086 nsは範囲内となる。
+コマンド待機cycle数は短縮しない。controllerのrefresh間隔を315 cycle以内に制限する
+モデル検査を追加し、81 MHzでも約3.889 µs以内となることを確認する。
+
+buildは`DDR_FULL_SLOW=1 bash scripts/build_ddr_mpr.sh`、実機は`-Mode DdrFullSlow`。
+build時にSDCのPLL倍率も36へ変更し、タイミングreportにfast=3.086 ns、ctrl=12.346 nsが
+現れることを検査する。CDC mailboxの最大遅延制約とsetup/hold違反0件の条件は維持する。
+従来の比較回路は396/99 MHzのままとする。
+
+最初の−4 tap版はSHA256
+`35851ae74686cb197aad2fa4f3a67bfccfdd44bd46bbda72089d698da021b1fe`。
+`20261006-121010-DdrFullSlow`でtraining失敗となり、全容量走査には入らなかった。
+setup/hold違反0件、試験後のLCD復帰・UART検査は成功。
+追加遅延0 tap版はSHA256
+`7057bc2ad7966ba7748ee8de993714d633bc379345f531c113d7d0d64c179651`。
+`20261006-121330-DdrFullSlow`でもtraining失敗となった。setup/hold違反0件、
+LCD復帰・UART検査は成功。現在の比較用topはこの0 tap版である。
+周波数低下だけでは解消しておらず、次にtrainingのlane別valid・校正結果を観測する。
+
 ### コマンドとrefresh
 
 99 MHz制御、396 MHz DDR clock、CL=6/CWL=5を使用する。WRITEはCA slot 3、他のアクセス

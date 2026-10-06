@@ -3,7 +3,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_FULL_MIXED:-0}" == 1 ]]; then
+if [[ "${DDR_FULL_SLOW:-0}" == 1 ]]; then
+    name=ddr_full_slow
+    top=rv32ima_TangDdrFullSlowTop
+elif [[ "${DDR_FULL_MIXED:-0}" == 1 ]]; then
     name=ddr_full_mixed
     top=rv32ima_TangDdrFullMixedTop
 elif [[ "${DDR_FULL_SHIFT:-0}" == 1 ]]; then
@@ -120,6 +123,9 @@ if [[ "$name" == ddr_word || "$name" == ddr_full* ]]; then
 else
     cat fpga/tang_primer_20k/ddr_read_probe.sdc > "$out/$name.sdc"
 fi
+if [[ "$name" == ddr_full_slow ]]; then
+    sed -i 's/-multiply_by 44 /-multiply_by 36 /' "$out/$name.sdc"
+fi
 if [[ "$name" == ddr_array_startup_scan || "$name" == ddr_array_raw_* || "$name" == ddr_array_assembled || "$name" == ddr_array_trained || "$name" == ddr_array_multi || "$name" == ddr_array_retain || "$name" == ddr_array_refresh || "$name" == ddr_array_mask || "$name" == ddr_array_address || "$name" == ddr_controller || "$name" == ddr_word || "$name" == ddr_full* ]]; then
     cat fpga/tang_primer_20k/ddr_phy_startup.sdc >> "$out/$name.sdc"
 fi
@@ -145,8 +151,13 @@ grep -Eq '^[[:space:]]*rPLL[[:space:]]*\| 1/4' "$report"
 grep -Eq '^ddr_dq\[0\][[:space:]]*\|.*G5/5.*SSTL15.*INTERNAL.*1.5' "$report"
 grep -Eq '^ddr_clk_p[[:space:]]*\|.*J1,J3/5.*SSTL15D.*1.5' "$report"
 grep -Eq '^o_uart_tx[[:space:]]*\|.*M11/2.*LVCMOS33.*3.3' "$report"
-grep -A2 '<td>ddr_fast</td>' "$timing" | grep '<td>2.525</td>' > /dev/null
-grep -A2 '<td>ddr_ctrl</td>' "$timing" | grep '<td>10.101</td>' > /dev/null
+if [[ "$name" == ddr_full_slow ]]; then
+    grep -A2 '<td>ddr_fast</td>' "$timing" | grep '<td>3.086</td>' > /dev/null
+    grep -A2 '<td>ddr_ctrl</td>' "$timing" | grep '<td>12.346</td>' > /dev/null
+else
+    grep -A2 '<td>ddr_fast</td>' "$timing" | grep '<td>2.525</td>' > /dev/null
+    grep -A2 '<td>ddr_ctrl</td>' "$timing" | grep '<td>10.101</td>' > /dev/null
+fi
 grep -A1 'Numbers of Setup Violated Endpoints' "$timing" | grep '<td>0</td>' > /dev/null
 grep -A1 'Numbers of Hold Violated Endpoints' "$timing" | grep '<td>0</td>' > /dev/null
 echo "DDR MPR probe: $out/impl/pnr/$name.fs"

@@ -145,11 +145,12 @@ module TangDdrInitProbe #(
     param ARRAY_READ_HOLD : u32      = 1    ,
     param DLL_QUARTER     : u32      = 0    ,
     /// Receive-only offset in primitive taps, applied before array training.
-    param READ_TAPS        : logic<5> = 0,
-    param READ_DECREASE    : u32      = 0,
-    param FULL_MIXED       : u32      = 0,
-    param ARRAY_PHASE_ALIGN: u32      = 0,
-    param PHY_STARTUP      : u32      = 0,
+    param READ_TAPS        : logic<5> = 0 ,
+    param READ_DECREASE    : u32      = 0 ,
+    param FULL_MIXED       : u32      = 0 ,
+    param PLL_MULTIPLY     : u32      = 44,
+    param ARRAY_PHASE_ALIGN: u32      = 0 ,
+    param PHY_STARTUP      : u32      = 0 ,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -408,7 +409,9 @@ module TangDdrInitProbe #(
         o_rst: por,
     );
     unsafe (cdc) {
-        inst clocks: TangDdrClock (
+        inst clocks: TangDdrClock #(
+            MULTIPLY: PLL_MULTIPLY,
+        ) (
             i_clk                                                      ,
             i_reset    : por                                           ,
             i_stop     : if PHY_STARTUP != 0 ? startup_stop : 1'b0,
