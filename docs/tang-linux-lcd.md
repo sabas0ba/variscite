@@ -63,16 +63,16 @@ DDRと周辺回路の検証完了は、限定した独立診断の成功だけ�
 | 部分書込み・word lane・隣接word保持 | 単体・結合試験、既存DM診断とwordポート独立実機診断 |
 | 範囲外・非整列・timeout・後続要求 | ポート/controller結合試験。CPUアクセス例外の応答注入試験も追加済み。両者を接続した検証が残る |
 | CDCの要求保持・応答一対一・reset取消し | 3クロック比の結合試験、停止clockでのreset試験、独立実機word診断 |
-| Coreを含むDDRアクセス | 未接続。AMO/SCの遅延確定と分割アクセス失敗を個別検証済み。CPUからDDRへの継続アクセスが残る |
+| Coreを含むDDRアクセス | Core・ROM・wordポート・CDCを接続した診断が3クロック比で成功。burst境界はメモリモデル。controller/PHYとの結合と実機確認が残る |
 | 配置配線・実機再現性 | 各公開bitstreamの制約・setup/hold結果・SHA256・繰返し実行結果を記録する |
 | 再現手順・自動試験・PR | 試験をmake/CIへ組込み、実装状態と未検証範囲をREADME・本書・PRで一致させる |
 
 1. DDR controllerの単体・独立実機検証は下記のとおり完了した。
    応答待ち中にもrefresh期限を守ること、timeoutやreset時の扱いを検証した。
-2. wordポートとCDCの独立実機診断、CPUアクセス例外の個別試験は完了した。次はCPUバスへ接続し、
-   可変レイテンシ、byte strobe、境界アクセスを検証する。
-   fetch応答待ち中の割込みでも要求を取消さず、応答と命令PCを対応させることも確認する。
-   接続後に全容量走査と継続アクセスを実機で確認する。
+2. wordポートとCDCの独立実機診断、CPUアクセス例外の個別試験は完了した。Coreとwordポートを
+   接続した診断は、burst境界のメモリモデルで3クロック比すべて成功した。fetch応答待ち中の割込みは
+   要求を取り消さず、応答と命令PCを対応させる。次はcontroller/PHYへ接続し、可変レイテンシ、
+   byte strobe、境界アクセスと全容量走査をCPU経由で実機検証する。
 3. UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、Linuxの`/init`到達を確認する。
 
 LCDのframebuffer/DMA、fbconによるbootlog、LinuxユーザプロセスによるGUIは、
@@ -103,6 +103,38 @@ AMOの旧値とSCの成功値は書込み成功後にだけdestinationへ反映�
 カバレッジの未到達数はline 4、branch 1、expression 13で既存の許容数内だった。
 Linux回帰は`/init`、Mandelbrot、donutの24 frame描画、SYSCON poweroffまで到達した
 （854,021,016 cycle、300,417,048 retire）。これはシミュレーション結果であり、Linux実機起動ではない。
+
+### CPU診断プラットフォーム
+
+`DdrCpuPort`はPMP 4 entryの`Soc`、4 KiB boot ROM、結果レジスタ、`DdrWordPort`を接続する。
+boot ROMは`0x1000..0x1fff`で、DDRのburst要求・応答はモジュール境界へ出す。
+現時点の結合試験はこの境界に待ち時間とbackpressureを持つメモリモデルを接続している。
+`DdrBurstController`・PHYを含む実機への組込みは次段階である。
+
+ROMプログラム`fpga/firmware/ddr_cpu.S`は、CPU命令でmixed patternと反転値を書込み、保持後に
+逆順で照合する。その後DDRへ2命令を書き、DDRからfetch・実行してROMへ戻ることを確認する。
+`0x10000004`へ最初の失敗アドレス、`0x10000008`へ実測値（trap時はmcause）、
+最後に`0x10000000`へ1（成功）または2（失敗）を書いて終了する。結果はresetまで保持する。
+予期しないtrapはmtvalとmcauseを失敗レジスタへ保存する。
+
+`bash scripts/build_ddr_cpu.sh`の既定値は全33,554,432 word・各pass最低2,700,000 CPU cycle保持で、
+`sim/ddr_cpu.{elf,bin,hex}`を生成する。実機用ROMの構築は固定開発コンテナ内で行う。
+`make ddr-cpu-port-test`は64 word・1,000 cycle保持の`sim/ddr_cpu_test.hex`を生成し、
+正常、データ破損、load/storeエラー、DDR上の各命令のfetchエラー、要求受理後のresetを検査する。
+CPU/memoryクロックの半周期は19/5、5/19、7/11の3組を使う。
+この試験は`ddr-controller-probe-test`経由で既存のmake all/CIへ含める。
+
+2026-10-06に上記6ケース×3クロック比が成功した。正常ケースはCPUから130 word書込み・
+130 word読出しを行う（64 word×2 passとDDR上の2命令）。結果は失敗アドレス・実測値とも0。
+エラーケースは期待したmtval/mcauseまたは破損値を報告した。
+`make all`も成功し、命令試験76件、Spike照合77件、カバレッジ未到達line 4 / branch 1 /
+expression 13を確認した。Linux回帰もSYSCON poweroffまで成功した
+（849,581,975 cycle、298,794,956 retire）。この段階ではCPU経由の実機DDRアクセスは未検証である。
+
+Coreのfetchは最初の要求cycleをラッチし、応答までvalid/addressを保持する。
+その間に割込みが発生しても要求を取り消さず、成功した命令を完了してから割込みを取る。
+エラー応答は元のPCに対するアクセス例外を優先する。CLINTタイマがfetch待ち中に満了する
+成功・失敗の両ケースを`core-bus-error-test`で検証する。
 
 ### burst要求と応答
 

@@ -133,6 +133,40 @@ public:
         setup(); top.i_mem_ready=1; top.i_mem_rdata=0x00100313; tick();
         top.i_mem_error=1; tick(); top.i_mem_ready=0; top.i_mem_error=0;
         check(top.o_retire && !top.o_trap && CORE(rf)[6]==1,"idle error trapped");
+        // Make the CLINT timer expire while an external instruction fetch stalls.
+        // Both successful and faulting responses must belong to the original PC.
+        for (bool failed: {false,true}) {
+            setup();
+            instruction(0x110041b7); // x3 = CLINT mtimecmp
+            instruction(0x00300213); // x4 = 3
+            instruction(0x0041a023); tick(); // mtimecmp low = 3
+            instruction(0x0001a223); tick(); // mtimecmp high = 0
+            instruction(0x08000213); // x4 = MTIE
+            instruction(0x30421073); // mie = MTIE
+            instruction(0x30046073); // mstatus.MIE = 1
+            pc=top.o_mem_addr; retired=CORE(csr_minstret);
+            tick(); // The memory receiver has now accepted the fetch request.
+            top.i_mtime_tick=1;
+            for (int n=0; n<5; ++n) {
+                tick();
+                check(top.o_mem_valid && top.o_mem_addr==pc && !top.o_trap,
+                      "interrupt cancelled stalled fetch");
+            }
+            top.i_mtime_tick=0;
+            response(failed,0x00100313);
+            if (failed) fault(1,pc,pc,retired);
+            else {
+                tick();
+                check(top.o_retire && !top.o_trap && CORE(rf)[6]==1 &&
+                      !top.o_mem_valid,"fetch did not retire before interrupt");
+                // A ready/error value outside a request cannot override the IRQ.
+                top.i_mem_ready=1; top.i_mem_error=1; tick();
+                top.i_mem_ready=0; top.i_mem_error=0;
+                check(top.o_trap && top.o_trap_cause==0x80000007 &&
+                      CORE(csr_mepc)==pc+4 && CORE(csr_mtval)==0 &&
+                      CORE(csr_minstret)==retired+1,"deferred interrupt state");
+            }
+        }
         top.final();
         context.coveragep()->write("logs/cov/core_bus_error.dat");
         std::puts("Core bus error PASS: fetch/load/store/split/LR/SC/AMO, delay, local decode, reset, recovery");

@@ -1,0 +1,131 @@
+/// CPU diagnostic platform: 4 KiB boot ROM, result registers, and DDR word CDC.
+/// External burst requests connect to DdrBurstController after PHY training.
+/// i_enable stays asserted after training until the common reset is asserted.
+module DdrCpuPort #(
+    param ROM_INIT: string = "sim/ddr_cpu.hex",
+) (
+    i_cpu_clk  : input  'cpu   clock                ,
+    i_mem_clk  : input  'mem   clock                ,
+    i_reset    : input  'async reset_async_high     ,
+    i_enable   : input  'mem   logic                ,
+    o_done     : output 'cpu   logic                ,
+    o_found    : output 'cpu   logic                ,
+    o_failure  : output 'cpu   logic           <32> ,
+    o_actual   : output 'cpu   logic           <32> ,
+    o_req_valid: output 'mem   logic                ,
+    i_req_ready: input  'mem   logic                ,
+    o_req_addr : output 'mem   logic           <27> ,
+    o_req_wdata: output 'mem   logic           <128>,
+    o_req_wstrb: output 'mem   logic           <16> ,
+    i_rsp_valid: input  'mem   logic                ,
+    o_rsp_ready: output 'mem   logic                ,
+    i_rsp_data : input  'mem   logic           <128>,
+    i_rsp_error: input  'mem   logic                ,
+) {
+    #[sv("async_reg = \"true\"")]
+    var enable_sync: 'cpu logic<2>;
+    var cpu_reset  : 'cpu reset   ;
+    unsafe (cdc) {
+        always_ff (i_cpu_clk, i_reset) {
+            if_reset {
+                enable_sync = 0;
+            } else {
+                enable_sync = {enable_sync[0], i_enable};
+            }
+        }
+        assign cpu_reset = (i_reset || !enable_sync[1]) as reset;
+    }
+    var valid      : 'cpu logic    ;
+    var addr       : 'cpu logic<32>;
+    var wdata      : 'cpu logic<32>;
+    var wstrb      : 'cpu logic<4> ;
+    var rdata      : 'cpu logic<32>;
+    var ready      : 'cpu logic    ;
+    var error      : 'cpu logic    ;
+    var local_ready: 'cpu logic    ;
+    var ddr_ready  : 'cpu logic    ;
+    var ddr_error  : 'cpu logic    ;
+    var ddr_data   : 'cpu logic<32>;
+    var rom_data   : 'cpu logic<32>;
+    let rom_hit    : 'cpu logic     = addr[31:12] == 20'h00001;
+    let result_hit : 'cpu logic     = addr[31:4] == 28'h1000000;
+    let local_hit  : 'cpu logic     = rom_hit || result_hit;
+    let local_start: 'cpu logic     = valid && local_hit && !local_ready;
+    assign ready = if local_hit ? local_ready : ddr_ready;
+    assign error = if local_hit ? (rom_hit && wstrb != 0) : ddr_error;
+    assign rdata = if rom_hit ? rom_data : if result_hit ? 32'b0 : ddr_data;
+    always_ff (i_cpu_clk, cpu_reset) {
+        if_reset {
+            local_ready = 0;
+            o_done      = 0;
+            o_found     = 0;
+            o_failure   = 0;
+            o_actual    = 0;
+        } else {
+            local_ready = local_start;
+            if local_start && result_hit && wstrb == 4'hf && !o_done {
+                case addr[3:2] {
+                    0: {
+                        o_done  = 1;
+                        o_found = wdata == 1;
+                    }
+                    1      : o_failure = wdata;
+                    2      : o_actual  = wdata;
+                    default: {}
+                }
+            }
+        }
+    }
+    inst rom: Ram #(
+        WORDS: 1024    ,
+        INIT : ROM_INIT,
+    ) (
+        i_clk  : i_cpu_clk             ,
+        i_en   : local_start && rom_hit,
+        i_addr : addr - 32'h1000,
+        i_wstrb: 4'b0                  ,
+        i_wdata: 32'b0                 ,
+        o_rdata: rom_data              ,
+    );
+    inst soc: Soc #(
+        PMP_ENTRIES: 4,
+    ) (
+        i_clk         : i_cpu_clk,
+        i_rst         : cpu_reset,
+        o_mem_valid   : valid    ,
+        o_mem_addr    : addr     ,
+        o_mem_wstrb   : wstrb    ,
+        o_mem_wdata   : wdata    ,
+        i_mem_rdata   : rdata    ,
+        i_mem_ready   : ready    ,
+        i_mem_error   : error    ,
+        i_mtime_tick  : 1'b0     ,
+        i_irq_src     : 1'b0     ,
+        o_retire      : _        ,
+        o_retire_pc   : _        ,
+        o_retire_instr: _        ,
+        o_trap        : _        ,
+        o_trap_cause  : _        ,
+    );
+    inst word_port: DdrWordPort (
+        i_cpu_clk                                         ,
+        i_mem_clk                                         ,
+        i_reset                                           ,
+        i_valid    : valid && !local_hit && enable_sync[1],
+        i_addr     : addr                                 ,
+        i_wdata    : wdata                                ,
+        i_wstrb    : wstrb                                ,
+        o_ready    : ddr_ready                            ,
+        o_rdata    : ddr_data                             ,
+        o_error    : ddr_error                            ,
+        o_req_valid                                       ,
+        i_req_ready                                       ,
+        o_req_addr                                        ,
+        o_req_wdata                                       ,
+        o_req_wstrb                                       ,
+        i_rsp_valid                                       ,
+        o_rsp_ready                                       ,
+        i_rsp_data                                        ,
+        i_rsp_error                                       ,
+    );
+}

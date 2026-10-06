@@ -24,7 +24,7 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | DDR全128 MiB走査 | 独立診断で実機確認済み | 3 word校正窓でmixed pattern／反転値が396/99 MHzで3回、324/81 MHzで2回一致。アドレスXOR／反転値も修正後の396/99 MHz版で一致 |
 | DDR burst controller | 単体試験・独立診断で実機確認済み | 要求とrefreshの仲裁、応答保持、timeout/reset。32箇所への書込みと100 ms保持後の読戻し |
 | DDR wordポート・CDC | 独立診断で実機確認済み | 27 MHz要求→99 MHz controllerで32 wordを書込み、100 ms保持後に読戻し。範囲外拒否・error伝達はシミュレーション検証 |
-| CPUからDDR3への接続 | 未接続 | wordポートとCPUアクセス例外を個別検証済み。Coreを含む接続と実機検証が残る |
+| CPUからDDR3への接続 | wordポートまでシミュレーション結合済み | Core・boot ROM・wordポート・CDCを接続。3クロック比でデータ・命令アクセスとエラーを検証。controller/PHYとの結合とCPU経由の実機検証が残る |
 | Linux実機起動・LCD bootlog・GUI | 未実装 | カーネル転送、実機ブート、framebuffer/DMA、fbcon、GUIを順に追加する |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
@@ -34,7 +34,8 @@ DDRの測定条件、bitstream SHA256、再現手順は
 ## ロードマップ
 
 校正窓の不足を修正し、独立診断で2種類のpatternによる全容量一致と繰返し起動を確認した。
-CPUアクセス例外への変換も追加し、次はCPUバス接続とLinux実機起動の検証へ進む。
+CPUアクセス例外とfetch待ち中の要求保持を追加し、Coreとwordポートの結合試験も通過した。
+次にcontroller/PHYとの結合、CPU経由の実機検証、Linux実機起動へ進む。
 以下は実装順序と完了条件であり、日程の確約ではない。
 
 | 順序 | 次の成果 | 完了条件 |

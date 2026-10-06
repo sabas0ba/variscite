@@ -23,6 +23,20 @@ lint:
 	veryl check
 
 .PHONY: core-bus-error-test
+.PHONY: ddr-cpu-port-test
+ddr-cpu-port-test: veryl-build
+	FULL_WORDS=64 HOLD_CYCLES=1000 OUTPUT_NAME=ddr_cpu_test bash scripts/build_ddr_cpu.sh
+	for ratio in '19 5' '5 19' '7 11'; do \
+	    set -- $$ratio; \
+	    verilator --binary --timing -Wno-fatal --top-module tb_ddr_cpu_port \
+	    -GCPU_HALF=$$1 -GMEM_HALF=$$2 \
+	    -Mdir sim/obj_ddr_cpu_port -o ddr_cpu_port \
+	    $(RTL) target/ram.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_cpu_port.sv \
+	    tb/tb_ddr_cpu_port.sv || exit 1; \
+	    sim/obj_ddr_cpu_port/ddr_cpu_port || exit 1; \
+	done
+
 core-bus-error-test: veryl-build
 	mkdir -p sim logs/cov
 	verilator --cc --exe --build --coverage --trace --top-module rv32ima_Soc \
@@ -132,7 +146,7 @@ ddr-word-probe-test: veryl-build ddr-full-probe-test
 	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_word_probe.sv
 	sim/obj_ddr_word_probe/tb_ddr_word_probe
 
-ddr-controller-probe-test: veryl-build ddr-word-probe-test
+ddr-controller-probe-test: veryl-build ddr-word-probe-test ddr-cpu-port-test
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_controller_probe \
 	    -Mdir sim/obj_ddr_controller_probe -o tb_ddr_controller_probe \
 	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_controller_probe.sv tb/tb_ddr_controller_probe.sv

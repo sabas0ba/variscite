@@ -49,10 +49,11 @@ module Core #(
     // ------------------------------------------------------------------
     // Architectural state
     // ------------------------------------------------------------------
-    var state: State         ;
-    var pc   : logic<32>     ;
-    var instr: logic<32>     ;
-    var rf   : logic<32> [32];
+    var state        : State         ;
+    var pc           : logic<32>     ;
+    var instr        : logic<32>     ;
+    var fetch_pending: logic         ;
+    var rf           : logic<32> [32];
 
     // Privilege state (1 = M, 0 = U; see RvPkg::PRIV_*)
     var priv: logic;
@@ -368,6 +369,8 @@ module Core #(
     let irq_bits: logic<32> = mip_val & csr_mie;
     // Machine interrupts are always enabled while running below M-mode.
     let irq_take: logic = (csr_mie_bit || priv == RvPkg::PRIV_U) && irq_bits != 32'h0;
+    // An issued fetch cannot be cancelled: complete it before taking an IRQ.
+    let fetch_irq: logic = irq_take && !fetch_pending;
 
     var irq_cause : logic<32>;
     var irq_vector: logic<32>;
@@ -887,7 +890,7 @@ module Core #(
         o_mem_wdata = 32'h0;
         case state {
             State::fetch: {
-                o_mem_valid = !irq_take && pmp_fetch_ok;
+                o_mem_valid = !fetch_irq && pmp_fetch_ok;
                 o_mem_addr  = pc;
             }
             State::mem_access: {
@@ -921,8 +924,8 @@ module Core #(
     let div_retire : logic     = state == State::divide && div_cnt == 6'd0;
     let retire_now : logic     = ex_retire || mem_retire || mem2_retire || amo_retire || div_retire;
     let trap_now   : logic     = state == State::execute && w_exc;
-    let irq_taken  : logic     = state == State::fetch && irq_take;
-    let fetch_fault: logic     = state == State::fetch && !irq_take && !pmp_fetch_ok;
+    let irq_taken  : logic     = state == State::fetch && fetch_irq;
+    let fetch_fault: logic     = state == State::fetch && !fetch_irq && !pmp_fetch_ok;
     let bus_fault  : logic     = o_mem_valid && i_mem_ready && i_mem_error;
     let bus_cause  : logic<32> = if state == State::fetch ? 32'd1 : if q_is_load && !q_is_amo ? 32'd5 : 32'd7;
     // A split access reports the address of the portion that failed.
@@ -949,9 +952,10 @@ module Core #(
     // ------------------------------------------------------------------
     always_ff {
         if_reset {
-            state = State::fetch;
-            pc    = RvPkg::RESET_VECTOR;
-            instr = 32'h0;
+            state         = State::fetch;
+            pc            = RvPkg::RESET_VECTOR;
+            instr         = 32'h0;
+            fetch_pending = 1'b0;
             for i in 0..32 {
                 rf[i] = 32'h0;
             }
@@ -1005,6 +1009,7 @@ module Core #(
             r_trap         = 1'b0;
             r_trap_cause   = 32'h0;
         } else {
+            fetch_pending = state == State::fetch && o_mem_valid && !i_mem_ready;
             if !csr_minhibit[0] && !cyc_wr_eff {
                 csr_mcycle = csr_mcycle + 64'h1;
             }
@@ -1050,7 +1055,7 @@ module Core #(
                         if o_mem_valid && i_mem_ready {
                             instr = i_mem_rdata;
                             state = State::execute;
-                        } else if irq_take {
+                        } else if fetch_irq {
                             csr_mepc     = {pc[31:2], 2'b00};
                             csr_mcause   = irq_cause;
                             csr_mtval    = 32'h0;
