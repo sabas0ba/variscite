@@ -11,7 +11,7 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
         run-isa cov-test coverage cov-check cosim linux-build linux-boot \
         fpga-fw fpga-sim por-test lcd-test fpga-lcd fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
-all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
+all: lint veryl-test plic-multi-test core-bus-error-test tb isa-build run-isa cov-test cov-check \
      cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test \
      ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test \
      ddr-burst-controller-test ddr-controller-probe-test
@@ -21,6 +21,14 @@ lint:
 	    { echo 'RTL sources under src/ and fpga/ must be Veryl' >&2; exit 1; }
 	veryl fmt --check
 	veryl check
+
+.PHONY: core-bus-error-test
+core-bus-error-test: veryl-build
+	mkdir -p sim logs/cov
+	verilator --cc --exe --build --coverage --trace --top-module rv32ima_Soc \
+	    -Mdir sim/obj_core_bus_error -o core_bus_error \
+	    $(RTL) tb/tb_core_bus_error.cpp
+	sim/obj_core_bus_error/core_bus_error
 
 veryl-build:
 	veryl build
@@ -67,7 +75,7 @@ DIRECTED_TESTS := coverage_boost irq_test umode_test pmp_test clint_plic_test
 # clint_plic_test runs with a divided mtime tick so that the CLINT counter is
 # exercised on both the ticking and the idle cycle.
 
-cov-test:
+cov-test: core-bus-error-test
 	mkdir -p sim logs/isa logs/cov
 	for t in $(DIRECTED_TESTS); do \
 	    $(RISCV_PREFIX)gcc -march=rv32g -mabi=ilp32 -static -mcmodel=medany \

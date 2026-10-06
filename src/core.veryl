@@ -1,7 +1,8 @@
 /// RV32IMA_Zicsr machine-mode core (multi-cycle, single memory port).
 ///
 /// Memory protocol: o_mem_valid is held until i_mem_ready. wstrb == 0 means
-/// read; on ready the read data is sampled from i_mem_rdata.
+/// read; on valid && ready, error traps instead of committing the instruction.
+/// Read data is sampled from i_mem_rdata only on a successful response.
 module Core #(
     /// Number of PMP entries that are implemented. The privileged spec leaves
     /// the count to the implementation and requires unimplemented entries to
@@ -23,6 +24,7 @@ module Core #(
     o_mem_wdata: output logic<32>,
     i_mem_rdata: input  logic<32>,
     i_mem_ready: input  logic    ,
+    i_mem_error: input  logic    ,
 
     i_irq_timer: input logic,
     i_irq_soft : input logic,
@@ -94,6 +96,8 @@ module Core #(
     var q_lo     : logic<32>;
     var q_is_load: logic    ;
     var q_is_amo : logic    ;
+    var q_is_lr  : logic    ;
+    var q_is_sc  : logic    ;
     var q_amo_op : logic<5> ;
     var q_rs2val : logic<32>;
 
@@ -910,17 +914,21 @@ module Core #(
 
     // A divide leaves State::execute without retiring: it retires on the cycle
     // that State::divide writes the result back.
-    let ex_retire  : logic = state == State::execute && !w_exc && !w_mem_issue && !is_div;
-    let mem_retire : logic = state == State::mem_access && i_mem_ready && !q_is_amo && !q_need2;
-    let mem2_retire: logic = state == State::mem_access2 && i_mem_ready;
-    let amo_retire : logic = state == State::amo_write && i_mem_ready;
-    let div_retire : logic = state == State::divide && div_cnt == 6'd0;
-    let retire_now : logic = ex_retire || mem_retire || mem2_retire || amo_retire || div_retire;
-    let trap_now   : logic = state == State::execute && w_exc;
-    let irq_taken  : logic = state == State::fetch && irq_take && !i_mem_ready;
-    let fetch_fault: logic = state == State::fetch && !irq_take && !pmp_fetch_ok;
-    let cyc_wr_eff : logic = state == State::execute && !w_exc && w_cyc_wr;
-    let ir_wr_eff  : logic = state == State::execute && !w_exc && w_ir_wr;
+    let ex_retire  : logic     = state == State::execute && !w_exc && !w_mem_issue && !is_div;
+    let mem_retire : logic     = state == State::mem_access && i_mem_ready && !i_mem_error && !q_is_amo && !q_need2;
+    let mem2_retire: logic     = state == State::mem_access2 && i_mem_ready && !i_mem_error;
+    let amo_retire : logic     = state == State::amo_write && i_mem_ready && !i_mem_error;
+    let div_retire : logic     = state == State::divide && div_cnt == 6'd0;
+    let retire_now : logic     = ex_retire || mem_retire || mem2_retire || amo_retire || div_retire;
+    let trap_now   : logic     = state == State::execute && w_exc;
+    let irq_taken  : logic     = state == State::fetch && irq_take;
+    let fetch_fault: logic     = state == State::fetch && !irq_take && !pmp_fetch_ok;
+    let bus_fault  : logic     = o_mem_valid && i_mem_ready && i_mem_error;
+    let bus_cause  : logic<32> = if state == State::fetch ? 32'd1 : if q_is_load && !q_is_amo ? 32'd5 : 32'd7;
+    // A split access reports the address of the portion that failed.
+    let bus_tval  : logic<32> = if state == State::fetch ? pc : if state == State::mem_access2 ? o_mem_addr : q_addr;
+    let cyc_wr_eff: logic     = state == State::execute && !w_exc && w_cyc_wr;
+    let ir_wr_eff : logic     = state == State::execute && !w_exc && w_ir_wr;
 
     // Registered trace outputs: pulse one cycle after the event so the
     // testbench can sample them cleanly after the clock edge.
@@ -981,6 +989,8 @@ module Core #(
             q_lo           = 32'h0;
             q_is_load      = 1'b0;
             q_is_amo       = 1'b0;
+            q_is_lr        = 1'b0;
+            q_is_sc        = 1'b0;
             q_amo_op       = 5'h0;
             q_rs2val       = 32'h0;
             div_q          = 32'h0;
@@ -1007,7 +1017,7 @@ module Core #(
                 r_retire_pc    = pc;
                 r_retire_instr = instr;
             }
-            r_trap = trap_now || irq_taken || fetch_fault;
+            r_trap = trap_now || irq_taken || fetch_fault || bus_fault;
             if trap_now {
                 r_retire_pc  = pc;
                 r_trap_cause = w_cause;
@@ -1021,175 +1031,202 @@ module Core #(
                 r_trap_cause = 32'h1;
             }
 
-            case state {
-                State::fetch: {
-                    if i_mem_ready {
-                        instr = i_mem_rdata;
-                        state = State::execute;
-                    } else if irq_take {
-                        csr_mepc     = {pc[31:2], 2'b00};
-                        csr_mcause   = irq_cause;
-                        csr_mtval    = 32'h0;
-                        csr_mpie_bit = csr_mie_bit;
-                        csr_mie_bit  = 1'b0;
-                        csr_mpp      = priv;
-                        priv         = RvPkg::PRIV_M;
-                        pc           = irq_vector;
-                    } else if !pmp_fetch_ok {
-                        csr_mepc     = {pc[31:2], 2'b00};
-                        csr_mcause   = 32'h1; // instruction access fault
-                        csr_mtval    = pc;
-                        csr_mpie_bit = csr_mie_bit;
-                        csr_mie_bit  = 1'b0;
-                        csr_mpp      = priv;
-                        priv         = RvPkg::PRIV_M;
-                        pc           = {csr_mtvec[31:2], 2'b00};
+            if bus_fault {
+                r_retire_pc  = pc;
+                r_trap_cause = bus_cause;
+                csr_mepc     = {pc[31:2], 2'b00};
+                csr_mcause   = bus_cause;
+                csr_mtval    = bus_tval;
+                csr_mpie_bit = csr_mie_bit;
+                csr_mie_bit  = 1'b0;
+                csr_mpp      = priv;
+                priv         = RvPkg::PRIV_M;
+                lr_valid     = 1'b0;
+                pc           = {csr_mtvec[31:2], 2'b00};
+                state        = State::fetch;
+            } else {
+                case state {
+                    State::fetch: {
+                        if o_mem_valid && i_mem_ready {
+                            instr = i_mem_rdata;
+                            state = State::execute;
+                        } else if irq_take {
+                            csr_mepc     = {pc[31:2], 2'b00};
+                            csr_mcause   = irq_cause;
+                            csr_mtval    = 32'h0;
+                            csr_mpie_bit = csr_mie_bit;
+                            csr_mie_bit  = 1'b0;
+                            csr_mpp      = priv;
+                            priv         = RvPkg::PRIV_M;
+                            pc           = irq_vector;
+                        } else if !pmp_fetch_ok {
+                            csr_mepc     = {pc[31:2], 2'b00};
+                            csr_mcause   = 32'h1; // instruction access fault
+                            csr_mtval    = pc;
+                            csr_mpie_bit = csr_mie_bit;
+                            csr_mie_bit  = 1'b0;
+                            csr_mpp      = priv;
+                            priv         = RvPkg::PRIV_M;
+                            pc           = {csr_mtvec[31:2], 2'b00};
+                        }
                     }
-                }
-                State::execute: {
-                    if w_exc {
-                        csr_mepc     = {pc[31:2], 2'b00};
-                        csr_mcause   = w_cause;
-                        csr_mtval    = w_tval;
-                        csr_mpie_bit = csr_mie_bit;
-                        csr_mie_bit  = 1'b0;
-                        csr_mpp      = priv;
-                        priv         = RvPkg::PRIV_M;
-                        pc           = {csr_mtvec[31:2], 2'b00};
-                        state        = State::fetch;
-                    } else if is_div {
-                        // Nothing else in a divide has a side effect, so the
-                        // whole execute body is skipped: only the divider is
-                        // primed, and the writeback happens on the way out of
-                        // State::divide.
-                        div_b     = div_b_abs;
-                        div_neg_q = 1'b0;
-                        div_neg_r = 1'b0;
-                        if rs2_val == 32'h0 {
-                            div_q   = 32'hffff_ffff;
-                            div_rem = rs1_val;
-                            div_cnt = 6'd0;
-                        } else if !funct3[0] && rs1_val == 32'h8000_0000 && rs2_val == 32'hffff_ffff {
-                            // signed overflow: DIV/REM of INT_MIN by -1
-                            div_q   = 32'h8000_0000;
-                            div_rem = 32'h0;
-                            div_cnt = 6'd0;
+                    State::execute: {
+                        if w_exc {
+                            csr_mepc     = {pc[31:2], 2'b00};
+                            csr_mcause   = w_cause;
+                            csr_mtval    = w_tval;
+                            csr_mpie_bit = csr_mie_bit;
+                            csr_mie_bit  = 1'b0;
+                            csr_mpp      = priv;
+                            priv         = RvPkg::PRIV_M;
+                            pc           = {csr_mtvec[31:2], 2'b00};
+                            state        = State::fetch;
+                        } else if is_div {
+                            // Nothing else in a divide has a side effect, so the
+                            // whole execute body is skipped: only the divider is
+                            // primed, and the writeback happens on the way out of
+                            // State::divide.
+                            div_b     = div_b_abs;
+                            div_neg_q = 1'b0;
+                            div_neg_r = 1'b0;
+                            if rs2_val == 32'h0 {
+                                div_q   = 32'hffff_ffff;
+                                div_rem = rs1_val;
+                                div_cnt = 6'd0;
+                            } else if !funct3[0] && rs1_val == 32'h8000_0000 && rs2_val == 32'hffff_ffff {
+                                // signed overflow: DIV/REM of INT_MIN by -1
+                                div_q   = 32'h8000_0000;
+                                div_rem = 32'h0;
+                                div_cnt = 6'd0;
+                            } else {
+                                div_q     = div_a_abs;
+                                div_rem   = 32'h0;
+                                div_cnt   = 6'd32;
+                                div_neg_q = !funct3[0] && (rs1_val[31] ^ rs2_val[31]);
+                                div_neg_r = !funct3[0] && rs1_val[31];
+                            }
+                            state = State::divide;
                         } else {
-                            div_q     = div_a_abs;
-                            div_rem   = 32'h0;
-                            div_cnt   = 6'd32;
-                            div_neg_q = !funct3[0] && (rs1_val[31] ^ rs2_val[31]);
-                            div_neg_r = !funct3[0] && rs1_val[31];
-                        }
-                        state = State::divide;
-                    } else {
-                        if w_wb_en && rd != 5'h0 {
-                            rf[rd] = w_wb_data;
-                        }
-                        if w_csr_we {
-                            if csr_addr == 12'h300 {
-                                csr_mie_bit  = csr_wv[3];
-                                csr_mpie_bit = csr_wv[7];
-                                // MPP is WARL: only M (11) and U (00) exist,
-                                // so any other encoding folds down to U.
-                                csr_mpp = csr_wv[12:11] == 2'b11;
-                            } else if csr_addr == 12'h306 {
-                                csr_mcnten = csr_wv & 32'h0000_0007;
-                            } else if csr_addr == 12'h304 {
-                                csr_mie = csr_wv & 32'h0000_0888;
-                            } else if csr_addr == 12'h305 {
-                                csr_mtvec = csr_wv;
-                            } else if csr_addr == 12'h320 {
-                                csr_minhibit = csr_wv & 32'h0000_0005;
-                            } else if csr_addr == 12'h340 {
-                                csr_mscratch = csr_wv;
-                            } else if csr_addr == 12'h341 {
-                                csr_mepc = {csr_wv[31:2], 2'b00};
-                            } else if csr_addr == 12'h342 {
-                                csr_mcause = csr_wv;
-                            } else if csr_addr == 12'h343 {
-                                csr_mtval = csr_wv;
-                            } else if csr_addr[11:2] == 10'h0e8 {
-                                // Reserved bits read as zero; locked bytes
-                                // ignore writes until reset. Words that do not
-                                // exist match no iteration, so the write is
-                                // dropped.
-                                for w in 0..PMP_CFG_WORDS {
-                                    if {30'h0, csr_addr[1:0]} == w {
-                                        for j in 0..4 {
-                                            if !csr_pmpcfg[w][8 * j + 7] {
-                                                csr_pmpcfg[w][8 * j+:8] = csr_wv[8 * j+:8] & 8'h9f;
+                            if w_wb_en && !w_mem_issue && rd != 5'h0 {
+                                rf[rd] = w_wb_data;
+                            }
+                            if w_csr_we {
+                                if csr_addr == 12'h300 {
+                                    csr_mie_bit  = csr_wv[3];
+                                    csr_mpie_bit = csr_wv[7];
+                                    // MPP is WARL: only M (11) and U (00) exist,
+                                    // so any other encoding folds down to U.
+                                    csr_mpp = csr_wv[12:11] == 2'b11;
+                                } else if csr_addr == 12'h306 {
+                                    csr_mcnten = csr_wv & 32'h0000_0007;
+                                } else if csr_addr == 12'h304 {
+                                    csr_mie = csr_wv & 32'h0000_0888;
+                                } else if csr_addr == 12'h305 {
+                                    csr_mtvec = csr_wv;
+                                } else if csr_addr == 12'h320 {
+                                    csr_minhibit = csr_wv & 32'h0000_0005;
+                                } else if csr_addr == 12'h340 {
+                                    csr_mscratch = csr_wv;
+                                } else if csr_addr == 12'h341 {
+                                    csr_mepc = {csr_wv[31:2], 2'b00};
+                                } else if csr_addr == 12'h342 {
+                                    csr_mcause = csr_wv;
+                                } else if csr_addr == 12'h343 {
+                                    csr_mtval = csr_wv;
+                                } else if csr_addr[11:2] == 10'h0e8 {
+                                    // Reserved bits read as zero; locked bytes
+                                    // ignore writes until reset. Words that do not
+                                    // exist match no iteration, so the write is
+                                    // dropped.
+                                    for w in 0..PMP_CFG_WORDS {
+                                        if {30'h0, csr_addr[1:0]} == w {
+                                            for j in 0..4 {
+                                                if !csr_pmpcfg[w][8 * j + 7] {
+                                                    csr_pmpcfg[w][8 * j+:8] = csr_wv[8 * j+:8] & 8'h9f;
+                                                }
                                             }
                                         }
                                     }
-                                }
-                            } else if csr_addr[11:4] == 8'h3b {
-                                if !pmp_addr_locked {
-                                    for i in 0..PMP_ENTRIES {
-                                        if {28'h0, csr_addr[3:0]} == i {
-                                            csr_pmpaddr[i] = csr_wv;
+                                } else if csr_addr[11:4] == 8'h3b {
+                                    if !pmp_addr_locked {
+                                        for i in 0..PMP_ENTRIES {
+                                            if {28'h0, csr_addr[3:0]} == i {
+                                                csr_pmpaddr[i] = csr_wv;
+                                            }
                                         }
                                     }
+                                } else if csr_addr == 12'hb00 {
+                                    csr_mcycle[31:0] = csr_wv;
+                                } else if csr_addr == 12'hb80 {
+                                    csr_mcycle[63:32] = csr_wv;
+                                } else if csr_addr == 12'hb02 {
+                                    csr_minstret[31:0] = csr_wv;
+                                } else if csr_addr == 12'hb82 {
+                                    csr_minstret[63:32] = csr_wv;
                                 }
-                            } else if csr_addr == 12'hb00 {
-                                csr_mcycle[31:0] = csr_wv;
-                            } else if csr_addr == 12'hb80 {
-                                csr_mcycle[63:32] = csr_wv;
-                            } else if csr_addr == 12'hb02 {
-                                csr_minstret[31:0] = csr_wv;
-                            } else if csr_addr == 12'hb82 {
-                                csr_minstret[63:32] = csr_wv;
+                                // misa / mip / tselect: writes ignored
                             }
-                            // misa / mip / tselect: writes ignored
-                        }
-                        if w_is_mret {
-                            csr_mie_bit  = csr_mpie_bit;
-                            csr_mpie_bit = 1'b1;
-                            priv         = csr_mpp;
-                            csr_mpp      = RvPkg::PRIV_U;
-                        }
-                        if w_lr_set {
-                            lr_valid = 1'b1;
-                            lr_addr  = w_ea;
-                        }
-                        if w_sc {
-                            lr_valid = 1'b0;
-                        }
-                        if w_mem_issue {
-                            q_rd      = rd;
-                            q_funct3  = funct3;
-                            q_addr    = w_mem_addr;
-                            q_off     = w_mem_addr[1:0];
-                            q_wdata   = w_mem_wdata;
-                            q_wstrb   = w_mem_wstrb;
-                            q_wdata2  = w_wdata2;
-                            q_wstrb2  = w_wstrb2;
-                            q_need2   = w_need2;
-                            q_lo      = 32'h0;
-                            q_is_load = w_is_load;
-                            q_is_amo  = w_is_amo;
-                            q_amo_op  = funct5;
-                            q_rs2val  = rs2_val;
-                            state     = State::mem_access;
-                        } else {
-                            pc    = w_next_pc;
-                            state = State::fetch;
+                            if w_is_mret {
+                                csr_mie_bit  = csr_mpie_bit;
+                                csr_mpie_bit = 1'b1;
+                                priv         = csr_mpp;
+                                csr_mpp      = RvPkg::PRIV_U;
+                            }
+                            if w_sc {
+                                lr_valid = 1'b0;
+                            }
+                            if w_mem_issue {
+                                q_rd      = rd;
+                                q_funct3  = funct3;
+                                q_addr    = w_mem_addr;
+                                q_off     = w_mem_addr[1:0];
+                                q_wdata   = w_mem_wdata;
+                                q_wstrb   = w_mem_wstrb;
+                                q_wdata2  = w_wdata2;
+                                q_wstrb2  = w_wstrb2;
+                                q_need2   = w_need2;
+                                q_lo      = 32'h0;
+                                q_is_load = w_is_load;
+                                q_is_amo  = w_is_amo;
+                                q_is_lr   = w_lr_set;
+                                q_is_sc   = w_sc;
+                                q_amo_op  = funct5;
+                                q_rs2val  = rs2_val;
+                                state     = State::mem_access;
+                            } else {
+                                pc    = w_next_pc;
+                                state = State::fetch;
+                            }
                         }
                     }
-                }
-                State::mem_access: {
-                    if i_mem_ready {
-                        if q_is_amo {
-                            if q_rd != 5'h0 {
-                                rf[q_rd] = i_mem_rdata;
+                    State::mem_access: {
+                        if i_mem_ready {
+                            if q_is_amo {
+                                q_lo    = i_mem_rdata;
+                                q_wdata = amo_result;
+                                q_wstrb = 4'b1111;
+                                state   = State::amo_write;
+                            } else if q_need2 {
+                                q_lo  = i_mem_rdata;
+                                state = State::mem_access2;
+                            } else {
+                                if q_is_lr {
+                                    lr_valid = 1'b1;
+                                    lr_addr  = q_addr;
+                                }
+                                if q_is_sc && q_rd != 5'h0 {
+                                    rf[q_rd] = 32'h0;
+                                }
+                                if q_is_load && q_rd != 5'h0 {
+                                    rf[q_rd] = load_val;
+                                }
+                                pc    = pc + 32'h4;
+                                state = State::fetch;
                             }
-                            q_wdata = amo_result;
-                            q_wstrb = 4'b1111;
-                            state   = State::amo_write;
-                        } else if q_need2 {
-                            q_lo  = i_mem_rdata;
-                            state = State::mem_access2;
-                        } else {
+                        }
+                    }
+                    State::mem_access2: {
+                        if i_mem_ready {
                             if q_is_load && q_rd != 5'h0 {
                                 rf[q_rd] = load_val;
                             }
@@ -1197,45 +1234,39 @@ module Core #(
                             state = State::fetch;
                         }
                     }
-                }
-                State::mem_access2: {
-                    if i_mem_ready {
-                        if q_is_load && q_rd != 5'h0 {
-                            rf[q_rd] = load_val;
+                    State::amo_write: {
+                        if i_mem_ready {
+                            if q_rd != 5'h0 {
+                                rf[q_rd] = q_lo;
+                            }
+                            pc    = pc + 32'h4;
+                            state = State::fetch;
                         }
-                        pc    = pc + 32'h4;
-                        state = State::fetch;
                     }
-                }
-                State::amo_write: {
-                    if i_mem_ready {
-                        pc    = pc + 32'h4;
-                        state = State::fetch;
-                    }
-                }
-                State::divide: {
-                    if div_cnt == 6'd0 {
-                        // instr and pc are untouched throughout the divide, so
-                        // the execute-stage decode is still valid here and the
-                        // ordinary writeback path applies. w_wb_data is md_res,
-                        // which now reads the divider's result registers.
-                        //
-                        // The execute path's w_wb_en test is not repeated: this
-                        // state is only entered for a divide, and the OP decode
-                        // asserts w_wb_en for every one of them.
-                        if rd != 5'h0 {
-                            rf[rd] = w_wb_data;
+                    State::divide: {
+                        if div_cnt == 6'd0 {
+                            // instr and pc are untouched throughout the divide, so
+                            // the execute-stage decode is still valid here and the
+                            // ordinary writeback path applies. w_wb_data is md_res,
+                            // which now reads the divider's result registers.
+                            //
+                            // The execute path's w_wb_en test is not repeated: this
+                            // state is only entered for a divide, and the OP decode
+                            // asserts w_wb_en for every one of them.
+                            if rd != 5'h0 {
+                                rf[rd] = w_wb_data;
+                            }
+                            pc    = w_next_pc;
+                            state = State::fetch;
+                        } else {
+                            div_q   = {div_q[30:0], div_ge};
+                            div_rem = div_nrem;
+                            div_cnt = div_cnt - 6'd1;
                         }
-                        pc    = w_next_pc;
-                        state = State::fetch;
-                    } else {
-                        div_q   = {div_q[30:0], div_ge};
-                        div_rem = div_nrem;
-                        div_cnt = div_cnt - 6'd1;
                     }
-                }
-                default: {
-                    state = State::fetch;
+                    default: {
+                        state = State::fetch;
+                    }
                 }
             }
         }

@@ -25,6 +25,7 @@ module Soc #(
     o_mem_wdata: output logic<32>,
     i_mem_rdata: input  logic<32>,
     i_mem_ready: input  logic    ,
+    i_mem_error: input  logic    ,
 
     /// One-cycle pulse per mtime increment (the platform's real-time reference).
     i_mtime_tick: input logic,
@@ -89,12 +90,13 @@ module Soc #(
         i_clk: i_clk,
         i_rst: i_rst,
 
-        o_mem_valid: c_mem_valid,
-        o_mem_addr : c_mem_addr ,
-        o_mem_wstrb: c_mem_wstrb,
-        o_mem_wdata: c_mem_wdata,
-        i_mem_rdata: c_mem_rdata,
-        i_mem_ready: c_mem_ready,
+        o_mem_valid: c_mem_valid              ,
+        o_mem_addr : c_mem_addr               ,
+        o_mem_wstrb: c_mem_wstrb              ,
+        o_mem_wdata: c_mem_wdata              ,
+        i_mem_rdata: c_mem_rdata              ,
+        i_mem_ready: c_mem_ready              ,
+        i_mem_error: i_mem_error && !local_sel,
 
         i_irq_timer: irq_timer,
         i_irq_soft : irq_soft ,

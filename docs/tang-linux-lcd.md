@@ -61,16 +61,17 @@ DDRと周辺回路の検証完了は、限定した独立診断の成功だけ�
 | DDRコマンド間隔・周期refresh | controllerモデルのコマンド監視、保持診断。全容量走査中にもrefresh継続が必要 |
 | 全128 MiB・全word・両極性 | 3 word校正窓でmixed patternが396 MHzで3回、324 MHzで2回一致。従来patternも修正後の396 MHz版で一致。いずれもCPUを含まない独立診断 |
 | 部分書込み・word lane・隣接word保持 | 単体・結合試験、既存DM診断とwordポート独立実機診断 |
-| 範囲外・非整列・timeout・後続要求 | ポート/controller結合試験。CPUアクセス例外への変換は未実装 |
+| 範囲外・非整列・timeout・後続要求 | ポート/controller結合試験。CPUアクセス例外の応答注入試験も追加済み。両者を接続した検証が残る |
 | CDCの要求保持・応答一対一・reset取消し | 3クロック比の結合試験、停止clockでのreset試験、独立実機word診断 |
-| Coreを含むDDRアクセス | 未接続。AMO/分割アクセスの失敗処理、CPUからの継続アクセスが残る |
+| Coreを含むDDRアクセス | 未接続。AMO/SCの遅延確定と分割アクセス失敗を個別検証済み。CPUからDDRへの継続アクセスが残る |
 | 配置配線・実機再現性 | 各公開bitstreamの制約・setup/hold結果・SHA256・繰返し実行結果を記録する |
 | 再現手順・自動試験・PR | 試験をmake/CIへ組込み、実装状態と未検証範囲をREADME・本書・PRで一致させる |
 
 1. DDR controllerの単体・独立実機検証は下記のとおり完了した。
    応答待ち中にもrefresh期限を守ること、timeoutやreset時の扱いを検証した。
-2. wordポートとCDCの独立実機診断は完了した。次はCPUアクセス例外を実装してCPUバスへ接続し、
+2. wordポートとCDCの独立実機診断、CPUアクセス例外の個別試験は完了した。次はCPUバスへ接続し、
    可変レイテンシ、byte strobe、境界アクセスを検証する。
+   fetch応答待ち中の割込みでも要求を取消さず、応答と命令PCを対応させることも確認する。
    接続後に全容量走査と継続アクセスを実機で確認する。
 3. UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、Linuxの`/init`到達を確認する。
 
@@ -78,6 +79,32 @@ LCDのframebuffer/DMA、fbconによるbootlog、Linuxユーザプロセスによ
 Linux実機起動後の段階として扱う。
 
 ## 要求・応答型DDR controller (2026-10-05)
+
+### CPU側のエラー応答契約
+
+`Core`と`Soc`の`i_mem_error`は、`o_mem_valid && i_mem_ready`の応答時だけ有効である。
+命令fetchはcause 1、load/LRはcause 5、store/SC/AMO（read段階を含む）はcause 7へ変換する。
+失敗した命令はretireせず、`minstret`も増やさない。`mepc`は命令PC、`mtval`は失敗した
+データアドレスを保持する。分割アクセスの後半では次の整列wordのアドレスを記録する。
+これは[RISC-V privileged specificationのmtval規定](https://docs.riscv.org/reference/isa/priv/machine.html)に基づく。
+分割storeの前半が成功した後のエラーは、前半のメモリ更新を取り消さない。
+
+AMOの旧値とSCの成功値は書込み成功後にだけdestinationへ反映する。LRのreservationは
+読出し成功時に設定し、SC発行時とバスエラー時に解除する。CLINT/PLICへのSoC内部アクセスは
+外部error入力から独立する。既存`FpgaSoc`ではerrorを0へ固定しており、DDRとの物理接続は残る。
+
+`make core-bus-error-test`はfetch/load/store、分割の前半・後半、LR、SC、AMOのread/write失敗と
+成功、ready前のerror、trap後の実行再開、SoC内部アクセスを検査する。`make cov-test`からも
+実行し、通常の命令試験とともにカバレッジへ集計する。CPU変更の検証完了には、これに加えて
+`make all`と`make linux-boot`の回帰を通す。
+
+2026-10-06の応答注入試験は、上記に加えて未完了load・分割後半・AMO write中のreset、
+要求のない周期のerrorも確認した。riscv-testsは76件、Spike照合は77件すべて成功。
+カバレッジの未到達数はline 4、branch 1、expression 13で既存の許容数内だった。
+Linux回帰は`/init`、Mandelbrot、donutの24 frame描画、SYSCON poweroffまで到達した
+（854,021,016 cycle、300,417,048 retire）。これはシミュレーション結果であり、Linux実機起動ではない。
+
+### burst要求と応答
 
 `DdrBurstController`は初期化とtrainingが完了したPHYへ、任意のBL8要求を1件ずつ発行する。
 各要求の終了時にall-bank PRECHARGEし、tRP待機後に応答する。rowを開いたままにする

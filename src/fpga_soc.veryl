@@ -208,6 +208,7 @@ module FpgaSoc #(
         o_mem_wdata: mem_wdata,
         i_mem_rdata: mem_rdata,
         i_mem_ready: mem_ready,
+        i_mem_error: 1'b0     ,
 
         i_mtime_tick: tick    ,
         i_irq_src   : uart_irq,
