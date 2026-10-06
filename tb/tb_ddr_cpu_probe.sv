@@ -96,6 +96,9 @@ module tb_ddr_cpu_probe;
         end
     end
     initial begin
+        // Reset the entire CPU/CDC/controller path with a READ response pending.
+        repeat (8) @(negedge cpu_clk); rst=0;
+        wait(pending>0); @(negedge clk); rst=1;
         for (mode=0; mode<4; mode++) begin
             rst=1; repeat (8) @(negedge cpu_clk); rst=0;
             wait(done); @(negedge cpu_clk);

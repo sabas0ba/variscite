@@ -142,7 +142,8 @@ Coreのfetchは最初の要求cycleをラッチし、応答までvalid/address�
 `make ddr-cpu-probe-test`は実際のCore・ROM・wordポート・CDC・controllerを接続し、
 DDRコマンド境界のBL8モデルで検証する。正常、データ破損、load timeout、DDR命令fetch timeoutの
 4ケースが成功した。書込みのアドレス・データ・mask、逆順READ、ACTからアクセスまでの間隔、
-PREの間隔、REF間隔315 controller cycle以内も検査する。CPU firmwareと結果レジスタは
+PREの間隔、REF間隔315 controller cycle以内も検査する。READ応答待ち中の共通resetと
+CPU・CDC・controllerの再実行も通過した。CPU firmwareと結果レジスタは
 wordポート試験と共通であり、実機のために期待データをRTLから供給する経路は追加しない。
 
 実機用`TangDdrCpuTop`は396/99 MHz、受信遅延−6 tap、3 word校正窓を使う。
@@ -163,7 +164,24 @@ wordポート試験と共通であり、実機のために期待データをRTL�
 `20261006-133625-DdrCpu`でCPUによる全容量mixed pattern・反転値の照合と、DDR上の2命令の
 実行・ROMへの復帰が成功した。終端は`!A0000000000000000`、所要332.804秒。
 初回FTDI reset errorは既存の再試行で回復した。LCD復帰とUART検査も成功した。
-CPU経由の部分書込み・境界アクセスと、独立再書込みによる再現性の検証は継続する。
+同一bitstreamの再書込み`20261006-134257-DdrCpu`も成功し、終端は同じ、所要332.784秒だった。
+独立書込み2回で全容量一致とDDR命令実行を確認し、いずれもLCD復帰・UART検査が成功した。
+CPU経由の部分書込み・境界アクセスの検証は継続する。
+
+CPUアクセス幅・境界の追加診断では、全容量ROMとは別のROMイメージを使い、同じCPU/controller/PHY経路で
+次を確認する。これらは現在の全容量診断の合格条件にはまだ含まれていない。
+
+| 追加ケース | 確認する結果 |
+| --- | --- |
+| BL8内の全16 byte位置へのSB | 書き換えたbyteのみ変化し、他byteと前後のguard wordが保持される |
+| 各offsetへのSH/SW、LH/LHU/LW | 非整列・word境界・BL8境界を含む分割アクセスと読出し形式が一致する |
+| 容量末尾の有効な分割アクセス | `0x87fffffb`からのwordが一致し、最後の有効byteまで正しく更新される |
+| 容量末尾を越えるload/store | 後半の`0x88000000`でcause 5/7、mtvalは失敗部分。先に完了したstore部分は保持される |
+| 範囲外load/store/fetch/AMO | cause 5/7/1/7、正しいmtval、handlerからの復帰。物理DDR要求を出さない |
+| LR/SC・AMO | 成功SCと予約なしSC、AMOの旧値と更新値、guard保持 |
+
+同じROMをcommand-levelモデルで先に検証し、正常時に加えデータ破損・read timeoutも検出させる。
+全容量診断で確認済みの128 MiB走査・refresh・DDR命令実行を、この追加診断で置き換えない。
 
 `DdrBurstController`は初期化とtrainingが完了したPHYへ、任意のBL8要求を1件ずつ発行する。
 各要求の終了時にall-bank PRECHARGEし、tRP待機後に応答する。rowを開いたままにする

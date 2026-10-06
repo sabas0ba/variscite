@@ -24,7 +24,7 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | DDR全128 MiB走査 | 独立診断で実機確認済み | 3 word校正窓でmixed pattern／反転値が396/99 MHzで3回、324/81 MHzで2回一致。アドレスXOR／反転値も修正後の396/99 MHz版で一致 |
 | DDR burst controller | 単体試験・独立診断で実機確認済み | 要求とrefreshの仲裁、応答保持、timeout/reset。32箇所への書込みと100 ms保持後の読戻し |
 | DDR wordポート・CDC | 独立診断で実機確認済み | 27 MHz要求→99 MHz controllerで32 wordを書込み、100 ms保持後に読戻し。範囲外拒否・error伝達はシミュレーション検証 |
-| CPUからDDR3への接続 | 全容量・命令実行を実機確認済み | Core・ROM・CDC・controller・PHYを接続。CPUで全128 MiBのmixed/反転値とDDR上の命令実行が成功。CPU経由の部分書込み・境界アクセスと再現性の検証を継続 |
+| CPUからDDR3への接続 | 全容量・命令実行を実機確認済み | Core・ROM・CDC・controller・PHYを接続。CPUで全128 MiBのmixed/反転値とDDR上の命令実行が独立書込み2回成功。CPU経由の部分書込み・境界アクセスの検証を継続 |
 | Linux実機起動・LCD bootlog・GUI | 未実装 | カーネル転送、実機ブート、framebuffer/DMA、fbcon、GUIを順に追加する |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
