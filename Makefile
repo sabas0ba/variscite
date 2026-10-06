@@ -146,7 +146,18 @@ ddr-word-probe-test: veryl-build ddr-full-probe-test
 	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_word_probe.sv
 	sim/obj_ddr_word_probe/tb_ddr_word_probe
 
-ddr-controller-probe-test: veryl-build ddr-word-probe-test ddr-cpu-port-test
+.PHONY: ddr-cpu-probe-test
+ddr-cpu-probe-test: veryl-build
+	FULL_WORDS=64 HOLD_CYCLES=1000 OUTPUT_NAME=ddr_cpu_test bash scripts/build_ddr_cpu.sh
+	verilator --binary --timing -Wno-fatal --top-module tb_ddr_cpu_probe \
+	    -Mdir sim/obj_ddr_cpu_probe -o ddr_cpu_probe \
+	    $(RTL) target/ram.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_cpu_port.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_cpu_probe.sv \
+	    tb/tb_ddr_cpu_probe.sv
+	sim/obj_ddr_cpu_probe/ddr_cpu_probe
+
+ddr-controller-probe-test: veryl-build ddr-word-probe-test ddr-cpu-port-test ddr-cpu-probe-test
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_controller_probe \
 	    -Mdir sim/obj_ddr_controller_probe -o tb_ddr_controller_probe \
 	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_controller_probe.sv tb/tb_ddr_controller_probe.sv

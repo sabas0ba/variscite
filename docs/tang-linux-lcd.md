@@ -63,7 +63,7 @@ DDRと周辺回路の検証完了は、限定した独立診断の成功だけ�
 | 部分書込み・word lane・隣接word保持 | 単体・結合試験、既存DM診断とwordポート独立実機診断 |
 | 範囲外・非整列・timeout・後続要求 | ポート/controller結合試験。CPUアクセス例外の応答注入試験も追加済み。両者を接続した検証が残る |
 | CDCの要求保持・応答一対一・reset取消し | 3クロック比の結合試験、停止clockでのreset試験、独立実機word診断 |
-| Coreを含むDDRアクセス | Core・ROM・wordポート・CDCを接続した診断が3クロック比で成功。burst境界はメモリモデル。controller/PHYとの結合と実機確認が残る |
+| Coreを含むDDRアクセス | Core・ROM・CDC・controller・PHYを接続し、全容量mixed/反転値とDDR命令実行が実機成功。CPU経由の部分書込み・境界アクセスと繰返しを継続 |
 | 配置配線・実機再現性 | 各公開bitstreamの制約・setup/hold結果・SHA256・繰返し実行結果を記録する |
 | 再現手順・自動試験・PR | 試験をmake/CIへ組込み、実装状態と未検証範囲をREADME・本書・PRで一致させる |
 
@@ -71,8 +71,8 @@ DDRと周辺回路の検証完了は、限定した独立診断の成功だけ�
    応答待ち中にもrefresh期限を守ること、timeoutやreset時の扱いを検証した。
 2. wordポートとCDCの独立実機診断、CPUアクセス例外の個別試験は完了した。Coreとwordポートを
    接続した診断は、burst境界のメモリモデルで3クロック比すべて成功した。fetch応答待ち中の割込みは
-   要求を取り消さず、応答と命令PCを対応させる。次はcontroller/PHYへ接続し、可変レイテンシ、
-   byte strobe、境界アクセスと全容量走査をCPU経由で実機検証する。
+   要求を取り消さず、応答と命令PCを対応させる。controller/PHYへ接続したCPU全容量走査と
+   DDR命令実行も実機で成功した。CPU経由のbyte strobe・境界アクセスと繰返しを継続する。
 3. UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、Linuxの`/init`到達を確認する。
 
 LCDのframebuffer/DMA、fbconによるbootlog、LinuxユーザプロセスによるGUIは、
@@ -109,7 +109,8 @@ Linux回帰は`/init`、Mandelbrot、donutの24 frame描画、SYSCON poweroffま
 `DdrCpuPort`はPMP 4 entryの`Soc`、4 KiB boot ROM、結果レジスタ、`DdrWordPort`を接続する。
 boot ROMは`0x1000..0x1fff`で、DDRのburst要求・応答はモジュール境界へ出す。
 現時点の結合試験はこの境界に待ち時間とbackpressureを持つメモリモデルを接続している。
-`DdrBurstController`・PHYを含む実機への組込みは次段階である。
+`DdrCpuProbe`はこのburst境界を`DdrBurstController`へ接続する。
+PHYを含む実機用回路も配置配線・タイミングを満たし、下記の全容量試験が成功した。
 
 ROMプログラム`fpga/firmware/ddr_cpu.S`は、CPU命令でmixed patternと反転値を書込み、保持後に
 逆順で照合する。その後DDRへ2命令を書き、DDRからfetch・実行してROMへ戻ることを確認する。
@@ -137,6 +138,32 @@ Coreのfetchは最初の要求cycleをラッチし、応答までvalid/address�
 成功・失敗の両ケースを`core-bus-error-test`で検証する。
 
 ### burst要求と応答
+
+`make ddr-cpu-probe-test`は実際のCore・ROM・wordポート・CDC・controllerを接続し、
+DDRコマンド境界のBL8モデルで検証する。正常、データ破損、load timeout、DDR命令fetch timeoutの
+4ケースが成功した。書込みのアドレス・データ・mask、逆順READ、ACTからアクセスまでの間隔、
+PREの間隔、REF間隔315 controller cycle以内も検査する。CPU firmwareと結果レジスタは
+wordポート試験と共通であり、実機のために期待データをRTLから供給する経路は追加しない。
+
+実機用`TangDdrCpuTop`は396/99 MHz、受信遅延−6 tap、3 word校正窓を使う。
+固定開発コンテナで`bash scripts/build_ddr_cpu.sh`、固定GOWINコンテナで
+`DDR_CPU=1 bash scripts/build_ddr_mpr.sh`を実行する。
+出力は`sim/fpga/ddr_cpu/impl/pnr/ddr_cpu.fs`、制約は`ddr_cpu_probe.sdc`である。
+実機試験は`test-ddr-init-board.ps1 -Mode DdrCpu`を使い、最長1,800秒で終端フレームを待ち、
+成否にかかわらず既知のLCD SoCへ復帰する。
+
+最初の配置配線ではsetup違反121 endpoint、hold違反0となり、実機へは書き込まなかった。
+主な経路は初期化の`elapsed + 1 >= CYCLES`だったため、正の待ち時間という既存契約のもとで
+`elapsed >= CYCLES - 1`へ変更した。待ち時間を変えずに加算と比較を分離し、短縮設定・実時間設定の
+初期化試験各9 scenarioとCPU/controller結合試験が通過した。再配置配線はsetup/hold違反0件となった。
+使用量はLUT 11,363、ALU 1,188、register 3,924。実機用bitstream SHA256は
+`bdeefaa32a29e23742dc8839177e6691005398f920096bdf6e58afc95175d442`、
+取り込んだ全容量ROMのSHA256は
+`d0ffb0f78f294c17879cc63b0a647d151b4e7b50d115c1ec5434a63f2d079eff`。
+`20261006-133625-DdrCpu`でCPUによる全容量mixed pattern・反転値の照合と、DDR上の2命令の
+実行・ROMへの復帰が成功した。終端は`!A0000000000000000`、所要332.804秒。
+初回FTDI reset errorは既存の再試行で回復した。LCD復帰とUART検査も成功した。
+CPU経由の部分書込み・境界アクセスと、独立再書込みによる再現性の検証は継続する。
 
 `DdrBurstController`は初期化とtrainingが完了したPHYへ、任意のBL8要求を1件ずつ発行する。
 各要求の終了時にall-bank PRECHARGEし、tRP待機後に応答する。rowを開いたままにする

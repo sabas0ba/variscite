@@ -60,7 +60,7 @@ module Ddr3Startup #(
         } else {
             case state {
                 State::reset_hold: {
-                    if elapsed + 1 >= RESET_CYCLES {
+                    if elapsed >= RESET_CYCLES - 1 {
                         state   = State::release_hold;
                         elapsed = 0;
                     } else {
@@ -68,7 +68,7 @@ module Ddr3Startup #(
                     }
                 }
                 State::release_hold: {
-                    if elapsed + 1 >= RELEASE_CYCLES {
+                    if elapsed >= RELEASE_CYCLES - 1 {
                         state   = State::cke_wait;
                         elapsed = 0;
                     } else {
@@ -76,7 +76,7 @@ module Ddr3Startup #(
                     }
                 }
                 State::cke_wait: {
-                    if elapsed + 1 >= XPR_CYCLES {
+                    if elapsed >= XPR_CYCLES - 1 {
                         state   = State::mr2;
                         elapsed = 0;
                     } else {
@@ -100,28 +100,28 @@ module Ddr3Startup #(
                     elapsed = 0;
                 }
                 State::wait2: {
-                    if elapsed + 1 >= MRD_CYCLES {
+                    if elapsed >= MRD_CYCLES - 1 {
                         state = State::mr3;
                     } else {
                         elapsed = elapsed + 1;
                     }
                 }
                 State::wait3: {
-                    if elapsed + 1 >= MRD_CYCLES {
+                    if elapsed >= MRD_CYCLES - 1 {
                         state = State::mr1;
                     } else {
                         elapsed = elapsed + 1;
                     }
                 }
                 State::wait1: {
-                    if elapsed + 1 >= MRD_CYCLES {
+                    if elapsed >= MRD_CYCLES - 1 {
                         state = State::mr0;
                     } else {
                         elapsed = elapsed + 1;
                     }
                 }
                 State::wait0: {
-                    if elapsed + 1 >= MOD_CYCLES {
+                    if elapsed >= MOD_CYCLES - 1 {
                         state = State::zq;
                     } else {
                         elapsed = elapsed + 1;
@@ -132,7 +132,7 @@ module Ddr3Startup #(
                     elapsed = 0;
                 }
                 State::zq_wait: {
-                    if elapsed + 1 >= ZQ_CYCLES {
+                    if elapsed >= ZQ_CYCLES - 1 {
                         state = State::done;
                     } else {
                         elapsed = elapsed + 1;

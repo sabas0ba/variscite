@@ -548,7 +548,7 @@ module TangDdrInitProbe #(
         o_ready  : trained_ready  ,
         o_trained: _              ,
     );
-    if RUN_CONTROLLER == 3 :training_diagnostic {
+    if RUN_CONTROLLER >= 3 :training_diagnostic {
         inst capture: DdrTrainingDiagnostic (
             i_clk    : ctrl_clk            ,
             i_rst    : ready_reset         ,
@@ -647,10 +647,36 @@ module TangDdrInitProbe #(
     );
     var word_failure: 'reference logic<32>;
     var word_actual : 'reference logic<32>;
-    if RUN_CONTROLLER >= 2 :word_port_mode {
+    if RUN_CONTROLLER == 4 :cpu_mode {
+        unsafe (cdc) {
+            inst cpu_probe: DdrCpuProbe (
+                o_failure    : word_failure                   ,
+                o_actual     : word_actual                    ,
+                i_clk        : ctrl_clk                       ,
+                i_cpu_clk    : i_clk                          ,
+                i_reset      : ready_reset as reset_async_high,
+                i_enable     : controller_active              ,
+                i_read_data  : assembled_data                 ,
+                i_read_valid : assembled_valid                ,
+                o_done       : controller_done                ,
+                o_found      : controller_found               ,
+                o_cmd_valid  : controller_valid               ,
+                o_cmd        : controller_cmd                 ,
+                o_bank       : controller_bank                ,
+                o_addr       : controller_addr                ,
+                o_read       : controller_read                ,
+                o_odt        : controller_odt                 ,
+                o_data       : controller_data                ,
+                o_mask       : controller_mask                ,
+                o_dq_enable  : controller_dq_enable           ,
+                o_dqs_enable : controller_dqs_enable          ,
+                o_dqs_pattern: controller_dqs_pattern         ,
+            );
+        }
+    } else if RUN_CONTROLLER >= 2 :word_port_mode {
         unsafe (cdc) {
             inst word_probe: DdrWordProbe #(
-                FULL_WORDS: if RUN_CONTROLLER == 3 ? 33_554_432 : 0,
+                FULL_WORDS: if RUN_CONTROLLER >= 3 ? 33_554_432 : 0,
                 FULL_MIXED: FULL_MIXED                             ,
             ) (
                 o_failure    : word_failure                   ,
@@ -979,17 +1005,17 @@ module TangDdrInitProbe #(
     ;
     inst uart: TangDdrStatusUart #(
         FRAMED: if RUN_CONTROLLER != 0 ? 1 : ARRAY_ADDRESS,
-        WIDE  : if RUN_CONTROLLER == 3 ? 1 : 0,
+        WIDE  : if RUN_CONTROLLER >= 3 ? 1 : 0,
     ) (
         i_clk                                                                     ,
         i_rst         : ref_reset                                                 ,
         i_status      : status                                                    ,
         i_debug_enable: mpr_debug                                                 ,
         i_debug_extra : RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0 || RUN_ARRAY != 0,
-        i_debug0      : if RUN_CONTROLLER == 3 ? full_debug[31:24] : pattern0_ref,
-        i_debug1      : if RUN_CONTROLLER == 3 ? full_debug[23:16] : pattern1_ref,
-        i_debug2      : if RUN_CONTROLLER == 3 ? full_debug[15:8] : raw0_ref,
-        i_debug3      : if RUN_CONTROLLER == 3 ? full_debug[7:0] : raw1_ref,
+        i_debug0      : if RUN_CONTROLLER >= 3 ? full_debug[31:24] : pattern0_ref,
+        i_debug1      : if RUN_CONTROLLER >= 3 ? full_debug[23:16] : pattern1_ref,
+        i_debug2      : if RUN_CONTROLLER >= 3 ? full_debug[15:8] : raw0_ref,
+        i_debug3      : if RUN_CONTROLLER >= 3 ? full_debug[7:0] : raw1_ref,
         i_wide_data   : full_sample                                               ,
         o_tx          : normal_uart_tx                                            ,
         o_frame_index : uart_frame_index                                          ,

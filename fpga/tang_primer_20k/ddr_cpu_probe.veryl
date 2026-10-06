@@ -1,0 +1,106 @@
+/// CPU boot-ROM diagnostic connected to the DDR burst controller.
+module DdrCpuProbe #(
+    param ROM_INIT: string = "sim/ddr_cpu.hex",
+) (
+    i_cpu_clk   : input  'cpu   clock                ,
+    i_clk       : input  'mem   clock                ,
+    i_reset     : input  'async reset_async_high     ,
+    i_enable    : input  'mem   logic                ,
+    i_read_data : input  'mem   logic           <128>,
+    i_read_valid: input  'mem   logic           <2>  ,
+    o_done      : output 'mem   logic                ,
+    o_found     : output 'mem   logic                ,
+    /// First failing address, followed by actual data or trap cause.
+    o_failure    : output 'cpu logic<32> ,
+    o_actual     : output 'cpu logic<32> ,
+    o_cmd_valid  : output 'mem logic     ,
+    o_cmd        : output 'mem logic<3>  ,
+    o_addr       : output 'mem logic<14> ,
+    o_bank       : output 'mem logic<3>  ,
+    o_read       : output 'mem logic<8>  ,
+    o_odt        : output 'mem logic<4>  ,
+    o_data       : output 'mem logic<128>,
+    o_mask       : output 'mem logic<16> ,
+    o_dq_enable  : output 'mem logic<4>  ,
+    o_dqs_enable : output 'mem logic<4>  ,
+    o_dqs_pattern: output 'mem logic<8>  ,
+) {
+    var req_valid: 'mem logic     ;
+    var req_ready: 'mem logic     ;
+    var req_addr : 'mem logic<27> ;
+    var req_data : 'mem logic<128>;
+    var req_strb : 'mem logic<16> ;
+    var rsp_valid: 'mem logic     ;
+    var rsp_ready: 'mem logic     ;
+    var rsp_data : 'mem logic<128>;
+    var rsp_error: 'mem logic     ;
+    var mem_reset: 'mem reset     ;
+    var cpu_done : 'cpu logic     ;
+    var cpu_found: 'cpu logic     ;
+    #[sv("async_reg = \"true\"")]
+    var done_sync: 'mem logic<3>;
+    #[sv("async_reg = \"true\"")]
+    var found_sync: 'mem logic<2>;
+    unsafe (cdc) {
+        assign mem_reset = i_reset as reset;
+        always_ff (i_clk, i_reset) {
+            if_reset {
+                done_sync  = 0;
+                found_sync = 0;
+            } else {
+                done_sync  = {done_sync[1:0], cpu_done};
+                found_sync = {found_sync[0], cpu_found};
+            }
+        }
+    }
+    assign o_done  = done_sync[2];
+    assign o_found = o_done && found_sync[1];
+    inst cpu_platform: DdrCpuPort #(
+        ROM_INIT: ROM_INIT,
+    ) (
+        i_cpu_clk             ,
+        i_mem_clk  : i_clk    ,
+        i_reset               ,
+        i_enable              ,
+        o_done     : cpu_done ,
+        o_found    : cpu_found,
+        o_failure             ,
+        o_actual              ,
+        o_req_valid: req_valid,
+        i_req_ready: req_ready,
+        o_req_addr : req_addr ,
+        o_req_wdata: req_data ,
+        o_req_wstrb: req_strb ,
+        i_rsp_valid: rsp_valid,
+        o_rsp_ready: rsp_ready,
+        i_rsp_data : rsp_data ,
+        i_rsp_error: rsp_error,
+    );
+    inst controller: DdrBurstController (
+        i_clk                   ,
+        i_rst        : mem_reset,
+        i_enable                ,
+        i_req_valid  : req_valid,
+        o_req_ready  : req_ready,
+        i_req_addr   : req_addr ,
+        i_req_data   : req_data ,
+        i_req_strb   : req_strb ,
+        o_rsp_valid  : rsp_valid,
+        i_rsp_ready  : rsp_ready,
+        o_rsp_data   : rsp_data ,
+        o_rsp_error  : rsp_error,
+        i_read_data             ,
+        i_read_valid            ,
+        o_cmd_valid             ,
+        o_cmd                   ,
+        o_addr                  ,
+        o_bank                  ,
+        o_read                  ,
+        o_odt                   ,
+        o_data                  ,
+        o_mask                  ,
+        o_dq_enable             ,
+        o_dqs_enable            ,
+        o_dqs_pattern           ,
+    );
+}
