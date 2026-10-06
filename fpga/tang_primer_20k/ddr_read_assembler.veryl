@@ -1,4 +1,4 @@
-/// Assemble each byte lane at a configured beat offset in two adjacent words.
+/// Assemble each byte lane from two static or three dynamically trained words.
 /// No expected data enters this module. Each lane is sampled only on its RVALID.
 module DdrReadAssembler #(
     param OFFSET0: u32 = 6,
@@ -9,29 +9,41 @@ module DdrReadAssembler #(
     i_rst    : input  reset     ,
     i_data   : input  logic<128>,
     i_valid  : input  logic<2>  ,
-    i_offsets: input  logic<8>  ,
+    i_offsets: input  logic<10> ,
     o_data   : output logic<128>,
     o_valid  : output logic<2>  ,
 ) {
     var previous : logic<128>;
+    var older    : logic<128>;
     var assembled: logic<128>;
     for lane in 0..2 :lanes {
         const OFFSET  : u32        = if lane == 0 ? OFFSET0 : OFFSET1;
-        let   selected: logic<4>   = if DYNAMIC != 0 ? i_offsets[4 * lane+:4] : OFFSET as 4;
-        var   window  : logic<128>;
+        let   selected: logic<5>   = if DYNAMIC != 0 ? i_offsets[5 * lane+:5] : OFFSET as 5;
+        var   window  : logic<192>;
         for beat in 0..8 :beats {
-            assign window[8 * beat+:8]                = previous[16 * beat + 8 * lane+:8];
-            assign window[64 + 8 * beat+:8]           = i_data[16 * beat + 8 * lane+:8];
+            assign window[8 * beat+:8]                = if DYNAMIC != 0 ?
+                older[16 * beat + 8 * lane+:8]
+            :
+                previous[16 * beat + 8 * lane+:8]
+            ;
+            assign window[64 + 8 * beat+:8]           = if DYNAMIC != 0 ?
+                previous[16 * beat + 8 * lane+:8]
+            :
+                i_data[16 * beat + 8 * lane+:8]
+            ;
+            assign window[128 + 8 * beat+:8]          = i_data[16 * beat + 8 * lane+:8];
             assign assembled[16 * beat + 8 * lane+:8] = window[8 * (selected as u32 + beat)+:8];
         }
     }
     always_ff {
         if_reset {
             previous = 0;
+            older    = 0;
             o_data   = 0;
             o_valid  = 0;
         } else {
             previous = i_data;
+            older    = previous;
             o_valid  = i_valid;
             for lane in 0..2 {
                 if i_valid[lane] {

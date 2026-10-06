@@ -20,7 +20,7 @@ module TangDdrFullMixedTop (
 ) {
     inst probe: TangDdrInitProbe #(
         FULL_MIXED     : 1    ,
-        READ_TAPS      : 5'd4 ,
+        READ_TAPS      : 5'd6 ,
         READ_DECREASE  : 1    ,
         RUN_CONTROLLER : 3    ,
         ARRAY_TRAIN    : 1    ,

@@ -59,7 +59,7 @@ DDRと周辺回路の検証完了は、限定した独立診断の成功だけ�
 | --- | --- |
 | 初期化・PHY起動・lane training | 単体試験と独立実機診断。PLL/DLL異常時の復帰はシミュレーション対象 |
 | DDRコマンド間隔・周期refresh | controllerモデルのコマンド監視、保持診断。全容量走査中にもrefresh継続が必要 |
-| 全128 MiB・全word・両極性 | 従来patternは受信遅延−4/−5/−6/−8 tapで一致。ただしmixed patternでtraining失敗または不一致を検出し、調査中 |
+| 全128 MiB・全word・両極性 | 3 word校正窓でmixed patternが396 MHzで3回、324 MHzで2回一致。従来patternも修正後の396 MHz版で一致。いずれもCPUを含まない独立診断 |
 | 部分書込み・word lane・隣接word保持 | 単体・結合試験、既存DM診断とwordポート独立実機診断 |
 | 範囲外・非整列・timeout・後続要求 | ポート/controller結合試験。CPUアクセス例外への変換は未実装 |
 | CDCの要求保持・応答一対一・reset取消し | 3クロック比の結合試験、停止clockでのreset試験、独立実機word診断 |
@@ -279,7 +279,7 @@ array trainingを開始する。PLL/DLL設定、書込み位相、396/99 MHzの�
 
 #### 上位データbitも変化する追加pattern
 
-`TangDdrFullMixedTop`は受信遅延−4 tap、396/99 MHzで、全128 MiBを次の32 bit演算で
+`TangDdrFullMixedTop`は受信遅延−6 tap、396/99 MHzで、全128 MiBを次の32 bit演算で
 生成したwordと、その反転値で走査する。演算ごとに32 bitへ切り詰め、右shiftは論理shiftとする。
 
 ```text
@@ -337,9 +337,9 @@ LCD復帰・UART検査は成功。現在の比較用topはこの0 tap版であ�
 #### training中のUART診断
 
 全容量診断のcontroller開始前は、64 bit UART payloadをtrainingの観測値に使う。
-上位32 bitは`0xD3000000 | (word_index << 16) | (offsets << 8) | (trained << 4) | (valid_seen << 2) | burst_seen`。
-`trained`、`valid_seen`、`burst_seen`はいずれもlane別の2 bitであり、offsetsはlane0を下位4 bit、
-lane1を上位4 bitに格納する。各laneの最初のraw RVALIDで全8 beatを格納し、
+上位32 bitは`0xD3000000 | (word_index << 16) | (offsets << 6) | (trained << 4) | (valid_seen << 2) | burst_seen`。
+`trained`、`valid_seen`、`burst_seen`はいずれもlane別の2 bitであり、offsetsはlane0を下位5 bit、
+lane1を上位5 bitに格納する。各laneの最初のraw RVALIDで全8 beatを格納し、
 下位32 bitへ128 bit捕捉値の`word_index`番目のwordを出す。indexはフレームごとに0〜3を巡回する。
 各wordのbyte0/2がlane0、byte1/3がlane1である。lane別に捕捉するため、同一cycleの32 bit値とは限らない。
 後続のvalidやデータで最初のsampleを上書きしない。
@@ -363,9 +363,34 @@ UART試験は4 wordの順序とindexのwrapを照合する。実機スクリプ�
 `F00F0FF0 / F00F0FF0 / 96696996 / C33C3CC3`だった。両laneでburst/validを検出したが、
 校正結果は不成立である。先頭2 beatが重複し、期待patternの先頭は当該wordのbeat 2から
 始まる配置となっている。末尾の`5AA5/A55A`はこの捕捉範囲に入らない。
-現行の前cycle＋現在cycleだけの照合では、この配置の全patternを評価できない。
-次に次cycleも含む校正・組立の窓を追加し、この境界をモデル試験へ含める。
+従来の前cycle＋現在cycleだけの照合では、この配置の全patternを評価できないため、
+次cycleも含む3 word窓とlane別5 bit offsetを追加した。モデルは全17 offsetと実機の
+重複prefix（offset 10）を再現し、後続payload・不正pattern拒否・再training禁止を検査する。
+保持・refresh・byte mask・23アドレスbitの結合試験も通過した。
 setup/hold違反0件、LCD復帰とUART検査は成功した。
+
+3 word窓の324/81 MHz版（受信追加遅延なし）はSHA256
+`02d7485f05cf48521578ff3f209f6e76210d79a06952fbfa4092ac2b2bd9637e`。
+`20261006-123505-DdrFullSlow`でtrainingが成立し、全128 MiBのmixed patternと反転値の
+走査も一致した。終端は`!A0000000000000000`、所要83.798秒。
+setup/hold違反0件、LCD復帰・UART検査も成功した。
+同じ回路の再書込み`20261006-123721-DdrFullSlow`も全容量一致した（83.792秒）。
+
+396/99 MHz・受信遅延−6 tap版はSHA256
+`fa7dfdd9ed1a3cfde251b484eae8e055fa5bb1c711fd2025f974b1100b7aa742`。
+`20261006-123926-DdrFullMixed`で全128 MiBのmixed patternと反転値が一致し、
+終端は`!A0000000000000000`、所要75.426秒だった。setup/hold違反0件、
+LCD復帰・UART検査も成功。
+同一bitstreamの`20261006-124145-DdrFullMixed`と`20261006-124401-DdrFullMixed`も
+全容量一致した（いずれも75.393秒）。計3回の独立書込みで確認し、全回LCD復帰も成功。
+2回目は初回のFTDI reset errorを既存の再試行処理で回復した。
+
+従来のアドレスXOR／反転patternも、同じ3 word窓・396/99 MHz・受信遅延−6 tapで
+全容量一致した。SHA256は
+`c338915a0e3c5763a24940a63eaa192f47cb0a35e05755c2906a8343baffc639`、
+ログは`20261006-124540-DdrFullShift`、終端は`!A0000000000000000`、所要75.400秒。
+setup/hold違反0件、LCD復帰・UART検査も成功した。
+ここまでの全容量試験はCPUを含まない独立診断であり、CPU接続後の実機検証は別途行う。
 
 ### コマンドとrefresh
 
@@ -378,7 +403,8 @@ ACT後4 controller cycleでREAD/WRITEし、WRITE後10 cycleでPRECHARGE、READ�
 優先する。処理中の1要求はPRE/tRPまで完了してからREFへ進む。REF後は32 cycle（約323 ns）
 待機する。これは[Hynix資料](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf)
 page 14の1 Gbit向けIDD測定条件（nRFC=59 CK @1.875 ns等）より長く取った保守的な待機値である。
-試験ではREF間隔が384 cycle（約3.879 µs）を超えないことを監視する。
+controller単体と全容量モデルではREF間隔が315 cycleを超えないことを監視する。
+これは99 MHzで約3.182 µs、81 MHzで約3.889 µsに相当する。
 未消費の応答は独立レジスタに保持し、その間もidle/REFの処理を継続する。
 
 ### 検証と実機診断

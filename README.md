@@ -9,9 +9,10 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
 
 更新日: 2026-10-06。Linuxはシミュレーション上で起動済み。Tang Primer 20K実機では
 ベアメタルのLCD矩形表示と、独立したDDR3診断まで確認済みであり、Linux実機起動は未達である。
-DDRの全128 MiB走査は、DQS受信遅延を4 tap減らした比較回路で両極性の一致を確認した。
-−4 tapは独立起動3回、−5/−6/−8 tapも一致した。ただし追加patternでは不一致が残り、
-DDRの安定性検証は未完了である。
+DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致した。
+追加したmixed patternでは校正窓の不足を発見し、3 wordへ拡張した324 MHz版と396 MHz版で
+全容量・両極性の一致を確認した。mixed patternは396 MHzで独立書込み3回、324 MHzで2回、
+修正後の従来patternも396 MHzで1回成功した。CPU接続は未実装である。
 
 | 項目 | 状態 | 確認済みの範囲・残る作業 |
 | --- | --- | --- |
@@ -20,7 +21,7 @@ DDRの安定性検証は未完了である。
 | Tangの基本SoC・800×480 LCD | 実機動作確認済み | オンチップRAM 32 KiB、ベアメタルの矩形表示。Linuxによる描画は未実装 |
 | DDR3 PHY・初期化・読出しtraining | 独立診断で実機確認済み | Veryl実装。GOWINによる配置配線とlane別の拍位置校正 |
 | DDR3保持・部分書込み・アドレス | 限定範囲で実機確認済み | 約127 ms保持、16 byte位置のDM選択、23アドレスbitと容量末尾 |
-| DDR全128 MiB走査 | 従来patternは一致・追加patternは不一致 | 396/99 MHz、受信遅延−4/−5/−6/−8 tapでアドレスXORと反転patternが一致。上位bitも変化するmixed patternはtraining失敗またはbit不一致となり、調査中 |
+| DDR全128 MiB走査 | 独立診断で実機確認済み | 3 word校正窓でmixed pattern／反転値が396/99 MHzで3回、324/81 MHzで2回一致。アドレスXOR／反転値も修正後の396/99 MHz版で一致 |
 | DDR burst controller | 単体試験・独立診断で実機確認済み | 要求とrefreshの仲裁、応答保持、timeout/reset。32箇所への書込みと100 ms保持後の読戻し |
 | DDR wordポート・CDC | 独立診断で実機確認済み | 27 MHz要求→99 MHz controllerで32 wordを書込み、100 ms保持後に読戻し。範囲外拒否・error伝達はシミュレーション検証 |
 | CPUからDDR3への接続 | 未接続 | wordポートまで検証済み。CPU例外への変換とCoreを含む実機への組込みが残る |
@@ -32,8 +33,8 @@ DDRの測定条件、bitstream SHA256、再現手順は
 
 ## ロードマップ
 
-現在は従来patternの全容量一致に続き、追加patternで検出した不一致を調査中である。
-これを解消してからCPUバス接続とLinux実機起動の検証へ進む。
+校正窓の不足を修正し、独立診断で2種類のpatternによる全容量一致と繰返し起動を確認した。
+次はCPUアクセス例外への変換、CPUバス接続、Linux実機起動の検証へ進む。
 以下は実装順序と完了条件であり、日程の確約ではない。
 
 | 順序 | 次の成果 | 完了条件 |

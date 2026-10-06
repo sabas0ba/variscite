@@ -14,10 +14,10 @@ module tb_ddr_trained_array #(parameter MULTI = 0, parameter RETAIN = 0,
     wire [3:0] dq_enable;
     wire [3:0] odt, dqs_enable;
     wire [1:0] assembled_valid, ready, trained;
-    wire [7:0] offsets;
+    wire [9:0] offsets;
     logic [127:0] data = 0, data_pipe[2], memory[16];
     logic [127:0] written[16];
-    logic [1:0] valid = 0, valid_pipe[2];
+    logic [1:0] valid = 0, valid_pipe[3];
     logic [255:0] stream;
     int reads = 0, writes = 0, pending = 0, mode = 0;
     int activates = 0, precharges = 0, cycles = 0;
@@ -48,7 +48,7 @@ module tb_ddr_trained_array #(parameter MULTI = 0, parameter RETAIN = 0,
         .o_offsets(offsets), .o_ready(ready), .o_trained(trained)
     );
     rv32ima_DdrReadAssembler #(.DYNAMIC(1)) assembler (
-        .i_clk(clk), .i_rst(rst), .i_data(data_pipe[1]), .i_valid(valid_pipe[1] & ready),
+        .i_clk(clk), .i_rst(rst), .i_data(data_pipe[1]), .i_valid(valid_pipe[2] & ready),
         .i_offsets(offsets), .o_data(assembled), .o_valid(assembled_valid)
     );
     always @(posedge clk) begin
@@ -56,6 +56,7 @@ module tb_ddr_trained_array #(parameter MULTI = 0, parameter RETAIN = 0,
         data_pipe[1] <= rst ? 128'b0 : data_pipe[0];
         valid_pipe[0] <= rst ? 2'b0 : valid;
         valid_pipe[1] <= rst ? 2'b0 : valid_pipe[0];
+        valid_pipe[2] <= rst ? 2'b0 : valid_pipe[1];
         valid <= 0;
         data <= 0;
         if (rst) begin

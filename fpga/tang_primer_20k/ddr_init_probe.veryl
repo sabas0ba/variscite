@@ -271,8 +271,8 @@ module TangDdrInitProbe #(
     var first_captured         : 'ctrl      logic           <2>      ;
     var training_window        : 'ctrl      logic                    ;
     var assembly_data_pipe     : 'ctrl      logic           <128> [2];
-    var assembly_valid_pipe    : 'ctrl      logic           <2>   [2];
-    var trained_offsets        : 'ctrl      logic           <8>      ;
+    var assembly_valid_pipe    : 'ctrl      logic           <2>   [3];
+    var trained_offsets        : 'ctrl      logic           <10>     ;
     var trained_ready          : 'ctrl      logic           <2>      ;
     var training_status_ctrl   : 'ctrl      logic           <32>     ;
     var training_sample_ctrl   : 'ctrl      logic           <128>    ;
@@ -571,11 +571,13 @@ module TangDdrInitProbe #(
             assembly_data_pipe[1]  = 0;
             assembly_valid_pipe[0] = 0;
             assembly_valid_pipe[1] = 0;
+            assembly_valid_pipe[2] = 0;
         } else {
             assembly_data_pipe[0]  = phy_data;
             assembly_data_pipe[1]  = assembly_data_pipe[0];
             assembly_valid_pipe[0] = phy_valid;
             assembly_valid_pipe[1] = assembly_valid_pipe[0];
+            assembly_valid_pipe[2] = assembly_valid_pipe[1];
         }
     }
     inst assembler: DdrReadAssembler #(
@@ -585,7 +587,7 @@ module TangDdrInitProbe #(
         i_clk    : ctrl_clk                                                                ,
         i_rst    : ready_reset                                                             ,
         i_data   : if ARRAY_TRAIN != 0 ? assembly_data_pipe[1] : phy_data,
-        i_valid  : if ARRAY_TRAIN != 0 ? assembly_valid_pipe[1] & trained_ready : phy_valid,
+        i_valid  : if ARRAY_TRAIN != 0 ? assembly_valid_pipe[2] & trained_ready : phy_valid,
         o_data   : assembled_data                                                          ,
         o_valid  : assembled_valid                                                         ,
     );

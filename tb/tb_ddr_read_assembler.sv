@@ -10,7 +10,7 @@ module tb_ddr_read_assembler;
     logic [127:0] expected[9];
     for (genvar offset = 0; offset <= 8; offset++) begin : offsets
         rv32ima_DdrReadAssembler #(.OFFSET0(offset), .OFFSET1(8-offset)) dut (
-            .i_clk(clk), .i_rst(rst), .i_data(data), .i_valid(valid), .i_offsets(8'b0),
+            .i_clk(clk), .i_rst(rst), .i_data(data), .i_valid(valid), .i_offsets(10'b0),
             .o_data(assembled[offset]), .o_valid(out_valid[offset])
         );
     end
