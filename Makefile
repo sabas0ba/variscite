@@ -325,8 +325,11 @@ ddr-cdc-controller-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_cdc_controller \
 	    -Mdir sim/obj_ddr_cdc_controller -o tb_ddr_cdc_controller \
 	    target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv \
 	    target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_cdc_controller.sv
 	sim/obj_ddr_cdc_controller/tb_ddr_cdc_controller
+	sim/obj_ddr_cdc_controller/tb_ddr_cdc_controller +cpu_half=3 +mem_half=11
+	sim/obj_ddr_cdc_controller/tb_ddr_cdc_controller +cpu_half=13 +mem_half=2
 
 ddr-word-cdc-test: veryl-build ddr-cdc-controller-test
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_word_cdc \

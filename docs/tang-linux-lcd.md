@@ -79,7 +79,15 @@ Linux実機起動後の段階として扱う。
 | `o_rsp_data` / `o_rsp_error` | READは全128 bit、WRITEは0。非整列要求とread valid timeoutはerror=1/data=0 |
 | `i_read_data` / `i_read_valid[1:0]` | training済みassemblerのlane別応答。各laneの最初のvalidだけを採用 |
 
-CPUの絶対アドレスの範囲検査・相対化、errorのCPU例外への変換は接続側で実装する。
+CPUの絶対アドレスの範囲検査・相対化は`DdrWordPort`で行う。
+`0x80000000..0x87ffffff`内のword整列要求だけを内蔵の`DdrWordCdc`へ渡し、
+backendには27 bitの相対burst addressを出力する。範囲外または非整列の要求は
+ローカルでready=1/error=1/data=0を返し、DDR要求を発行しない。範囲検査は上位bitを
+捨てる前に行うため、`0x88000000`などがDDR先頭へaliasすることはない。
+要求元は完了までvalid/address/data/strobeを保持し、同時に発行する要求は1件とする。
+範囲エラーは組合せ応答で、共通reset中は抑制する。byte/halfword転送はword整列addressと
+byte strobeで表現し、非整列アクセスの分割はCPU側の責務とする。
+errorのCPU例外への変換は未実装である。
 `DdrWordCdc`は`i_rsp_error`を応答mailboxに保持し、CPU側の`o_ready`と同時に
 `o_error`へ伝える。`o_rsp_ready`は要求受理サイクルまたは応答待ち中だけ立つ。
 CPUコア自体にはまだ外部メモリエラー入力がなく、timeoutを正常完了として扱う接続は行わない。
@@ -88,15 +96,23 @@ CPUコア自体にはまだ外部メモリエラー入力がなく、timeoutを�
 
 ### CDCとの結合試験
 
-`make ddr-cdc-controller-test`は実際の`DdrWordCdc`と`DdrBurstController`を接続し、
+`make ddr-cdc-controller-test`は実際の`DdrWordPort`（内蔵CDC）と`DdrBurstController`を接続し、
 PHYのtraining済み読出し出力だけをテストベンチで供給する。初期化完了前の要求保持、
 4 word laneの抽出、片lane欠落によるtimeout/error伝達、後続正常読出し、
 要求・応答の一対一対応、15種類の書込みstrobeと4 word laneの組合せ、
 各部分書込み後の全4 word読戻し、要求がない期間のrefresh、READ受理後の共通resetと復帰を検査する。
 `ddr-word-cdc-test`の依存先に含め、`make all`と既存CIの両方から実行する。
-結合試験はシミュレーション限定であり、CPUコア、アドレス範囲検査、実PHYは含まない。
-strobe=0は読出しとして検証する。メモリモデルは1 burstに限定し、容量境界やbank切替は
-controller単体試験の対象とする。
+3種類のクロック比で、各334要求完了、resetによる1要求取消し、70要求のローカル拒否を検査する。
+拒否ケースは容量直前・直後、上位5 bitの全範囲外組合せのREAD/WRITE、先頭・末尾wordの
+非整列アクセスを含む。正常ケースでは相対addressのbit [26:4]と容量末尾を検査する。
+結合試験はシミュレーション限定であり、CPUコアと実PHYは含まない。
+strobe=0は読出しとして検証する。データモデルは1 burstに限定し、複数addressの独立した
+記憶内容と物理bank/row/column commandの検査はcontroller単体試験で行う。
+
+CPU例外接続では通常のload/store以外に分割アクセスの後半、AMOの読出し・書込み失敗も
+扱う必要がある。現在のCoreはAMOの読出し時点で宛先レジスタを更新するため、
+外部エラー入力を追加する際は書込み成功まで結果の確定を遅らせる変更も必要になる。
+Coreは今回変更していないため、Linux起動回帰は再実行していない。
 
 ### コマンドとrefresh
 
