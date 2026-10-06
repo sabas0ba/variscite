@@ -242,7 +242,7 @@ DQS受信遅延の変更段数、`READ_DECREASE`で減少方向を指定する�
 array trainingを開始する。PLL/DLL設定、書込み位相、396/99 MHzの周波数は変更しない。
 ビルドは`DDR_FULL_SHIFT=1 bash scripts/build_ddr_mpr.sh`、実機は`-Mode DdrFullShift`。
 この比較診断にも全128 MiB・2極性・最初の失敗後の再読出しを適用する。
-現在の比較用topは4 tap減少を指定する。通常の`TangDdrFullTop`は変更しない。
+現在の比較用topは6 tap減少を指定する。通常の`TangDdrFullTop`は変更しない。
 `ddr-mpr-delay-test`は増加方向の全走査に加え、減少方向で0→−5→−2 tapとなることを
 プリミティブ入力の独立したカウンタで検査する。
 
@@ -254,6 +254,9 @@ array trainingを開始する。PLL/DLL設定、書込み位相、396/99 MHzの�
 | −2 tap | `20261006-113532-DdrFullShift` | `!VA97B8F7AE7FE0040`、通常pass一致。反転passの`0x85EE3DE8`で期待値`0xE7BE0040`に対し`0xE7FE0040`。再読出し一致 |
 | −3 tap | `20261006-113753-DdrFullShift` | `!VA97ACF7AE7FF4040`、通常pass一致。反転passの`0x85EB3DE8`で期待値`0xE7BF4040`に対し`0xE7FF4040`。再読出し一致 |
 | −4 tap | `20261006-114045-DdrFullShift` | `!A0000000000000000`、全128 MiB・両極性一致（72.604秒） |
+| −5 tap | `20261006-114757-DdrFullShift` | `!A0000000000000000`、全128 MiB・両極性一致（72.597秒） |
+| −6 tap | `20261006-115037-DdrFullShift` | `!A0000000000000000`、全128 MiB・両極性一致（72.604秒） |
+| −8 tap | `20261006-115313-DdrFullShift` | `!A0000000000000000`、全128 MiB・両極性一致（72.604秒） |
 
 +4 tapのSHA256は`e20c510b0ffe55348a2fa3c1750d25b5fd8039bc40cd9ffd9bd70af37a026e34`、
 +1 tapは`2ce646e7cd68a166d89475588ee832a135a2907a9ce5b17fccf82db2c6252b5b`。
@@ -261,12 +264,17 @@ array trainingを開始する。PLL/DLL設定、書込み位相、396/99 MHzの�
 −2 tapは`08e91c85aed4ce781b76492f91d8efa11e0cbec099f1bd510c21b282110194ee`。
 −3 tapは`4842de129d9385fa138738dbb206fa892c05c9a7367c4523cff85bbeacbbb940`。
 −4 tapは`a2ebd649c977b6f265f5c3c435eadb3e93949d25e69875a1efb9b513910c11fa`。
+−5 tapは`9d8d08f8b257ce52ff22c1bf8fb52bf7fa0ab1df9d65ea03853b30807e4d77cf`。
+−6 tapは`ea7f52effddfcefad133938cd46f10743b2fbc511bc693abd049ac2ac168c1ff`。
+−8 tapは`eaab540ec56c3880291627218ade2605a6226bc0bdf57d8bf1fdf4308d27bd3f`。
 各回路ともsetup/hold違反は0件で、試験後のLCD復帰・UART確認は成功した。
 −4 tapで初めて全容量走査が一致した。同一bitstreamを再書込みした
 `20261006-114226-DdrFullShift`（72.597秒）と`20261006-114404-DdrFullShift`（72.603秒）も
 全容量・両極性が一致し、計3回の独立起動を確認した。各回LCD復帰・UART確認も成功。
 3回目は最初のFTDI reset errorを既存の再試行処理で回復してから書き込んだ。
-隣接設定の比較は継続する。単一基板・室内条件であり、温度・電圧変動の検証ではない。
+追加比較で−5、−6、−8 tapも一致したため、次の診断は−6 tapを基準とする。
+これは測定した4設定の結果であり、未測定の−7 tapや設定限界は保証しない。
+単一基板・室内条件であり、温度・電圧変動の検証ではない。
 
 ### コマンドとrefresh
 
