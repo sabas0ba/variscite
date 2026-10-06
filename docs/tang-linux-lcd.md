@@ -59,7 +59,7 @@ DDRと周辺回路の検証完了は、限定した独立診断の成功だけ�
 | --- | --- |
 | 初期化・PHY起動・lane training | 単体試験と独立実機診断。PLL/DLL異常時の復帰はシミュレーション対象 |
 | DDRコマンド間隔・周期refresh | controllerモデルのコマンド監視、保持診断。全容量走査中にもrefresh継続が必要 |
-| 全128 MiB・全word・両極性 | 受信遅延−4 tapの比較回路で全走査一致。繰返しと隣接設定の確認中。既存設定は不一致 |
+| 全128 MiB・全word・両極性 | 従来patternは受信遅延−4/−5/−6/−8 tapで一致。ただしmixed patternでtraining失敗または不一致を検出し、調査中 |
 | 部分書込み・word lane・隣接word保持 | 単体・結合試験、既存DM診断とwordポート独立実機診断 |
 | 範囲外・非整列・timeout・後続要求 | ポート/controller結合試験。CPUアクセス例外への変換は未実装 |
 | CDCの要求保持・応答一対一・reset取消し | 3クロック比の結合試験、停止clockでのreset試験、独立実機word診断 |
@@ -197,7 +197,8 @@ statusが処理中のRでも最初の失敗は読み取れる。失敗なしの�
 他の診断の8桁payloadと混同しないよう、ホストはDdrFullだけ16桁を要求する。
 
 短縮した64 wordモデルは正常・bit破損・valid欠落・stuck addressによるaliasに加え、
-再読出しのtimeout、通常pass末尾の失敗、反転pass末尾の失敗の計7ケースを検査する。
+再読出しのtimeout、通常pass末尾の失敗、反転pass末尾の失敗の7ケースを検査する。
+従来patternと後述のmixed patternを別々にビルドし、計14ケースを実行する。
 全word書込み前の読出しや、全word読戻し前の反転pass移行を禁止し、昇順WRITE・逆順READ、
 byte mask、独立計算したpattern、最初の失敗位置とactualの保持を照合する。
 既存の32 word診断とUARTの従来形式も回帰試験する。
@@ -275,6 +276,39 @@ array trainingを開始する。PLL/DLL設定、書込み位相、396/99 MHzの�
 追加比較で−5、−6、−8 tapも一致したため、次の診断は−6 tapを基準とする。
 これは測定した4設定の結果であり、未測定の−7 tapや設定限界は保証しない。
 単一基板・室内条件であり、温度・電圧変動の検証ではない。
+
+#### 上位データbitも変化する追加pattern
+
+`TangDdrFullMixedTop`は受信遅延−4 tap、396/99 MHzで、全128 MiBを次の32 bit演算で
+生成したwordと、その反転値で走査する。演算ごとに32 bitへ切り詰め、右shiftは論理shiftとする。
+
+```text
+x = 0x193A70C5 XOR word_index
+x = x XOR (x << 13)
+x = x XOR (x >> 17)
+x = x XOR (x << 5)
+```
+
+従来のアドレスXORでは固定だった上位7 bitもアドレスに応じて変化する。
+各変換は可逆であり、異なるword indexの期待値が同じ値になる変換ではない。
+最初の失敗wordの再読出しも同じ変換を使い、元の失敗判定を保持する。
+テストベンチは独立したpattern計算と固定3ベクトルを使い、全WRITEのデータ・mask、
+故障注入時の最初の失敗・再読出し結果を照合する（`sim/full-mixed-tests.log`）。
+buildは`DDR_FULL_MIXED=1 bash scripts/build_ddr_mpr.sh`、実機は`-Mode DdrFullMixed`。
+
+−6 tap版（SHA256 `0ff7cb72680c1c0f258c7edf7aac383ae09a4260b25ec1270d1053ce35f039ef`）は
+`20261006-115916-DdrFullMixed`と`20261006-120001-DdrFullMixed`でともに
+`!B0000000000000000`となった。全容量走査前のtraining失敗であり、mixed patternの
+データ不一致とは区別する。従来patternの−8 tap保存bitstreamは、その後の
+`20261006-120146-DdrFullShift`でも全容量一致した。
+
+−4 tap版（SHA256 `200e3a7a73abdcbec3dc71f440fe4edb72c034e14cfdc4da76c191b86e996a8e`）は
+trainingを通過したが、`20261006-120325-DdrFullMixed`で`!V8359303AFFEF80E1`となった。
+通常passの`0x8564C0E8`で期待値`0x7FEF80E1`に対し`0xFFEF80E1`を受信し、
+再読出しも同じ不正値だった（bit25=1）。この結果だけでは書込み不良と再現性のある
+読出し不良を区別できない。全走査は72.604秒で終了し、失敗判定を保持した。
+両回路はsetup/hold違反0件、全試験後のLCD復帰とUART検査は成功。
+従来patternの全容量成功を、追加patternや別の回路構成へ一般化しない。
 
 ### コマンドとrefresh
 

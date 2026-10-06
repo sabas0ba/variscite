@@ -1,5 +1,7 @@
 // Shortened full-capacity algorithm, real word port/CDC/controller, PHY model.
-module tb_ddr_full_probe;
+module tb_ddr_full_probe #(
+    parameter integer MIXED=0
+);
     localparam integer WORDS=64;
     logic clk=0, cpu_clk=0, rst=1;
     always #5 clk=~clk;
@@ -18,7 +20,17 @@ module tb_ddr_full_probe;
     integer row=0, active_bank=0, write_key=0;
     integer retries=0, retry_index=0;
     logic expect_retry=0, suppress_return=0;
-    rv32ima_DdrWordProbe #(.HOLD_CYCLES(1024), .FULL_WORDS(WORDS)) dut (
+    function automatic logic [31:0] pattern_for(input integer word_index);
+        logic [31:0] value;
+        value=32'h193a70c5 ^ 32'(word_index);
+        if (MIXED!=0) begin
+            value ^= value << 13;
+            value ^= value >> 17;
+            value ^= value << 5;
+        end
+        return value;
+    endfunction
+    rv32ima_DdrWordProbe #(.HOLD_CYCLES(1024), .FULL_WORDS(WORDS), .FULL_MIXED(MIXED)) dut (
         .i_cpu_clk(cpu_clk), .i_clk(clk), .i_reset(rst), .i_enable(!rst),
         .i_read_data(read_data), .i_read_valid(read_valid), .o_done(done), .o_found(found),
         .o_failure(failure), .o_actual(actual),
@@ -86,7 +98,7 @@ module tb_ddr_full_probe;
                 logic [31:0] expected_word;
                 integer lane;
                 lane=writes%4;
-                expected_word=32'h193a70c5 ^ 32'(writes%WORDS);
+                expected_word=pattern_for(writes%WORDS);
                 if (writes>=WORDS) expected_word=~expected_word;
                 if (mask!==(16'hffff ^ (16'h000f << (lane*4))) ||
                     data!== (128'(expected_word) << (lane*32))) $fatal(1,"pattern/mask");
@@ -98,6 +110,9 @@ module tb_ddr_full_probe;
         end
     end
     initial begin
+        if (MIXED!=0 && (pattern_for(0)!==32'hb37d91d4 || pattern_for(1)!==32'hb379b1f5 ||
+                      pattern_for(63)!==32'hb3867668))
+            $fatal(1,"mixed pattern reference vectors");
         for (integer scenario=0;scenario<7;scenario++) begin
             @(negedge clk); rst=1; mode=scenario;
             repeat(5) @(negedge clk); rst=0;
@@ -105,17 +120,17 @@ module tb_ddr_full_probe;
             if (found!==(scenario==0) || writes!=2*WORDS || reads!=2*WORDS || refs<8)
                 $fatal(1,"full probe scenario=%0d found=%b writes=%0d reads=%0d",scenario,found,writes,reads);
             if ((scenario==0 && failure!==0) ||
-                (scenario==1 && (failure!==32'h88000032 || actual!==(32'h193a70c5 ^ 32'd50 ^ 32'd8))) ||
+                (scenario==1 && (failure!==32'h88000032 || actual!==(pattern_for(50) ^ 32'd8))) ||
                 (scenario==2 && (failure!==32'hc800002c || actual!==0)) ||
                 (scenario==3 && failure!==32'h8200002f) ||
                 (scenario==4 && failure!==32'h84000032) ||
-                (scenario==5 && (failure!==32'h88000000 || actual!==(32'h193a70c5 ^ 32'd8))) ||
-                (scenario==6 && (failure!==32'ha8000000 || actual!==((~32'h193a70c5) ^ 32'd8))))
+                (scenario==5 && (failure!==32'h88000000 || actual!==(pattern_for(0) ^ 32'd8))) ||
+                (scenario==6 && (failure!==32'ha8000000 || actual!==((~pattern_for(0)) ^ 32'd8))))
                 $fatal(1,"first failure report %h %h",failure,actual);
             if (retries!=(scenario==0 ? 0 : 1)) $fatal(1,"retry count");
             $display("full probe scenario=%0d cycles=%0d refs=%0d writes=%0d reads=%0d",scenario,cycles,refs,writes,reads);
         end
-        $display("DDR full probe PASS: complementary passes, reverse read, corruption, timeout, alias");
+        $display("DDR full probe PASS: mixed=%0d, complementary passes, reverse read, corruption, timeout, alias", MIXED);
         $finish;
     end
     initial begin #3000000; $fatal(1,"full probe watchdog"); end

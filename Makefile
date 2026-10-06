@@ -105,6 +105,11 @@ ddr-full-probe-test: veryl-build
 	    target/tang_primer_20k/ddr_word_cdc.sv target/tang_primer_20k/ddr_word_port.sv \
 	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_full_probe.sv
 	sim/obj_ddr_full_probe/tb_ddr_full_probe
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_full_probe -GMIXED=1 \
+	    -Mdir sim/obj_ddr_full_mixed_probe -o tb_ddr_full_mixed_probe \
+	    target/tang_primer_20k/ddr_word_cdc.sv target/tang_primer_20k/ddr_word_port.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_full_probe.sv
+	sim/obj_ddr_full_mixed_probe/tb_ddr_full_mixed_probe
 
 ddr-word-probe-test: veryl-build ddr-full-probe-test
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_word_probe \

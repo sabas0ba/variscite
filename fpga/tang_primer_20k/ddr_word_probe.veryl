@@ -5,6 +5,8 @@ module DdrWordProbe #(
     /// Zero selects the sparse 32-word diagnostic; otherwise scan this many
     /// consecutive words twice, with complementary address-derived patterns.
     param FULL_WORDS: u32 = 0,
+    /// Mix the address into all data bits for the full-capacity diagnostic.
+    param FULL_MIXED: u32 = 0,
 ) (
     i_cpu_clk   : input  'cpu   clock                ,
     i_clk       : input  'mem   clock                ,
@@ -29,6 +31,14 @@ module DdrWordProbe #(
     o_dqs_enable : output 'mem logic<4>  ,
     o_dqs_pattern: output 'mem logic<8>  ,
 ) {
+    function full_pattern (
+        word_index: input logic<25>,
+    ) -> logic<32> {
+        let seed: logic<32> = 32'h193a_70c5 ^ {7'b0, word_index};
+        let mix0: logic<32> = seed ^ (seed << 13);
+        let mix1: logic<32> = mix0 ^ (mix0 >> 17);
+        return if FULL_MIXED != 0 ? mix1 ^ (mix1 << 5) : seed;
+    }
     enum State: logic<3> {
         write,
         hold,
@@ -56,7 +66,7 @@ module DdrWordProbe #(
     var rdata         : 'cpu logic<32> ;
     let sparse_word   : 'cpu logic<32>  = 32'h193a_70c5
         ^ {index[4:0], index[4:0], index[4:0], index[4:0], index[4:0], index[4:0], 2'b01};
-    let full_word     : 'cpu logic<32>  = 32'h193a_70c5 ^ {7'b0, index};
+    let full_word     : 'cpu logic<32>  = full_pattern(index);
     let word          : 'cpu logic<32>  = if FULL_WORDS == 0 ? sparse_word : if inverted ? ~full_word : full_word;
     let last_write    : 'cpu logic      = if FULL_WORDS == 0 ? index == 31 : {7'b0, index} == FULL_WORDS - 1;
     let last_read     : 'cpu logic      = if FULL_WORDS == 0 ? index == 31 : index == 0;
@@ -69,7 +79,7 @@ module DdrWordProbe #(
     ;
     let valid         : 'cpu logic      = enable_sync[1]
         && (state == State::write || state == State::read || state == State::retry);
-    let retry_pattern : 'cpu logic<32>  = 32'h193a_70c5 ^ {7'b0, o_failure[24:0]};
+    let retry_pattern : 'cpu logic<32>  = full_pattern(o_failure[24:0]);
     let retry_expected: 'cpu logic<32>  = if o_failure[29] ? ~retry_pattern : retry_pattern;
     var req_valid     : 'mem logic     ;
     var req_ready     : 'mem logic     ;

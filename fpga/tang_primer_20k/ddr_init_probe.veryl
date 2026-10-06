@@ -147,6 +147,7 @@ module TangDdrInitProbe #(
     /// Receive-only offset in primitive taps, applied before array training.
     param READ_TAPS        : logic<5> = 0,
     param READ_DECREASE    : u32      = 0,
+    param FULL_MIXED       : u32      = 0,
     param ARRAY_PHASE_ALIGN: u32      = 0,
     param PHY_STARTUP      : u32      = 0,
 ) (
@@ -614,6 +615,7 @@ module TangDdrInitProbe #(
         unsafe (cdc) {
             inst word_probe: DdrWordProbe #(
                 FULL_WORDS: if RUN_CONTROLLER == 3 ? 33_554_432 : 0,
+                FULL_MIXED: FULL_MIXED                             ,
             ) (
                 o_failure    : word_failure                   ,
                 o_actual     : word_actual                    ,

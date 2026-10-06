@@ -3,7 +3,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_FULL_SHIFT:-0}" == 1 ]]; then
+if [[ "${DDR_FULL_MIXED:-0}" == 1 ]]; then
+    name=ddr_full_mixed
+    top=rv32ima_TangDdrFullMixedTop
+elif [[ "${DDR_FULL_SHIFT:-0}" == 1 ]]; then
     name=ddr_full_shift
     top=rv32ima_TangDdrFullShiftTop
 elif [[ "${DDR_FULL:-0}" == 1 ]]; then
