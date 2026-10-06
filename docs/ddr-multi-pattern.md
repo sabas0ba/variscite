@@ -1,5 +1,8 @@
 # 複数pattern・bank/rowのDDR診断
 
+要求・応答型controllerおよび27 MHz wordポート・CDC経由の独立実機診断は、
+[Linux/LCD実装計画の検証記録](tang-linux-lcd.md#27-mhz-wordポートの独立診断)を参照する。
+
 `DdrArrayMulti` は起動時の拍位置trainingを1回行い、その結果を保持したまま8組のbank/rowで2列ずつ書込み・読戻しする。組合せは `(bank,row)=(0,0)..(7,7)`、列は0と8。最初の組だけ既知training patternを使い、以後は32 bitのseedを更新し、回転と反転で128 bitへ展開する。各組の列8は列0の全bit反転である。
 
 各組の全幅一致を検査し、一度でも不一致やvalid欠落があれば失敗を保持する。後続の成功で消去しない。各組の終了時にall-bank PRECHARGEを発行し、tRP待機後に次のACTIVATEへ進む。既定の単発診断とscan診断の動作は変更しない。

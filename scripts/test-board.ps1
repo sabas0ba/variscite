@@ -7,7 +7,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayAddress', 'DdrController', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
     [string]$Mode = 'UartProbe',
     [ValidateRange(2, 60)]
     [int]$Seconds = 5
@@ -37,6 +37,7 @@ $images = @{
     DdrArrayFullTimeline = 'sim/fpga/ddr_array_full_timeline/impl/pnr/ddr_array_full_timeline.fs'
     DdrArrayRawScaled = 'sim/fpga/ddr_array_raw_scaled/impl/pnr/ddr_array_raw_scaled.fs'
     DdrController = 'sim/fpga/ddr_controller/impl/pnr/ddr_controller.fs'
+    DdrWord = 'sim/fpga/ddr_word/impl/pnr/ddr_word.fs'
     DdrArrayAddress = 'sim/fpga/ddr_array_address/impl/pnr/ddr_array_address.fs'
     DdrArrayMask = 'sim/fpga/ddr_array_mask/impl/pnr/ddr_array_mask.fs'
     DdrArrayRefresh = 'sim/fpga/ddr_array_refresh/impl/pnr/ddr_array_refresh.fs'
@@ -148,7 +149,7 @@ try {
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'M' }).Count -eq 0
         }
-        { $_ -in @('DdrArrayAddress', 'DdrController') } {
+        { $_ -in @('DdrArrayAddress', 'DdrController', 'DdrWord') } {
             # Explicit start marker prevents a hexadecimal payload from being mistaken for status.
             $frames = @([regex]::Matches($received, '![PLIRABVE][0-9A-F]{8}') |
                 Select-Object -Last 3)

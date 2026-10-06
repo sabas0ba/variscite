@@ -48,6 +48,10 @@ add_file -type verilog [file join $root target tang_primer_20k ddr_array_address
 add_file -type verilog [file join $root target tang_primer_20k ddr_burst_controller.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_controller_probe.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_controller_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_word_cdc.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_word_port.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_word_probe.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_word_top.sv]
 add_file -type cst [file join $out "$::env(DDR_MPR_NAME).cst"]
 add_file -type sdc [file join $out "$::env(DDR_MPR_NAME).sdc"]
 set_option -top_module $::env(DDR_MPR_TOP)

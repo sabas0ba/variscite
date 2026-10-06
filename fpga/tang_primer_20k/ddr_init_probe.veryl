@@ -591,26 +591,52 @@ module TangDdrInitProbe #(
         o_raw1        : array_raw1                                          ,
         o_expected    : array_expected                                      ,
     );
-    inst controller_probe: DdrControllerProbe (
-        i_clk        : ctrl_clk              ,
-        i_rst        : ready_reset           ,
-        i_enable     : controller_active     ,
-        i_read_data  : assembled_data        ,
-        i_read_valid : assembled_valid       ,
-        o_done       : controller_done       ,
-        o_found      : controller_found      ,
-        o_cmd_valid  : controller_valid      ,
-        o_cmd        : controller_cmd        ,
-        o_bank       : controller_bank       ,
-        o_addr       : controller_addr       ,
-        o_read       : controller_read       ,
-        o_odt        : controller_odt        ,
-        o_data       : controller_data       ,
-        o_mask       : controller_mask       ,
-        o_dq_enable  : controller_dq_enable  ,
-        o_dqs_enable : controller_dqs_enable ,
-        o_dqs_pattern: controller_dqs_pattern,
-    );
+    if RUN_CONTROLLER == 2 :word_port_mode {
+        unsafe (cdc) {
+            inst word_probe: DdrWordProbe (
+                i_clk        : ctrl_clk                       ,
+                i_cpu_clk    : i_clk                          ,
+                i_reset      : ready_reset as reset_async_high,
+                i_enable     : controller_active              ,
+                i_read_data  : assembled_data                 ,
+                i_read_valid : assembled_valid                ,
+                o_done       : controller_done                ,
+                o_found      : controller_found               ,
+                o_cmd_valid  : controller_valid               ,
+                o_cmd        : controller_cmd                 ,
+                o_bank       : controller_bank                ,
+                o_addr       : controller_addr                ,
+                o_read       : controller_read                ,
+                o_odt        : controller_odt                 ,
+                o_data       : controller_data                ,
+                o_mask       : controller_mask                ,
+                o_dq_enable  : controller_dq_enable           ,
+                o_dqs_enable : controller_dqs_enable          ,
+                o_dqs_pattern: controller_dqs_pattern         ,
+            );
+        }
+    } else :burst_mode {
+        inst controller_probe: DdrControllerProbe (
+            i_clk        : ctrl_clk              ,
+            i_rst        : ready_reset           ,
+            i_enable     : controller_active     ,
+            i_read_data  : assembled_data        ,
+            i_read_valid : assembled_valid       ,
+            o_done       : controller_done       ,
+            o_found      : controller_found      ,
+            o_cmd_valid  : controller_valid      ,
+            o_cmd        : controller_cmd        ,
+            o_bank       : controller_bank       ,
+            o_addr       : controller_addr       ,
+            o_read       : controller_read       ,
+            o_odt        : controller_odt        ,
+            o_data       : controller_data       ,
+            o_mask       : controller_mask       ,
+            o_dq_enable  : controller_dq_enable  ,
+            o_dqs_enable : controller_dqs_enable ,
+            o_dqs_pattern: controller_dqs_pattern,
+        );
+    }
     inst delay_stepper: DdrReadDelayStepper (
         i_clk   : ctrl_clk                                                  ,
         i_rst   : ready_reset                                               ,

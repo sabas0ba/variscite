@@ -97,7 +97,15 @@ coverage:
 # --- FPGA ports ----------------------------------------------------------
 .PHONY: ddr-burst-controller-test
 .PHONY: ddr-controller-probe-test
-ddr-controller-probe-test: veryl-build
+.PHONY: ddr-word-probe-test
+ddr-word-probe-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_word_probe \
+	    -Mdir sim/obj_ddr_word_probe -o tb_ddr_word_probe \
+	    target/tang_primer_20k/ddr_word_cdc.sv target/tang_primer_20k/ddr_word_port.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_word_probe.sv
+	sim/obj_ddr_word_probe/tb_ddr_word_probe
+
+ddr-controller-probe-test: veryl-build ddr-word-probe-test
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_controller_probe \
 	    -Mdir sim/obj_ddr_controller_probe -o tb_ddr_controller_probe \
 	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_controller_probe.sv tb/tb_ddr_controller_probe.sv

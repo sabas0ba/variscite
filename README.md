@@ -18,7 +18,8 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
 | DDR3 PHY・初期化・読出しtraining | 独立診断で実機確認済み | Veryl実装。GOWINによる配置配線とlane別の拍位置校正 |
 | DDR3保持・部分書込み・アドレス | 限定範囲で実機確認済み | 約127 ms保持、16 byte位置のDM選択、23アドレスbitと容量末尾。全セル走査は未実施 |
 | DDR burst controller | 単体試験・独立診断で実機確認済み | 要求とrefreshの仲裁、応答保持、timeout/reset。32箇所への書込みと100 ms保持後の読戻し |
-| CPUからDDR3への接続 | 一部実装・未接続 | `DdrWordPort`の128 MiB範囲検査、CDCのerror伝達、controllerとの読書き結合をシミュレーションで検証。CPU例外への変換と実機への組込みが残る |
+| DDR wordポート・CDC | 独立診断で実機確認済み | 27 MHz要求→99 MHz controllerで32 wordを書込み、100 ms保持後に読戻し。範囲外拒否・error伝達はシミュレーション検証 |
+| CPUからDDR3への接続 | 未接続 | wordポートまで検証済み。CPU例外への変換とCoreを含む実機への組込みが残る |
 | Linux実機起動・LCD bootlog・GUI | 未実装 | カーネル転送、実機ブート、framebuffer/DMA、fbcon、GUIを順に追加する |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
@@ -27,7 +28,7 @@ DDRの測定条件、bitstream SHA256、再現手順は
 
 ## ロードマップ
 
-現在は要求・応答型DDR controllerの独立実機診断まで終え、CDCとCPUバスへの接続へ進む段階である。
+現在は範囲検査・CDCを含むwordポートの独立実機診断まで終え、CPUバスへの接続へ進む段階である。
 以下は実装順序と完了条件であり、日程の確約ではない。
 
 | 順序 | 次の成果 | 完了条件 |

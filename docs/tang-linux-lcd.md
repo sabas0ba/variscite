@@ -25,7 +25,7 @@ Verylで実装し、SVはテストベンチとVerylの生成物に限る。
 | 読出し | lane別の拍位置trainingとburst組立、後続データで校正値を保持 | [読出しtraining](ddr-read-training.md) |
 | 保持と部分書込み | 約127 msのrefresh保持、burst内全16 byte位置のDM選択を各3回実機検証 | [アレイ診断](ddr-multi-pattern.md) |
 | アドレス | 23本の有効アドレスbitと公称容量末尾を含む48 burst、全96 READを3回実機検証 | [アレイ診断](ddr-multi-pattern.md) |
-| CPU側の受渡し | `DdrWordCdc`の32/128 bit変換とクロック間要求・応答をシミュレーションで検証 | 本書の初期化・CDCの検証記録、[RTL](../fpga/tang_primer_20k/ddr_word_cdc.veryl) |
+| CPU側の受渡し | 範囲検査・CDC・controller経由の32 word読書きを独立実機診断で確認。CPUコアは未接続 | 本書のwordポート診断、[RTL](../fpga/tang_primer_20k/ddr_word_probe.veryl) |
 
 最新の各実機診断は配置配線のsetup/hold違反0を確認し、診断後に既知のLCD SoCへ戻して
 UART検査を行った。これは限定アドレス・単一基板での確認であり、全セル走査、任意の
@@ -54,7 +54,8 @@ git ignoreされた`logs/board/`、`sim/fpga/`に保存し、測定時のSHA256�
 
 1. DDR controllerの単体・独立実機検証は下記のとおり完了した。
    応答待ち中にもrefresh期限を守ること、timeoutやreset時の扱いを検証した。
-2. `DdrWordCdc`とCPUバスへ接続し、可変レイテンシ、byte strobe、境界アクセスを検証する。
+2. wordポートとCDCの独立実機診断は完了した。次はCPUアクセス例外を実装してCPUバスへ接続し、
+   可変レイテンシ、byte strobe、境界アクセスを検証する。
    接続後に全容量走査と継続アクセスを実機で確認する。
 3. UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、Linuxの`/init`到達を確認する。
 
@@ -113,6 +114,46 @@ CPU例外接続では通常のload/store以外に分割アクセスの後半、A
 扱う必要がある。現在のCoreはAMOの読出し時点で宛先レジスタを更新するため、
 外部エラー入力を追加する際は書込み成功まで結果の確定を遅らせる変更も必要になる。
 Coreは今回変更していないため、Linux起動回帰は再実行していない。
+
+### 27 MHz wordポートの独立診断
+
+`DdrWordProbe`は27 MHzの要求生成回路から`DdrWordPort`、`DdrWordCdc`、
+99 MHzの`DdrBurstController`を経由し、32箇所へ各1 wordを書き込む。
+全8 bank、32 row、4 word laneを含むaddress列を使用し、refreshを続けながら100 ms保持後、
+再書込みせずに32 wordを比較する。CPUコアは含まない。training失敗、応答error、
+読出し不一致のいずれかがあれば成功しない。完了・成功は同期して診断ハーネスへ返す。
+独立したenableの再投入は運用せず、再初期化にはCDCとcontrollerの共通resetを用いる。
+
+```bash
+make ddr-word-probe-test
+DDR_WORD=1 bash scripts/build_ddr_mpr.sh  # 固定GOWINコンテナ
+```
+
+ホストからの実行は`scripts/test-ddr-init-board.ps1 -Mode DdrWord`。
+既存診断と同じく、直近3フレームの成功を確認した後、既知のLCD SoCへ復帰する。
+シミュレーションでは保持時間を1,024 CPU cycleへ短縮し、正常・14番目の読出し破損・
+20番目の応答欠落の3ケースを検査する。正常・異常とも32 WRITEと32 READまで継続し、
+途中の異常が後続成功で消えないことを確認する。`ddr-controller-probe-test`の依存先として
+既存の`make all`とCIから実行される。
+
+この診断には専用の`ddr_word_probe.sdc`を使う。既存診断のctrl→reference一括false pathを
+引き継がず、CDC・UART診断転送に30 nsの最大遅延を設定する。応答mailboxのdataはtoggleの
+2段同期後まで保持され、captureまで74 ns以上ある。要求address/dataのmailboxは
+99 MHz側の2段同期後まで保持され、captureまで20 ns以上あるため最大遅延を10 nsとする。
+同期器初段の位相関係によるsetup検査と、ctrl→referenceの同一エッジhold検査は除外する。
+mailboxの保持契約、2段目以降とDDR内部の通常検査、CDCの最大遅延検査は維持する。
+制約構文は[GOWIN Design Timing Constraints（SUG940）](https://cdn.gowinsemi.com.cn/SUG940E.pdf)
+の最大遅延・例外制約に基づく。
+
+2026-10-06、lint、word診断の3ケース、既存controller診断、CDC単体とcontroller結合の
+各3クロック比、controller単体、UART両形式が通過した（`sim/word-probe-final-tests.log`）。
+GOWINの配置配線は専用CDC制約下でsetup/hold違反0。bitstream SHA256は
+`43dba6f5125af877ed1de4b8dafee765086374659a8a73b1d124061ea0cb71d9`。
+独立した書込み3回の実機診断はいずれも直近3 UARTフレームが`!A5AA5A55A`であり、
+全32 wordが一致した。全回で既知LCD SoCへの復帰とUART確認も通過した。
+ログは`logs/board/20261006-104734-DdrWord-*`、`104819`、`104858`。
+status後の8桁はtraining値であり、word件数ではない。範囲外要求の拒否、timeoutの注入、
+全容量走査、CPU命令によるアクセス、Linux実機起動はこの実機診断に含まない。
 
 ### コマンドとrefresh
 
