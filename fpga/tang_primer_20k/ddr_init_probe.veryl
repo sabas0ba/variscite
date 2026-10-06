@@ -120,35 +120,36 @@ module TangDdrStatusUart #(
 /// DQS bursts. RUN_MPR checks the fixed MPR read pattern on DQ0 and DQ8.
 /// Neither mode verifies write timing or RAM retention.
 module TangDdrInitProbe #(
-    param RUN_CONTROLLER  : u32      = 0    ,
-    param RUN_READ_SWEEP  : u32      = 0    ,
-    param RUN_MPR         : u32      = 0    ,
-    param RUN_MPR_DELAY   : u32      = 0    ,
-    param RUN_MPR_ALIGN   : u32      = 0    ,
-    param RUN_ARRAY       : u32      = 0    ,
-    param ARRAY_SCAN      : u32      = 0    ,
-    param ARRAY_SAME      : u32      = 0    ,
-    param ARRAY_TRACE     : u32      = 0    ,
-    param ARRAY_MATCH     : u32      = 0    ,
-    param ARRAY_FLAGS     : u32      = 0    ,
-    param ARRAY_ADDRESS   : u32      = 0    ,
-    param ARRAY_BYTE_MASK : u32      = 0    ,
-    param ARRAY_REFRESH   : u32      = 0    ,
-    param ARRAY_RETAIN    : u32      = 0    ,
-    param ARRAY_MULTI     : u32      = 0    ,
-    param ARRAY_TRAIN     : u32      = 0    ,
-    param ARRAY_ASSEMBLE  : u32      = 0    ,
-    param ARRAY_RAW       : u32      = 0    ,
-    param ARRAY_TIMELINE  : u32      = 0    ,
-    param ARRAY_SIMPLE    : u32      = 0    ,
-    param ARRAY_EARLY     : u32      = 0    ,
-    param ARRAY_FULL      : u32      = 0    ,
-    param ARRAY_EXPECTED  : u32      = 0    ,
-    param ARRAY_READ_SEL  : logic<6> = 6'h20,
-    param ARRAY_ALIGN     : u32      = 0    ,
-    param ARRAY_PHASE_SCAN: u32      = 0    ,
-    param ARRAY_READ_HOLD : u32      = 1    ,
-    param DLL_QUARTER     : u32      = 0    ,
+    param CPU_ROM_INIT    : string    = "sim/ddr_cpu.hex",
+    param RUN_CONTROLLER  : u32       = 0                ,
+    param RUN_READ_SWEEP  : u32       = 0                ,
+    param RUN_MPR         : u32       = 0                ,
+    param RUN_MPR_DELAY   : u32       = 0                ,
+    param RUN_MPR_ALIGN   : u32       = 0                ,
+    param RUN_ARRAY       : u32       = 0                ,
+    param ARRAY_SCAN      : u32       = 0                ,
+    param ARRAY_SAME      : u32       = 0                ,
+    param ARRAY_TRACE     : u32       = 0                ,
+    param ARRAY_MATCH     : u32       = 0                ,
+    param ARRAY_FLAGS     : u32       = 0                ,
+    param ARRAY_ADDRESS   : u32       = 0                ,
+    param ARRAY_BYTE_MASK : u32       = 0                ,
+    param ARRAY_REFRESH   : u32       = 0                ,
+    param ARRAY_RETAIN    : u32       = 0                ,
+    param ARRAY_MULTI     : u32       = 0                ,
+    param ARRAY_TRAIN     : u32       = 0                ,
+    param ARRAY_ASSEMBLE  : u32       = 0                ,
+    param ARRAY_RAW       : u32       = 0                ,
+    param ARRAY_TIMELINE  : u32       = 0                ,
+    param ARRAY_SIMPLE    : u32       = 0                ,
+    param ARRAY_EARLY     : u32       = 0                ,
+    param ARRAY_FULL      : u32       = 0                ,
+    param ARRAY_EXPECTED  : u32       = 0                ,
+    param ARRAY_READ_SEL  : logic <6> = 6'h20            ,
+    param ARRAY_ALIGN     : u32       = 0                ,
+    param ARRAY_PHASE_SCAN: u32       = 0                ,
+    param ARRAY_READ_HOLD : u32       = 1                ,
+    param DLL_QUARTER     : u32       = 0                ,
     /// Receive-only offset in primitive taps, applied before array training.
     param READ_TAPS        : logic<5> = 0 ,
     param READ_DECREASE    : u32      = 0 ,
@@ -328,67 +329,66 @@ module TangDdrInitProbe #(
     var controller_dqs_pattern : 'ctrl      logic           <8>      ;
     var controller_done        : 'ctrl      logic                    ;
     var controller_found       : 'ctrl      logic                    ;
-    let controller_active      : 'ctrl      logic                     = RUN_CONTROLLER != 0 && array_done
-        && array_found;
-    let probe_valid            : 'ctrl      logic                     = if controller_active ?
+    var controller_active      : 'ctrl      logic                    ;
+    // Register the completed training result before it selects the PHY outputs.
+    // The array remains idle after completion, so the extra handoff cycle is safe.
+    always_ff (ctrl_clk, ready_reset) {
+        if_reset {
+            controller_active = 0;
+        } else {
+            controller_active = RUN_CONTROLLER != 0 && array_done && array_found;
+        }
+    }
+    let probe_valid     : 'ctrl logic     = if controller_active ?
         controller_valid
     : if RUN_ARRAY != 0 ?
         array_valid
     :
         sweep_valid
     ;
-    let probe_cmd              : 'ctrl      logic           <3>       = if controller_active ?
+    let probe_cmd       : 'ctrl logic<3>  = if controller_active ?
         controller_cmd
     : if RUN_ARRAY != 0 ?
         array_cmd
     :
         sweep_cmd
     ;
-    let probe_bank             : 'ctrl      logic           <3>       = if controller_active ?
+    let probe_bank      : 'ctrl logic<3>  = if controller_active ?
         controller_bank
     : if RUN_ARRAY != 0 ?
         array_bank
     :
         sweep_bank
     ;
-    let probe_addr             : 'ctrl      logic           <14>      = if controller_active ?
+    let probe_addr      : 'ctrl logic<14> = if controller_active ?
         controller_addr
     : if RUN_ARRAY != 0 ?
         array_addr
     :
         sweep_addr
     ;
-    let probe_done             : 'ctrl      logic                     = if RUN_CONTROLLER != 0 ?
+    let probe_done      : 'ctrl logic     = if RUN_CONTROLLER != 0 ?
         array_done && (!array_found || controller_done)
     : if RUN_ARRAY != 0 ?
         array_done
     :
         sweep_done
     ;
-    let probe_found            : 'ctrl      logic                     = if RUN_CONTROLLER != 0 ?
+    let probe_found     : 'ctrl logic     = if RUN_CONTROLLER != 0 ?
         array_found && controller_found
     : if RUN_ARRAY != 0 ?
         array_found
     :
         sweep_found == 2'b11
     ;
-    let probe_burst            : 'ctrl      logic           <2>       = if RUN_ARRAY != 0 ?
-        array_burst_seen
-    :
-        sweep_burst_seen
-    ;
-    let probe_valid_seen       : 'ctrl      logic           <2>       = if RUN_ARRAY != 0 ?
-        array_valid_seen
-    :
-        sweep_valid_seen
-    ;
-    let phy_cmd_valid          : 'ctrl      logic                     = if sweep_active ? probe_valid : cmd_valid;
-    let phy_cmd                : 'ctrl      logic           <3>       = if sweep_active ? probe_cmd : cmd;
-    let phy_bank               : 'ctrl      logic           <3>       = if sweep_active ? probe_bank : bank;
-    let phy_addr               : 'ctrl      logic           <14>      = if sweep_active ? probe_addr : addr;
-    let phy_cke                : 'ctrl      logic                     = cke && !(use_sweep && probe_done);
-    let write_slot             : 'ctrl      logic                     = RUN_ARRAY != 0 && sweep_active && phy_cmd_valid
-        && phy_cmd == 3'b100;
+    let probe_burst     : 'ctrl logic<2>  = if RUN_ARRAY != 0 ? array_burst_seen : sweep_burst_seen;
+    let probe_valid_seen: 'ctrl logic<2>  = if RUN_ARRAY != 0 ? array_valid_seen : sweep_valid_seen;
+    let phy_cmd_valid   : 'ctrl logic     = if sweep_active ? probe_valid : cmd_valid;
+    let phy_cmd         : 'ctrl logic<3>  = if sweep_active ? probe_cmd : cmd;
+    let phy_bank        : 'ctrl logic<3>  = if sweep_active ? probe_bank : bank;
+    let phy_addr        : 'ctrl logic<14> = if sweep_active ? probe_addr : addr;
+    let phy_cke         : 'ctrl logic     = cke && !(use_sweep && probe_done);
+    let write_slot      : 'ctrl logic     = RUN_ARRAY != 0 && sweep_active && phy_cmd_valid && phy_cmd == 3'b100;
     // At CL=6/AL=0, the Gowin PHY timing example launches READ in slot 2.
     // Keep the startup sequencer in slot 0; shift diagnostic commands together.
     let phy_addr_slots: 'ctrl logic<56> = if write_slot ?
@@ -649,7 +649,9 @@ module TangDdrInitProbe #(
     var word_actual : 'reference logic<32>;
     if RUN_CONTROLLER == 4 :cpu_mode {
         unsafe (cdc) {
-            inst cpu_probe: DdrCpuProbe (
+            inst cpu_probe: DdrCpuProbe #(
+                ROM_INIT: CPU_ROM_INIT,
+            ) (
                 o_failure    : word_failure                   ,
                 o_actual     : word_actual                    ,
                 i_clk        : ctrl_clk                       ,

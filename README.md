@@ -12,7 +12,8 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
 DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致した。
 追加したmixed patternでは校正窓の不足を発見し、3 wordへ拡張した324 MHz版と396 MHz版で
 全容量・両極性の一致を確認した。mixed patternは396 MHzで独立書込み3回、324 MHzで2回、
-修正後の従来patternも396 MHzで1回成功した。CPU接続は未実装である。
+修正後の従来patternも396 MHzで1回成功した。CPU診断回路では全容量走査とDDR命令実行も
+成功している。Linux用のCPU/LCD SoCへの統合は次段階である。
 
 | 項目 | 状態 | 確認済みの範囲・残る作業 |
 | --- | --- | --- |
@@ -23,26 +24,27 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | DDR3保持・部分書込み・アドレス | 限定範囲で実機確認済み | 約127 ms保持、16 byte位置のDM選択、23アドレスbitと容量末尾 |
 | DDR全128 MiB走査 | 独立診断で実機確認済み | 3 word校正窓でmixed pattern／反転値が396/99 MHzで3回、324/81 MHzで2回一致。アドレスXOR／反転値も修正後の396/99 MHz版で一致 |
 | DDR burst controller | 単体試験・独立診断で実機確認済み | 要求とrefreshの仲裁、応答保持、timeout/reset。32箇所への書込みと100 ms保持後の読戻し |
-| DDR wordポート・CDC | 独立診断で実機確認済み | 27 MHz要求→99 MHz controllerで32 wordを書込み、100 ms保持後に読戻し。範囲外拒否・error伝達はシミュレーション検証 |
-| CPUからDDR3への接続 | 全容量・命令実行を実機確認済み | Core・ROM・CDC・controller・PHYを接続。CPUで全128 MiBのmixed/反転値とDDR上の命令実行が独立書込み2回成功。CPU経由の部分書込み・境界アクセスの検証を継続 |
+| DDR wordポート・CDC | CPU接続を含め実機確認済み | 27 MHz要求→99 MHz controllerでの読書き。範囲外拒否はCPU例外として実機確認。timeout/reset・応答保持はモデル検証 |
+| CPUからDDR3への接続 | 全容量・部分アクセス・命令実行を実機確認済み | 全128 MiBのmixed/反転値とDDR命令実行。全16 byte位置、非整列、容量末尾、範囲外例外、LR/SC・全AMOの追加診断は独立書込み3回成功 |
 | Linux実機起動・LCD bootlog・GUI | 未実装 | カーネル転送、実機ブート、framebuffer/DMA、fbcon、GUIを順に追加する |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
 DDRの測定条件、bitstream SHA256、再現手順は
-[DDR診断の検証記録](docs/ddr-multi-pattern.md)にまとめる。
+[DDRアレイ診断の検証記録](docs/ddr-multi-pattern.md)と
+[CPU/controllerの検証記録](docs/tang-linux-lcd.md#cpu診断プラットフォーム)にまとめる。
 
 ## ロードマップ
 
 校正窓の不足を修正し、独立診断で2種類のpatternによる全容量一致と繰返し起動を確認した。
 CPUアクセス例外とfetch待ち中の要求保持を追加し、Coreとwordポートの結合試験も通過した。
 PHYを含む回路のタイミングを満たし、CPUによる全容量走査とDDR上の命令実行も実機で成功した。
-CPU経由の部分書込み・境界アクセスと再現性を確認し、Linux実機起動へ進む。
+CPU経由の部分書込み・境界アクセス・LR/SC・AMOも実機で確認した。次はLinux実機起動へ進む。
 以下は実装順序と完了条件であり、日程の確約ではない。
 
 | 順序 | 次の成果 | 完了条件 |
 | --- | --- | --- |
 | 1（単独検証済み） | DDR controller | 任意の読書き要求とrefreshを仲裁し、応答待ち中のrefresh期限、timeout、resetを検証する |
-| 2 | CPUとDDR3の接続 | CDC、可変レイテンシ、byte strobe、境界アクセスを接続し、実機で全容量走査と継続アクセスを通す |
+| 2（診断回路で検証済み） | CPUとDDR3の接続 | CDC、可変レイテンシ、byte strobe、境界アクセスを接続し、実機で全容量走査と継続アクセスを通す |
 | 3 | Linux実機起動 | UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、`/init`とUARTシェルへ到達する |
 | 4 | LCDブートログ | DDR上のframebuffer、LCD DMA・FIFO、fbconを実装し、連続スクロールでも表示が欠落しないことを確認する |
 | 5 | Linux GUI | Linuxユーザプロセスから`/dev/fb0`へ描画し、UART入力に応答する |

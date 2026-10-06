@@ -4,7 +4,7 @@ set_device -name GW2A-18C GW2A-LV18PG256C8/I7
 foreach source {rv_pkg alu core clint plic soc ram} {
     add_file -type verilog [file join $root target ${source}.sv]
 }
-foreach source {ddr_cpu_port ddr_cpu_probe ddr_cpu_top} {
+foreach source {ddr_cpu_port ddr_cpu_probe ddr_cpu_top ddr_cpu_access_top} {
     add_file -type verilog [file join $root target tang_primer_20k ${source}.sv]
 }
 add_file -type verilog [file join $root target power_on_reset.sv]

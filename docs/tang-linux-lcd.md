@@ -10,8 +10,9 @@
 RTL は DDR3 制御、LCD 読み出し、基板トップまで Veryl で実装する。
 
 現在の実機はオンチップ RAM 32 KiB とベアメタルの矩形表示で動作している。
-Linux はシミュレータ上で起動済みだが、実機のCPUからDDR3への接続、カーネル転送、
-Linux用フレームバッファは未実装である。DDR3は下記の独立診断で実機検証を進めている。
+Linux はシミュレータ上で起動済みである。実機のCPU診断回路ではDDR3の全容量走査と命令実行が
+成功した。Linux用SoCへの統合、カーネル転送、Linux用フレームバッファは未実装である。
+DDR3は下記の診断回路で実機検証を進めている。
 
 ## DDR基礎実装の範囲 (PR #5)
 
@@ -50,29 +51,30 @@ GOWIN用コンテナの構築手順は本書の「GOWIN EDA による配置配�
 git ignoreされた`logs/board/`、`sim/fpga/`に保存し、測定時のSHA256と結果を文書に残す。
 これらの生成物はcloneには含まれない。実機実行には、復帰用の検証済みLCD SoC bitstreamも必要である。
 
-### 継続作業
+### DDR検証の完了範囲と次工程
 
-DDRと周辺回路の検証完了は、限定した独立診断の成功だけでは判定しない。
-以下を確認し、実機とシミュレーションの証拠を区別する。
+2026-10-06に、以下のDDRと周辺回路の機能検証を完了した。CPUを含む実機診断と
+シミュレーションでの異常注入試験を区別して記録する。対象は記載した単一基板・固定条件であり、
+温度・電圧変動の評価や量産向けの信頼性保証は含まない。Linux用SoCへの統合は次工程である。
 
 | 検証項目 | 現在の根拠と残作業 |
 | --- | --- |
 | 初期化・PHY起動・lane training | 単体試験と独立実機診断。PLL/DLL異常時の復帰はシミュレーション対象 |
-| DDRコマンド間隔・周期refresh | controllerモデルのコマンド監視、保持診断。全容量走査中にもrefresh継続が必要 |
-| 全128 MiB・全word・両極性 | 3 word校正窓でmixed patternが396 MHzで3回、324 MHzで2回一致。従来patternも修正後の396 MHz版で一致。いずれもCPUを含まない独立診断 |
-| 部分書込み・word lane・隣接word保持 | 単体・結合試験、既存DM診断とwordポート独立実機診断 |
-| 範囲外・非整列・timeout・後続要求 | ポート/controller結合試験。CPUアクセス例外の応答注入試験も追加済み。両者を接続した検証が残る |
+| DDRコマンド間隔・周期refresh | controllerとCPU結合モデルでコマンド間隔・REF期限を監視。実機で保持診断と全容量走査が成功 |
+| 全128 MiB・全word・両極性 | 独立mixed診断が396 MHzで3回、324 MHzで2回成功。従来patternも修正後に成功。CPU経由でも全容量mixed/反転値とDDR命令実行が成功 |
+| 部分書込み・word lane・隣接word保持 | 単体・結合試験、DM・wordポート独立診断に加え、CPU経由の全16 byte位置、SH/SW、隣接word/guard保持が実機3回成功 |
+| 範囲外・非整列・timeout・後続要求 | CPU/controller結合で破損・timeoutを検出。CPU実機で非整列と容量末尾、範囲外のload/store/fetch/AMO例外、handler復帰・後続要求を確認 |
 | CDCの要求保持・応答一対一・reset取消し | 3クロック比の結合試験、停止clockでのreset試験、独立実機word診断 |
-| Coreを含むDDRアクセス | Core・ROM・CDC・controller・PHYを接続し、全容量mixed/反転値とDDR命令実行が実機成功。CPU経由の部分書込み・境界アクセスと繰返しを継続 |
-| 配置配線・実機再現性 | 各公開bitstreamの制約・setup/hold結果・SHA256・繰返し実行結果を記録する |
-| 再現手順・自動試験・PR | 試験をmake/CIへ組込み、実装状態と未検証範囲をREADME・本書・PRで一致させる |
+| Coreを含むDDRアクセス | Core・ROM・CDC・controller・PHYを接続。全容量mixed/反転値・DDR命令実行と、部分書込み・境界・LR/SC・全AMOの実機試験が成功 |
+| 配置配線・実機再現性 | 記載した合格bitstreamはsetup/hold違反0。制約・SHA256・繰返し実行結果を記録。切替回路修正後もCPU全容量回帰が成功 |
+| 再現手順・自動試験・PR | 試験をmake/CIへ組込み、README・本書・Draft PR #6へ結果と未実装範囲を記録。CI結果待ちは行わない |
 
 1. DDR controllerの単体・独立実機検証は下記のとおり完了した。
    応答待ち中にもrefresh期限を守ること、timeoutやreset時の扱いを検証した。
 2. wordポートとCDCの独立実機診断、CPUアクセス例外の個別試験は完了した。Coreとwordポートを
    接続した診断は、burst境界のメモリモデルで3クロック比すべて成功した。fetch応答待ち中の割込みは
    要求を取り消さず、応答と命令PCを対応させる。controller/PHYへ接続したCPU全容量走査と
-   DDR命令実行も実機で成功した。CPU経由のbyte strobe・境界アクセスと繰返しを継続する。
+   DDR命令実行も実機で成功した。CPU経由のbyte strobe・境界アクセス・LR/SC・AMOは独立書込み3回成功した。
 3. UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、Linuxの`/init`到達を確認する。
 
 LCDのframebuffer/DMA、fbconによるbootlog、LinuxユーザプロセスによるGUIは、
@@ -166,10 +168,11 @@ wordポート試験と共通であり、実機のために期待データをRTL�
 初回FTDI reset errorは既存の再試行で回復した。LCD復帰とUART検査も成功した。
 同一bitstreamの再書込み`20261006-134257-DdrCpu`も成功し、終端は同じ、所要332.784秒だった。
 独立書込み2回で全容量一致とDDR命令実行を確認し、いずれもLCD復帰・UART検査が成功した。
-CPU経由の部分書込み・境界アクセスの検証は継続する。
+CPU経由の部分書込み・境界アクセスは、以下の追加診断で検証した。
 
 CPUアクセス幅・境界の追加診断では、全容量ROMとは別のROMイメージを使い、同じCPU/controller/PHY経路で
-次を確認する。これらは現在の全容量診断の合格条件にはまだ含まれていない。
+次を確認する。`fpga/firmware/ddr_cpu_access.S`を`CPU_PROGRAM=access bash scripts/build_ddr_cpu.sh`
+で構築し、`sim/ddr_cpu_access.hex`を生成する。全容量ROMは別ファイルで保持する。
 
 | 追加ケース | 確認する結果 |
 | --- | --- |
@@ -178,10 +181,50 @@ CPUアクセス幅・境界の追加診断では、全容量ROMとは別のROM�
 | 容量末尾の有効な分割アクセス | `0x87fffffb`からのwordが一致し、最後の有効byteまで正しく更新される |
 | 容量末尾を越えるload/store | 後半の`0x88000000`でcause 5/7、mtvalは失敗部分。先に完了したstore部分は保持される |
 | 範囲外load/store/fetch/AMO | cause 5/7/1/7、正しいmtval、handlerからの復帰。物理DDR要求を出さない |
-| LR/SC・AMO | 成功SCと予約なしSC、AMOの旧値と更新値、guard保持 |
+| LR/SC・AMO | 成功SCと予約なしSC、全9種類のAMOの旧値と更新値、符号付き/なしMIN/MAXの両operand順、隣接word・guard保持 |
 
-同じROMをcommand-levelモデルで先に検証し、正常時に加えデータ破損・read timeoutも検出させる。
+`make ddr-cpu-access-test`は同じROMをcommand-levelモデルで検証し、正常時に加えデータ破損・read
+timeoutも検出させる。正常時は435 WRITE、2,256 READ、1,294 REFを確認した。
+全16 byte laneへの単一byte書込み、容量末尾へのアクセス、315 controller cycle以内のREFを監視する。
+許可領域以外の物理要求はfatalとし、範囲外CPUアクセスのアドレス折返しを検出する。
+ROM側では6回の期待trap、cause/mtval、handler復帰を確認してから成功を報告する。
+本試験は`ddr-controller-probe-test`経由で通常make/CIに含まれる。
 全容量診断で確認済みの128 MiB走査・refresh・DDR命令実行を、この追加診断で置き換えない。
+
+実機用は固定GOWINコンテナで`DDR_CPU_ACCESS=1 bash scripts/build_ddr_mpr.sh`を構築する。
+出力は`sim/fpga/ddr_cpu_access/impl/pnr/ddr_cpu_access.fs`、実機試験は
+`test-ddr-init-board.ps1 -Mode DdrCpuAccess`で行う。CPU 27 MHz、DDR 396/99 MHz、受信−6 tap、
+3 word校正窓は全容量CPU診断と共通であり、終了後はLCD SoCへ復帰する。
+
+初回配置配線はsetup違反268 endpoint、hold違反0だった。trainingのmatch結果からPHYの
+送信データ選択までの組合せ経路が最悪−1.612 nsとなったため、`controller_active`を
+controller clockのレジスタで受ける構成へ変更した。training終了後は診断器がidleを保持し、
+1 cycle後にcontrollerを有効にする。要求・DDRコマンドの間隔は変更しない。
+再配置配線はsetup/hold違反0、LUT 11,419、ALU 1,188、register 3,925となった。
+タイミング不合格時は構築スクリプトがレポートの場所を表示して失敗する。
+
+CPU部分アクセスbitstreamのSHA256は
+`995dea2b3f5c2a5660a6f9f7cb48fc850421427f18aa7666db96760b8293f8d7`、ROMのSHA256は
+`88cd320f279fe19d8328eb18b157a3bdc42318453d4e2bce587d441451a7b8c3`。
+2026-10-06に独立書込み3回が成功し、いずれも終端`!A0000000000000000`とLCD復帰・UART検査を確認した。
+所要時間はUARTの複数終端フレーム待ちを含み、CPU試験のみの実行時間ではない。
+
+| 実機ログ識別子 | 所要時間 | 結果 |
+| --- | --- | --- |
+| `20261006-140120-DdrCpuAccess` | 11.061秒 | 成功 |
+| `20261006-140221-DdrCpuAccess` | 13.857秒 | 成功 |
+| `20261006-140316-DdrCpuAccess` | 13.866秒 | 成功 |
+
+変更後の`make lint ddr-controller-probe-test`も成功した。全容量モデルの2 pattern、word診断、
+CPUポートの3クロック比、CPU/controllerと部分アクセス診断、controller診断を含む。
+
+切替信号をレジスタ化した全容量CPU版も再構築し、setup/hold違反0を確認した。
+LUT 11,736、ALU 1,188、register 3,925、bitstream SHA256は
+`80485d120d6d07b956cfd1e73f2f61bf1ac0b576b58f4b1557b92b8e2c5f1fdf`。
+全容量ROMのSHA256は前述の`d0ffb0f7...`と同一である。
+`20261006-140515-DdrCpu`は332.794秒で終端`!A0000000000000000`となり、全128 MiBの
+mixed/反転値照合、DDR命令実行、LCD復帰・UART検査が成功した。部分アクセス試験の追加によって
+全容量走査が省略されていないことを、修正後回路でも確認した。
 
 `DdrBurstController`は初期化とtrainingが完了したPHYへ、任意のBL8要求を1件ずつ発行する。
 各要求の終了時にall-bank PRECHARGEし、tRP待機後に応答する。rowを開いたままにする

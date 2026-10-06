@@ -3,7 +3,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_CPU:-0}" == 1 ]]; then
+if [[ "${DDR_CPU_ACCESS:-0}" == 1 ]]; then
+    name=ddr_cpu_access
+    top=rv32ima_TangDdrCpuAccessTop
+elif [[ "${DDR_CPU:-0}" == 1 ]]; then
     name=ddr_cpu
     top=rv32ima_TangDdrCpuTop
 elif [[ "${DDR_FULL_SLOW:-0}" == 1 ]]; then
@@ -119,15 +122,15 @@ export DDR_MPR_NAME="$name" DDR_MPR_TOP="$top"
 out="$root/sim/fpga/$name"
 gowin="${GOWIN_HOME:-/opt/gowin/IDE}"
 mkdir -p "$out"
-if [[ "$name" == ddr_cpu ]]; then
-    test -s sim/ddr_cpu.hex
+if [[ "$name" == ddr_cpu* ]]; then
+    test -s "sim/$name.hex"
     mkdir -p "$out/sim"
-    cp sim/ddr_cpu.hex "$out/sim/ddr_cpu.hex"
-    sha256sum sim/ddr_cpu.hex > "$out/firmware.sha256"
+    cp "sim/$name.hex" "$out/sim/$name.hex"
+    sha256sum "sim/$name.hex" > "$out/firmware.sha256"
 fi
 veryl build > "$out/veryl.log" 2>&1
 cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/ddr_probe_uart.cst > "$out/$name.cst"
-if [[ "$name" == ddr_cpu ]]; then
+if [[ "$name" == ddr_cpu* ]]; then
     cat fpga/tang_primer_20k/ddr_cpu_probe.sdc > "$out/$name.sdc"
 elif [[ "$name" == ddr_word || "$name" == ddr_full* ]]; then
     cat fpga/tang_primer_20k/ddr_word_probe.sdc > "$out/$name.sdc"
@@ -137,7 +140,7 @@ fi
 if [[ "$name" == ddr_full_slow ]]; then
     sed -i 's/-multiply_by 44 /-multiply_by 36 /' "$out/$name.sdc"
 fi
-if [[ "$name" == ddr_array_startup_scan || "$name" == ddr_array_raw_* || "$name" == ddr_array_assembled || "$name" == ddr_array_trained || "$name" == ddr_array_multi || "$name" == ddr_array_retain || "$name" == ddr_array_refresh || "$name" == ddr_array_mask || "$name" == ddr_array_address || "$name" == ddr_cpu || "$name" == ddr_controller || "$name" == ddr_word || "$name" == ddr_full* ]]; then
+if [[ "$name" == ddr_array_startup_scan || "$name" == ddr_array_raw_* || "$name" == ddr_array_assembled || "$name" == ddr_array_trained || "$name" == ddr_array_multi || "$name" == ddr_array_retain || "$name" == ddr_array_refresh || "$name" == ddr_array_mask || "$name" == ddr_array_address || "$name" == ddr_cpu* || "$name" == ddr_controller || "$name" == ddr_word || "$name" == ddr_full* ]]; then
     cat fpga/tang_primer_20k/ddr_phy_startup.sdc >> "$out/$name.sdc"
 fi
 cd "$out"
@@ -169,6 +172,10 @@ else
     grep -A2 '<td>ddr_fast</td>' "$timing" | grep '<td>2.525</td>' > /dev/null
     grep -A2 '<td>ddr_ctrl</td>' "$timing" | grep '<td>10.101</td>' > /dev/null
 fi
-grep -A1 'Numbers of Setup Violated Endpoints' "$timing" | grep '<td>0</td>' > /dev/null
-grep -A1 'Numbers of Hold Violated Endpoints' "$timing" | grep '<td>0</td>' > /dev/null
+for check in Setup Hold; do
+    if ! grep -A1 "Numbers of $check Violated Endpoints" "$timing" | grep -q '<td>0</td>'; then
+        echo "DDR $check timing failed; inspect $out/$timing before programming the board." >&2
+        exit 1
+    fi
+done
 echo "DDR MPR probe: $out/impl/pnr/$name.fs"

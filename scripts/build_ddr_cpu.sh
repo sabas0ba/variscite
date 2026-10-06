@@ -3,6 +3,12 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cross="${CROSS_COMPILE:-riscv-none-elf-}"
+program="${CPU_PROGRAM:-full}"
+case "$program" in
+    full) source_name=ddr_cpu ;;
+    access) source_name=ddr_cpu_access ;;
+    *) echo 'CPU_PROGRAM must be full or access' >&2; exit 2 ;;
+esac
 words="${FULL_WORDS:-33554432}"
 hold_cycles="${HOLD_CYCLES:-2700000}"
 if [[ ! "$words" =~ ^[0-9]+$ || ! "$hold_cycles" =~ ^[0-9]+$ ]]; then
@@ -13,7 +19,7 @@ if (( words < 2 || words > 33554432 || hold_cycles < 1 || hold_cycles > 21474836
     echo 'DDR diagnostic size or hold duration is outside its supported range' >&2
     exit 2
 fi
-output_name="${OUTPUT_NAME:-ddr_cpu}"
+output_name="${OUTPUT_NAME:-$source_name}"
 if [[ ! "$output_name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
     echo 'OUTPUT_NAME must be a simple artifact name' >&2
     exit 2
@@ -23,7 +29,7 @@ mkdir -p "$root/sim"
 "${cross}gcc" -march=rv32ima_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
     -DFULL_WORDS="$words" -DHOLD_CYCLES="$hold_cycles" \
     -Wl,-Ttext=0x1000,-e,_start,--build-id=none \
-    "$root/fpga/firmware/ddr_cpu.S" -o "$out.elf"
+    "$root/fpga/firmware/$source_name.S" -o "$out.elf"
 "${cross}objcopy" -O binary "$out.elf" "$out.bin"
 python3 - "$out.bin" "$out.hex" <<'PY'
 import pathlib
