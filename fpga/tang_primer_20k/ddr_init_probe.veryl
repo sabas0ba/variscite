@@ -6,17 +6,19 @@
 module TangDdrStatusUart #(
     param GAP_BITS: u32 = 22,
     param FRAMED  : u32 = 0 ,
+    param WIDE    : u32 = 0 ,
 ) (
-    i_clk         : input  'reference clock   ,
-    i_rst         : input  'reference reset   ,
-    i_status      : input  'reference logic<4>,
-    i_debug_enable: input  'reference logic   ,
-    i_debug_extra : input  'reference logic   ,
-    i_debug0      : input  'reference logic<8>,
-    i_debug1      : input  'reference logic<8>,
-    i_debug2      : input  'reference logic<8>,
-    i_debug3      : input  'reference logic<8>,
-    o_tx          : output 'reference logic   ,
+    i_clk         : input  'reference clock    ,
+    i_rst         : input  'reference reset    ,
+    i_status      : input  'reference logic<4> ,
+    i_debug_enable: input  'reference logic    ,
+    i_debug_extra : input  'reference logic    ,
+    i_debug0      : input  'reference logic<8> ,
+    i_debug1      : input  'reference logic<8> ,
+    i_debug2      : input  'reference logic<8> ,
+    i_debug3      : input  'reference logic<8> ,
+    i_wide_data   : input  'reference logic<32>,
+    o_tx          : output 'reference logic    ,
 ) {
     const BIT_CYCLES   : logic<8>        = 234;
     var   gap          : 'reference logic<GAP_BITS>;
@@ -26,10 +28,14 @@ module TangDdrStatusUart #(
     var   data         : 'reference logic<8>       ;
     var   status_data  : 'reference logic<8>       ;
     var   debug_nibble : 'reference logic<4>       ;
-    var   report_index : 'reference logic<4>       ;
-    let   payload_index: 'reference logic<4>        = if FRAMED != 0 ? report_index - 4'd1 : report_index;
-    let   last_payload : 'reference logic<4>        = if i_debug_enable ? (if i_debug_extra ? 4'd8 : 4'd4) : 4'd0;
-    let   last_index   : 'reference logic<4>        = last_payload + (if FRAMED != 0 ? 4'd1 : 4'd0);
+    var   report_index : 'reference logic<5>       ;
+    let   payload_index: 'reference logic<5>        = if FRAMED != 0 ? report_index - 5'd1 : report_index;
+    let   last_payload : 'reference logic<5>        = if i_debug_enable ?
+        (if WIDE != 0 ? 5'd16 : if i_debug_extra ? 5'd8 : 5'd4)
+    :
+        5'd0
+    ;
+    let   last_index   : 'reference logic<5>        = last_payload + (if FRAMED != 0 ? 5'd1 : 5'd0);
     let   decimal_digit: 'reference logic           = debug_nibble <: 4'd10;
     let   debug_ascii  : 'reference logic<8>        = if decimal_digit ?
         8'h30 + {4'b0, debug_nibble}
@@ -52,14 +58,22 @@ module TangDdrStatusUart #(
             default: status_data = 8'h45; // E: DQS gate timeout
         }
         case payload_index {
-            4'd1   : debug_nibble = i_debug0[7:4];
-            4'd2   : debug_nibble = i_debug0[3:0];
-            4'd3   : debug_nibble = i_debug1[7:4];
-            4'd4   : debug_nibble = i_debug1[3:0];
-            4'd5   : debug_nibble = i_debug2[7:4];
-            4'd6   : debug_nibble = i_debug2[3:0];
-            4'd7   : debug_nibble = i_debug3[7:4];
-            default: debug_nibble = i_debug3[3:0];
+            5'd1   : debug_nibble = i_debug0[7:4];
+            5'd2   : debug_nibble = i_debug0[3:0];
+            5'd3   : debug_nibble = i_debug1[7:4];
+            5'd4   : debug_nibble = i_debug1[3:0];
+            5'd5   : debug_nibble = i_debug2[7:4];
+            5'd6   : debug_nibble = i_debug2[3:0];
+            5'd7   : debug_nibble = i_debug3[7:4];
+            5'd8   : debug_nibble = i_debug3[3:0];
+            5'd9   : debug_nibble = i_wide_data[31:28];
+            5'd10  : debug_nibble = i_wide_data[27:24];
+            5'd11  : debug_nibble = i_wide_data[23:20];
+            5'd12  : debug_nibble = i_wide_data[19:16];
+            5'd13  : debug_nibble = i_wide_data[15:12];
+            5'd14  : debug_nibble = i_wide_data[11:8];
+            5'd15  : debug_nibble = i_wide_data[7:4];
+            default: debug_nibble = i_wide_data[3:0];
         }
         data = if FRAMED != 0 && report_index == 0 ?
             8'h21
@@ -83,7 +97,7 @@ module TangDdrStatusUart #(
                 bits     = 4'd10;
                 bit_time = 0;
                 if i_debug_enable || FRAMED != 0 {
-                    report_index = if report_index == last_index ? 0 : report_index + 4'd1;
+                    report_index = if report_index == last_index ? 0 : report_index + 5'd1;
                 }
             }
         } else if bit_time == BIT_CYCLES - 1 {
@@ -591,9 +605,15 @@ module TangDdrInitProbe #(
         o_raw1        : array_raw1                                          ,
         o_expected    : array_expected                                      ,
     );
-    if RUN_CONTROLLER == 2 :word_port_mode {
+    var word_failure: 'reference logic<32>;
+    var word_actual : 'reference logic<32>;
+    if RUN_CONTROLLER >= 2 :word_port_mode {
         unsafe (cdc) {
-            inst word_probe: DdrWordProbe (
+            inst word_probe: DdrWordProbe #(
+                FULL_WORDS: if RUN_CONTROLLER == 3 ? 33_554_432 : 0,
+            ) (
+                o_failure    : word_failure                   ,
+                o_actual     : word_actual                    ,
                 i_clk        : ctrl_clk                       ,
                 i_cpu_clk    : i_clk                          ,
                 i_reset      : ready_reset as reset_async_high,
@@ -616,6 +636,8 @@ module TangDdrInitProbe #(
             );
         }
     } else :burst_mode {
+        assign word_failure = 0;
+        assign word_actual  = 0;
         inst controller_probe: DdrControllerProbe (
             i_clk        : ctrl_clk              ,
             i_rst        : ready_reset           ,
@@ -894,17 +916,19 @@ module TangDdrInitProbe #(
     assign timeline_captured = if ARRAY_RAW != 0 ? raw_captured : regular_captured;
     inst uart: TangDdrStatusUart #(
         FRAMED: if RUN_CONTROLLER != 0 ? 1 : ARRAY_ADDRESS,
+        WIDE  : if RUN_CONTROLLER == 3 ? 1 : 0,
     ) (
-        i_clk                                                                     ,
-        i_rst         : ref_reset                                                 ,
-        i_status      : status                                                    ,
-        i_debug_enable: mpr_debug                                                 ,
+        i_clk                                                                      ,
+        i_rst         : ref_reset                                                  ,
+        i_status      : status                                                     ,
+        i_debug_enable: mpr_debug                                                  ,
         i_debug_extra : RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0 || RUN_ARRAY != 0,
-        i_debug0      : pattern0_ref                                              ,
-        i_debug1      : pattern1_ref                                              ,
-        i_debug2      : raw0_ref                                                  ,
-        i_debug3      : raw1_ref                                                  ,
-        o_tx          : normal_uart_tx                                            ,
+        i_debug0      : if RUN_CONTROLLER == 3 ? word_failure[31:24] : pattern0_ref,
+        i_debug1      : if RUN_CONTROLLER == 3 ? word_failure[23:16] : pattern1_ref,
+        i_debug2      : if RUN_CONTROLLER == 3 ? word_failure[15:8] : raw0_ref,
+        i_debug3      : if RUN_CONTROLLER == 3 ? word_failure[7:0] : raw1_ref,
+        i_wide_data   : word_actual                                                ,
+        o_tx          : normal_uart_tx                                             ,
     );
     assign o_uart_tx = if ARRAY_TIMELINE != 0 ? timeline_uart_tx : normal_uart_tx;
 }

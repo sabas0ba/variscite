@@ -52,6 +52,21 @@ git ignoreされた`logs/board/`、`sim/fpga/`に保存し、測定時のSHA256�
 
 ### 継続作業
 
+DDRと周辺回路の検証完了は、限定した独立診断の成功だけでは判定しない。
+以下を確認し、実機とシミュレーションの証拠を区別する。
+
+| 検証項目 | 現在の根拠と残作業 |
+| --- | --- |
+| 初期化・PHY起動・lane training | 単体試験と独立実機診断。PLL/DLL異常時の復帰はシミュレーション対象 |
+| DDRコマンド間隔・周期refresh | controllerモデルのコマンド監視、保持診断。全容量走査中にもrefresh継続が必要 |
+| 全128 MiB・全word・両極性 | 全容量の書込み・逆順読戻し・反転pattern走査を追加。実機で不一致を検出し、原因を調査中 |
+| 部分書込み・word lane・隣接word保持 | 単体・結合試験、既存DM診断とwordポート独立実機診断 |
+| 範囲外・非整列・timeout・後続要求 | ポート/controller結合試験。CPUアクセス例外への変換は未実装 |
+| CDCの要求保持・応答一対一・reset取消し | 3クロック比の結合試験、停止clockでのreset試験、独立実機word診断 |
+| Coreを含むDDRアクセス | 未接続。AMO/分割アクセスの失敗処理、CPUからの継続アクセスが残る |
+| 配置配線・実機再現性 | 各公開bitstreamの制約・setup/hold結果・SHA256・繰返し実行結果を記録する |
+| 再現手順・自動試験・PR | 試験をmake/CIへ組込み、実装状態と未検証範囲をREADME・本書・PRで一致させる |
+
 1. DDR controllerの単体・独立実機検証は下記のとおり完了した。
    応答待ち中にもrefresh期限を守ること、timeoutやreset時の扱いを検証した。
 2. wordポートとCDCの独立実機診断は完了した。次はCPUアクセス例外を実装してCPUバスへ接続し、
@@ -154,6 +169,56 @@ GOWINの配置配線は専用CDC制約下でsetup/hold違反0。bitstream SHA256
 ログは`logs/board/20261006-104734-DdrWord-*`、`104819`、`104858`。
 status後の8桁はtraining値であり、word件数ではない。範囲外要求の拒否、timeoutの注入、
 全容量走査、CPU命令によるアクセス、Linux実機起動はこの実機診断に含まない。
+
+### 全128 MiBの2極性走査（調査中）
+
+`TangDdrFullTop`は`DdrWordProbe.FULL_WORDS=33_554_432`を使用する。
+全wordを昇順に`0x193a70c5 XOR word番号`で書き、100 ms保持後に逆順で全wordを比較する。
+次に値を全bit反転し、同じ書込み・保持・逆順比較を繰り返す。総数は67,108,864 WRITEと
+67,108,864 READ。全期間で通常controllerのrefreshを継続し、最初のエラーを保持する。
+
+```bash
+make ddr-full-probe-test
+DDR_FULL=1 bash scripts/build_ddr_mpr.sh
+```
+
+ホストの`scripts/test-ddr-init-board.ps1 -Mode DdrFull`は最大300秒で実行し、
+終端statusを3回受信すると早期終了する。30秒ごとにstatusを表示し、終了後LCDへ復帰する。
+結果JSONは上限時間`seconds`と実測時間`elapsed_seconds`を分けて保存する。
+
+UART形式は`!<status><failure:8hex><actual:8hex>`。failureはbit31が失敗あり、
+bit30がcontroller error、bit29が反転pass、bit28がWRITE、bit[24:0]が最初の失敗word番号。
+byte addressは`0x80000000 + 4 * word番号`。actualはその応答の32 bit値である。
+statusが処理中のRでも最初の失敗は読み取れる。失敗なしの場合、failure/actualは0である。
+他の診断の8桁payloadと混同しないよう、ホストはDdrFullだけ16桁を要求する。
+
+短縮した64 wordモデルは正常・bit破損・valid欠落・stuck addressによるaliasの4ケースを検査する。
+全word書込み前の読出しや、全word読戻し前の反転pass移行を禁止し、昇順WRITE・逆順READ、
+byte mask、独立計算したpattern、最初の失敗位置とactualの保持を照合する。
+既存の32 word診断とUARTの従来形式も回帰試験する。
+
+2026-10-06の最初の実機試験は失敗した。SHA256
+`718727881cb37f9eed05ef96fea1f095b33a85785b2afbbdb96f434aefe60891`、
+ログ`logs/board/20261006-105953-DdrFull-*`。初版UARTはtraining値のみの8桁で、
+90秒時点には`!V5AA5A55A`となっていた。LCD復帰は成功した。
+この結果を受け、上記の最初の失敗位置・actualを出力する64 bit診断を追加した。
+全容量の実機検証は未合格であり、限定32 word診断の成功から全容量正常とは判定しない。
+
+64 bit診断版はSHA256
+`85e71c03dd6dc30fa456263fad98c277f3ea3df5acc0b3e662a225db852dff6f`。
+専用CDC制約下でsetup/hold違反0、短縮走査の4ケース、最初の失敗情報照合、
+既存word診断、UARTの従来2形式と64 bit形式が通過した（`sim/full-debug-tests.log`）。
+実機2回は約72.6秒で走査終了し、いずれも不一致を報告した。
+
+| 実機ログ接頭辞 | 最初の失敗byte address | 期待値 | 実測値 | 終端フレーム |
+| --- | --- | --- | --- | --- |
+| `20261006-110843-DdrFull` | `0x8757E754` | `0x18EF8910` | `0x18FF8910` | `!V81D5F9D518FF8910` |
+| `20261006-111057-DdrFull` | `0x8757FB54` | `0x18EF8E10` | `0x18FF8E10` | `!V81D5FED518FF8E10` |
+
+ともに通常passのREADで、controller timeoutではなくbit 20の不一致。
+位置が変化するため固定アドレス故障とは断定せず、当該patternの反復アクセスと
+失敗wordの再読出しで書込み側・読出し側を切り分ける。全回LCD復帰・UART確認は成功した。
+初版と64 bit版のbitstreamはローカルの`logs/board-images/`にも保存している。
 
 ### コマンドとrefresh
 

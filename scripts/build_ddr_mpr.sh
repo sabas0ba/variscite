@@ -3,7 +3,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_WORD:-0}" == 1 ]]; then
+if [[ "${DDR_FULL:-0}" == 1 ]]; then
+    name=ddr_full
+    top=rv32ima_TangDdrFullTop
+elif [[ "${DDR_WORD:-0}" == 1 ]]; then
     name=ddr_word
     top=rv32ima_TangDdrWordTop
 elif [[ "${DDR_CONTROLLER:-0}" == 1 ]]; then
@@ -106,12 +109,12 @@ gowin="${GOWIN_HOME:-/opt/gowin/IDE}"
 mkdir -p "$out"
 veryl build > "$out/veryl.log" 2>&1
 cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/ddr_probe_uart.cst > "$out/$name.cst"
-if [[ "$name" == ddr_word ]]; then
+if [[ "$name" == ddr_word || "$name" == ddr_full ]]; then
     cat fpga/tang_primer_20k/ddr_word_probe.sdc > "$out/$name.sdc"
 else
     cat fpga/tang_primer_20k/ddr_read_probe.sdc > "$out/$name.sdc"
 fi
-if [[ "$name" == ddr_array_startup_scan || "$name" == ddr_array_raw_* || "$name" == ddr_array_assembled || "$name" == ddr_array_trained || "$name" == ddr_array_multi || "$name" == ddr_array_retain || "$name" == ddr_array_refresh || "$name" == ddr_array_mask || "$name" == ddr_array_address || "$name" == ddr_controller || "$name" == ddr_word ]]; then
+if [[ "$name" == ddr_array_startup_scan || "$name" == ddr_array_raw_* || "$name" == ddr_array_assembled || "$name" == ddr_array_trained || "$name" == ddr_array_multi || "$name" == ddr_array_retain || "$name" == ddr_array_refresh || "$name" == ddr_array_mask || "$name" == ddr_array_address || "$name" == ddr_controller || "$name" == ddr_word || "$name" == ddr_full ]]; then
     cat fpga/tang_primer_20k/ddr_phy_startup.sdc >> "$out/$name.sdc"
 fi
 cd "$out"

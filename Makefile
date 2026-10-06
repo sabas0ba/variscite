@@ -98,7 +98,15 @@ coverage:
 .PHONY: ddr-burst-controller-test
 .PHONY: ddr-controller-probe-test
 .PHONY: ddr-word-probe-test
-ddr-word-probe-test: veryl-build
+.PHONY: ddr-full-probe-test
+ddr-full-probe-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_full_probe \
+	    -Mdir sim/obj_ddr_full_probe -o tb_ddr_full_probe \
+	    target/tang_primer_20k/ddr_word_cdc.sv target/tang_primer_20k/ddr_word_port.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_full_probe.sv
+	sim/obj_ddr_full_probe/tb_ddr_full_probe
+
+ddr-word-probe-test: veryl-build ddr-full-probe-test
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_word_probe \
 	    -Mdir sim/obj_ddr_word_probe -o tb_ddr_word_probe \
 	    target/tang_primer_20k/ddr_word_cdc.sv target/tang_primer_20k/ddr_word_port.sv \
@@ -301,6 +309,10 @@ ddr-status-uart-test: veryl-build
 	    -Mdir sim/obj_ddr_status_uart_framed -o tb_ddr_status_uart_framed \
 	    target/tang_primer_20k/ddr_init_probe.sv tb/tb_ddr_status_uart.sv
 	sim/obj_ddr_status_uart_framed/tb_ddr_status_uart_framed
+	verilator --binary --timing --timescale 1ns/1ps -GFRAMED=1 -GWIDE=1 --top-module tb_ddr_status_uart \
+	    -Mdir sim/obj_ddr_status_uart_wide -o tb_ddr_status_uart_wide \
+	    target/tang_primer_20k/ddr_init_probe.sv tb/tb_ddr_status_uart.sv
+	sim/obj_ddr_status_uart_wide/tb_ddr_status_uart_wide
 
 ddr-mpr-delay-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mpr_delay_sweep \

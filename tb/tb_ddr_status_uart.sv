@@ -1,15 +1,15 @@
-module tb_ddr_status_uart #(parameter FRAMED = 0);
+module tb_ddr_status_uart #(parameter FRAMED = 0, parameter WIDE = 0);
     reg clk=0, rst=1, extra=1;
     reg [3:0] status=6;
     wire tx;
     byte actual, expected;
     always #5 clk=~clk;
 
-    rv32ima_TangDdrStatusUart #(.GAP_BITS(8), .FRAMED(FRAMED)) dut (
+    rv32ima_TangDdrStatusUart #(.GAP_BITS(8), .FRAMED(FRAMED), .WIDE(WIDE)) dut (
         .i_clk(clk), .i_rst(rst), .i_status(status),
         .i_debug_enable(1'b1), .i_debug_extra(extra),
         .i_debug0(8'h12), .i_debug1(8'hab),
-        .i_debug2(8'hcd), .i_debug3(8'hef), .o_tx(tx)
+        .i_debug2(8'hcd), .i_debug3(8'hef), .i_wide_data(32'h89abcdef), .o_tx(tx)
     );
 
     task automatic read_byte(output byte value);
@@ -27,6 +27,17 @@ module tb_ddr_status_uart #(parameter FRAMED = 0);
     initial begin
         repeat (4) @(negedge clk);
         rst=0;
+        if (WIDE) begin
+            string golden;
+            golden="!M12ABCDEF89ABCDEF";
+            repeat (2)
+                for (int i=0;i<golden.len();i++) begin
+                    read_byte(actual);
+                    if (actual!==golden[i]) $fatal(1,"wide UART byte %0d",i);
+                end
+            $display("DDR status UART PASS: two complete 64-bit frames");
+            $finish;
+        end
         if (FRAMED) begin
             read_byte(actual);
             if (actual != "!") $fatal(1, "missing extended frame marker");
@@ -91,7 +102,7 @@ module tb_ddr_status_uart #(parameter FRAMED = 0);
         $finish;
     end
     initial begin
-        repeat (75000) @(posedge clk);
+        repeat (WIDE ? 150000 : 75000) @(posedge clk);
         $fatal(1,"UART frame timeout");
     end
 endmodule

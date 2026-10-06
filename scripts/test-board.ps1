@@ -7,9 +7,9 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
+    [ValidateSet('UartProbe', 'Loopback', 'Soc', 'LcdSoc', 'DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrFull', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
     [string]$Mode = 'UartProbe',
-    [ValidateRange(2, 60)]
+    [ValidateRange(2, 600)]
     [int]$Seconds = 5
 )
 Set-StrictMode -Version Latest
@@ -38,6 +38,7 @@ $images = @{
     DdrArrayRawScaled = 'sim/fpga/ddr_array_raw_scaled/impl/pnr/ddr_array_raw_scaled.fs'
     DdrController = 'sim/fpga/ddr_controller/impl/pnr/ddr_controller.fs'
     DdrWord = 'sim/fpga/ddr_word/impl/pnr/ddr_word.fs'
+    DdrFull = 'sim/fpga/ddr_full/impl/pnr/ddr_full.fs'
     DdrArrayAddress = 'sim/fpga/ddr_array_address/impl/pnr/ddr_array_address.fs'
     DdrArrayMask = 'sim/fpga/ddr_array_mask/impl/pnr/ddr_array_mask.fs'
     DdrArrayRefresh = 'sim/fpga/ddr_array_refresh/impl/pnr/ddr_array_refresh.fs'
@@ -67,6 +68,8 @@ $serial = New-Object System.IO.Ports.SerialPort $Port, 115200, 'None', 8, 'One'
 $capture = New-Object System.IO.MemoryStream
 $passed = $false
 $failure = $null
+$timer = $null
+$framePattern = if ($Mode -eq 'DdrFull') { '![PLIRABVE][0-9A-F]{16}' } else { '![PLIRABVE][0-9A-F]{8}' }
 try {
     $env:PATH = (Join-Path $Suite 'bin') + ';' + (Join-Path $Suite 'lib') + ';' + $env:PATH
     & $loader --detect -b tangprimer20k 2>&1 | Tee-Object -FilePath "$prefix-jtag.log"
@@ -98,6 +101,7 @@ try {
     if ($Mode -notin @('Soc', 'LcdSoc', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')) { $serial.DiscardInBuffer() }
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $sent = $false
+    $nextReportSeconds = 30
     $buffer = New-Object byte[] 4096
     while ($timer.Elapsed.TotalSeconds -lt $Seconds) {
         if (-not $sent -and $timer.Elapsed.TotalSeconds -ge 1) {
@@ -108,6 +112,22 @@ try {
         if ($serial.BytesToRead -gt 0) {
             $count = $serial.Read($buffer, 0, [Math]::Min($buffer.Length, $serial.BytesToRead))
             $capture.Write($buffer, 0, $count)
+        }
+        if ($Mode -eq 'DdrFull') {
+            $liveText = [System.Text.Encoding]::ASCII.GetString($capture.ToArray())
+            $liveFrames = @([regex]::Matches($liveText, $framePattern) | Select-Object -Last 3)
+            if ($timer.Elapsed.TotalSeconds -ge $nextReportSeconds) {
+                $lastStatus = if ($liveFrames.Count -gt 0) { $liveFrames[-1].Value } else { 'no frame' }
+                Write-Host ('DdrFull elapsed={0:N1}s status={1}' -f $timer.Elapsed.TotalSeconds, $lastStatus)
+                $nextReportSeconds += 30
+            }
+            # Full scans may take minutes. End after three terminal frames;
+            # use the ordinary parser below for the actual pass/fail decision.
+            if ($liveFrames.Count -eq 3 -and
+                @($liveFrames | Where-Object { $_.Value[1] -notin @('A','B','V','E') }).Count -eq 0) {
+                Write-Host ('DdrFull terminal status after {0:N1}s' -f $timer.Elapsed.TotalSeconds)
+                break
+            }
         }
         Start-Sleep -Milliseconds 10
     }
@@ -149,9 +169,9 @@ try {
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[0] -ne 'M' }).Count -eq 0
         }
-        { $_ -in @('DdrArrayAddress', 'DdrController', 'DdrWord') } {
+        { $_ -in @('DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrFull') } {
             # Explicit start marker prevents a hexadecimal payload from being mistaken for status.
-            $frames = @([regex]::Matches($received, '![PLIRABVE][0-9A-F]{8}') |
+            $frames = @([regex]::Matches($received, $framePattern) |
                 Select-Object -Last 3)
             $passed = $frames.Count -eq 3 -and
                 @($frames | Where-Object { $_.Value[1] -ne 'A' }).Count -eq 0
@@ -236,6 +256,7 @@ try {
 } catch {
     $failure = $_.Exception.Message
 } finally {
+    if ($null -ne $timer) { $timer.Stop() }
     if ($serial.IsOpen) { $serial.Close() }
     $serial.Dispose()
     $env:PATH = $previousPath
@@ -245,6 +266,7 @@ try {
         port = $Port
         baud = 115200
         seconds = $Seconds
+        elapsed_seconds = if ($null -ne $timer) { [Math]::Round($timer.Elapsed.TotalSeconds, 3) } else { $null }
         bitstream = $bitstream
         sha256 = (Get-FileHash -Algorithm SHA256 $bitstream).Hash
         bytes = $capture.Length

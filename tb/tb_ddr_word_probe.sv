@@ -17,6 +17,7 @@ module tb_ddr_word_probe;
     rv32ima_DdrWordProbe #(.HOLD_CYCLES(1024)) dut (
         .i_cpu_clk(cpu_clk), .i_clk(clk), .i_reset(rst), .i_enable(!rst),
         .i_read_data(read_data), .i_read_valid(read_valid), .o_done(done), .o_found(found),
+        .o_failure(), .o_actual(),
         .o_cmd_valid(cmd_valid), .o_cmd(cmd), .o_addr(addr), .o_bank(bank),
         .o_read(read_gate), .o_odt(odt), .o_data(data), .o_mask(mask),
         .o_dq_enable(dq_enable), .o_dqs_enable(dqs_enable), .o_dqs_pattern(dqs_pattern)

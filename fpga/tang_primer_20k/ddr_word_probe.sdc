@@ -16,6 +16,7 @@ set_false_path -hold -from [get_clocks {ddr_ctrl}] -to [get_clocks {reference}]
 # ctrl registers before the payload capture edge (>20 ns). Keep a 10 ns bound.
 set_max_delay -from [get_pins {probe/word_port_mode.word_probe/port/u_cdc/address_mailbox*/Q}] -to [get_pins {probe/word_port_mode.word_probe/port/u_cdc/mem_address*/D}] 10
 set_max_delay -from [get_pins {probe/word_port_mode.word_probe/port/u_cdc/write_mailbox*/Q}] -to [get_pins {probe/word_port_mode.word_probe/port/u_cdc/mem_write*/D}] 10
+set_max_delay -from [get_pins {probe/word_port_mode.word_probe/port/u_cdc/strobe_mailbox*/Q}] -to [get_pins {probe/word_port_mode.word_probe/port/u_cdc/mem_strobe*/D}] 10
 # Only first synchronizer stages are exempt from phase-related setup timing.
 set_false_path -from [get_clocks {reference}] -to [get_pins {probe/word_port_mode.word_probe/port/u_cdc/request_sync_0_s0/D}]
 set_false_path -from [get_clocks {reference}] -to [get_pins {probe/word_port_mode.word_probe/done_sync_0_s0/D}]
