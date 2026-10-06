@@ -118,15 +118,15 @@ try {
         }
         if ($Mode -in @('DdrFull', 'DdrFullShift', 'DdrFullMixed', 'DdrFullSlow')) {
             $liveText = [System.Text.Encoding]::ASCII.GetString($capture.ToArray())
-            $liveFrames = @([regex]::Matches($liveText, $framePattern) | Select-Object -Last 3)
+            $liveFrames = @([regex]::Matches($liveText, $framePattern) | Select-Object -Last 4)
             if ($timer.Elapsed.TotalSeconds -ge $nextReportSeconds) {
                 $lastStatus = if ($liveFrames.Count -gt 0) { $liveFrames[-1].Value } else { 'no frame' }
                 Write-Host ('{0} elapsed={1:N1}s status={2}' -f $Mode, $timer.Elapsed.TotalSeconds, $lastStatus)
                 $nextReportSeconds += 30
             }
-            # Full scans may take minutes. End after three terminal frames;
+            # Keep four terminal frames to capture all training sample words.
             # use the ordinary parser below for the actual pass/fail decision.
-            if ($liveFrames.Count -eq 3 -and
+            if ($liveFrames.Count -eq 4 -and
                 @($liveFrames | Where-Object { $_.Value[1] -notin @('A','B','V','E') }).Count -eq 0) {
                 Write-Host ('{0} terminal status after {1:N1}s' -f $Mode, $timer.Elapsed.TotalSeconds)
                 break

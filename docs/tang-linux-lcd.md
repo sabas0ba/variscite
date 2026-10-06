@@ -334,6 +334,39 @@ setup/hold違反0件、試験後のLCD復帰・UART検査は成功。
 LCD復帰・UART検査は成功。現在の比較用topはこの0 tap版である。
 周波数低下だけでは解消しておらず、次にtrainingのlane別valid・校正結果を観測する。
 
+#### training中のUART診断
+
+全容量診断のcontroller開始前は、64 bit UART payloadをtrainingの観測値に使う。
+上位32 bitは`0xD3000000 | (word_index << 16) | (offsets << 8) | (trained << 4) | (valid_seen << 2) | burst_seen`。
+`trained`、`valid_seen`、`burst_seen`はいずれもlane別の2 bitであり、offsetsはlane0を下位4 bit、
+lane1を上位4 bitに格納する。各laneの最初のraw RVALIDで全8 beatを格納し、
+下位32 bitへ128 bit捕捉値の`word_index`番目のwordを出す。indexはフレームごとに0〜3を巡回する。
+各wordのbyte0/2がlane0、byte1/3がlane1である。lane別に捕捉するため、同一cycleの32 bit値とは限らない。
+後続のvalidやデータで最初のsampleを上書きしない。
+
+`DdrTrainingDiagnostic`は観測専用であり、trainingやDDR要求を変更しない。
+controller開始をreference clockへ2段同期した後は、従来の失敗情報・actualの形式へ切り替える。
+`ddr-training-diagnostic-test`でlaneの独立捕捉、training外の入力無視、後続データの保持、
+flagsとresetを検査し、全容量試験の依存関係としてCIにも組み込む。
+UART試験は4 wordの順序とindexのwrapを照合する。実機スクリプトは4回の終端フレームを
+取得してから終了し、training sampleの全wordを保存する。
+
+最初の32 bit観測版（SHA256
+`5eb89d71d584e12028594dfd5a1b3f60e40ab8bea4d2a1ac0d6ad1f23dfe29b3`）は
+`20261006-121850-DdrFullSlow`で`!BD300000FF00F0FF0`を得た。
+両laneのburst/valid検出は成立し、先頭2 beatはtraining patternと一致したが、
+両laneの校正照合が不成立だった。これを受けて観測を全8 beatへ拡張した。
+
+128 bit観測版はSHA256
+`96a81b5477ad8ea7d9aab71359f80994a440114afa82e4618ddb762d1a477af3`。
+`20261006-122523-DdrFullSlow`でindex 0〜3のsampleは順に
+`F00F0FF0 / F00F0FF0 / 96696996 / C33C3CC3`だった。両laneでburst/validを検出したが、
+校正結果は不成立である。先頭2 beatが重複し、期待patternの先頭は当該wordのbeat 2から
+始まる配置となっている。末尾の`5AA5/A55A`はこの捕捉範囲に入らない。
+現行の前cycle＋現在cycleだけの照合では、この配置の全patternを評価できない。
+次に次cycleも含む校正・組立の窓を追加し、この境界をモデル試験へ含める。
+setup/hold違反0件、LCD復帰とUART検査は成功した。
+
 ### コマンドとrefresh
 
 99 MHz制御、396 MHz DDR clock、CL=6/CWL=5を使用する。WRITEはCA slot 3、他のアクセス
