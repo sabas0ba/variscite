@@ -16,6 +16,8 @@ module tb_ddr_full_probe;
     logic [127:0] memory[int unsigned], returning;
     integer writes=0, reads=0, refs=0, cycles=0, last_ref=0, pending=0, mode=0;
     integer row=0, active_bank=0, write_key=0;
+    integer retries=0, retry_index=0;
+    logic expect_retry=0, suppress_return=0;
     rv32ima_DdrWordProbe #(.HOLD_CYCLES(1024), .FULL_WORDS(WORDS)) dut (
         .i_cpu_clk(cpu_clk), .i_clk(clk), .i_reset(rst), .i_enable(!rst),
         .i_read_data(read_data), .i_read_valid(read_valid), .o_done(done), .o_found(found),
@@ -28,6 +30,7 @@ module tb_ddr_full_probe;
         read_valid<=0;
         if (rst) begin
             writes=0; reads=0; refs=0; cycles=0; last_ref=0; pending=0;
+            retries=0; expect_retry=0; suppress_return=0;
             memory.delete();
         end else begin
             cycles++;
@@ -35,7 +38,7 @@ module tb_ddr_full_probe;
             if (pending!=0) begin
                 if (pending==1) begin
                     read_data<=returning;
-                    read_valid<=(mode==2 && reads==20) ? 0 : 3;
+                    read_valid<=suppress_return ? 0 : 3;
                 end
                 pending--;
             end
@@ -45,20 +48,37 @@ module tb_ddr_full_probe;
                 if (cmd==3'b100 || cmd==3'b101) begin
                     integer key, index;
                     key=(active_bank<<20)|(row<<7)|(32'(addr)>>3);
-                    index=cmd==3'b100 ? writes%WORDS : WORDS-1-reads%WORDS;
+                    index=cmd==3'b100 ? writes%WORDS : expect_retry ? retry_index : WORDS-1-reads%WORDS;
                     if (key!=index/4) $fatal(1,"scan order/address");
                     // Emulate one stuck address line after checking the PHY CA.
                     if (mode==3) key=key & ~4;
                     if (cmd==3'b100) begin
+                        if (expect_retry) $fatal(1,"write before retry");
                         if (reads!=(writes/WORDS)*WORDS || writes>=2*WORDS)
                             $fatal(1,"rewrite before all words verified");
                         write_key=key;
                     end else begin
-                        if (writes!=(reads/WORDS+1)*WORDS || memory.exists(key)==0)
+                        if (writes!=((reads-(expect_retry ? 1 : 0))/WORDS+1)*WORDS || memory.exists(key)==0)
                             $fatal(1,"read before full write pass");
                         returning=memory[key];
-                        if (mode==1 && reads==13) returning[(index%4)*32+3]=~returning[(index%4)*32+3];
-                        pending=8; reads++;
+                        suppress_return=0;
+                        if (expect_retry) begin
+                            retries++;
+                            expect_retry=0;
+                            if (mode==4) suppress_return=1;
+                        end else begin
+                            if (((mode==1 || mode==4) && reads==13) ||
+                                (mode==5 && reads==WORDS-1) || (mode==6 && reads==2*WORDS-1))
+                                returning[(index%4)*32+3]=~returning[(index%4)*32+3];
+                            suppress_return=(mode==2 && reads==19);
+                            if (((mode==1 || mode==4) && reads==13) || suppress_return || (mode==3 && reads==16) ||
+                                (mode==5 && reads==WORDS-1) || (mode==6 && reads==2*WORDS-1)) begin
+                                expect_retry=1;
+                                retry_index=index;
+                            end
+                            reads++;
+                        end
+                        pending=8;
                     end
                 end
             end
@@ -78,16 +98,21 @@ module tb_ddr_full_probe;
         end
     end
     initial begin
-        for (integer scenario=0;scenario<4;scenario++) begin
+        for (integer scenario=0;scenario<7;scenario++) begin
             @(negedge clk); rst=1; mode=scenario;
             repeat(5) @(negedge clk); rst=0;
             wait(done); @(negedge clk);
             if (found!==(scenario==0) || writes!=2*WORDS || reads!=2*WORDS || refs<8)
                 $fatal(1,"full probe scenario=%0d found=%b writes=%0d reads=%0d",scenario,found,writes,reads);
             if ((scenario==0 && failure!==0) ||
-                (scenario==1 && (failure!==32'h80000032 || actual!==(32'h193a70c5 ^ 32'd50 ^ 32'd8))) ||
-                (scenario==2 && (failure!==32'hc000002c || actual!==0)) ||
-                (scenario==3 && failure!==32'h8000002f)) $fatal(1,"first failure report %h %h",failure,actual);
+                (scenario==1 && (failure!==32'h88000032 || actual!==(32'h193a70c5 ^ 32'd50 ^ 32'd8))) ||
+                (scenario==2 && (failure!==32'hc800002c || actual!==0)) ||
+                (scenario==3 && failure!==32'h8200002f) ||
+                (scenario==4 && failure!==32'h84000032) ||
+                (scenario==5 && (failure!==32'h88000000 || actual!==(32'h193a70c5 ^ 32'd8))) ||
+                (scenario==6 && (failure!==32'ha8000000 || actual!==((~32'h193a70c5) ^ 32'd8))))
+                $fatal(1,"first failure report %h %h",failure,actual);
+            if (retries!=(scenario==0 ? 0 : 1)) $fatal(1,"retry count");
             $display("full probe scenario=%0d cycles=%0d refs=%0d writes=%0d reads=%0d",scenario,cycles,refs,writes,reads);
         end
         $display("DDR full probe PASS: complementary passes, reverse read, corruption, timeout, alias");

@@ -59,7 +59,7 @@ DDRと周辺回路の検証完了は、限定した独立診断の成功だけ�
 | --- | --- |
 | 初期化・PHY起動・lane training | 単体試験と独立実機診断。PLL/DLL異常時の復帰はシミュレーション対象 |
 | DDRコマンド間隔・周期refresh | controllerモデルのコマンド監視、保持診断。全容量走査中にもrefresh継続が必要 |
-| 全128 MiB・全word・両極性 | 全容量の書込み・逆順読戻し・反転pattern走査を追加。実機で不一致を検出し、原因を調査中 |
+| 全128 MiB・全word・両極性 | 受信遅延−4 tapの比較回路で全走査一致。繰返しと隣接設定の確認中。既存設定は不一致 |
 | 部分書込み・word lane・隣接word保持 | 単体・結合試験、既存DM診断とwordポート独立実機診断 |
 | 範囲外・非整列・timeout・後続要求 | ポート/controller結合試験。CPUアクセス例外への変換は未実装 |
 | CDCの要求保持・応答一対一・reset取消し | 3クロック比の結合試験、停止clockでのreset試験、独立実機word診断 |
@@ -175,7 +175,9 @@ status後の8桁はtraining値であり、word件数ではない。範囲外要�
 `TangDdrFullTop`は`DdrWordProbe.FULL_WORDS=33_554_432`を使用する。
 全wordを昇順に`0x193a70c5 XOR word番号`で書き、100 ms保持後に逆順で全wordを比較する。
 次に値を全bit反転し、同じ書込み・保持・逆順比較を繰り返す。総数は67,108,864 WRITEと
-67,108,864 READ。全期間で通常controllerのrefreshを継続し、最初のエラーを保持する。
+67,108,864 READ。最初のREAD失敗時だけ、書込みを挟まず同じwordを1回再読出しする。
+再読出しが成功しても元の失敗は保持し、残りの全走査を継続する。
+全期間で通常controllerのrefreshを継続する。
 
 ```bash
 make ddr-full-probe-test
@@ -188,11 +190,14 @@ DDR_FULL=1 bash scripts/build_ddr_mpr.sh
 
 UART形式は`!<status><failure:8hex><actual:8hex>`。failureはbit31が失敗あり、
 bit30がcontroller error、bit29が反転pass、bit28がWRITE、bit[24:0]が最初の失敗word番号。
+bit27は再読出しが期待値と一致、bit26は再読出しのcontroller error、bit25は再読出しが
+最初の実測値と一致したことを表す。元のactualは再読出し結果で上書きしない。
 byte addressは`0x80000000 + 4 * word番号`。actualはその応答の32 bit値である。
 statusが処理中のRでも最初の失敗は読み取れる。失敗なしの場合、failure/actualは0である。
 他の診断の8桁payloadと混同しないよう、ホストはDdrFullだけ16桁を要求する。
 
-短縮した64 wordモデルは正常・bit破損・valid欠落・stuck addressによるaliasの4ケースを検査する。
+短縮した64 wordモデルは正常・bit破損・valid欠落・stuck addressによるaliasに加え、
+再読出しのtimeout、通常pass末尾の失敗、反転pass末尾の失敗の計7ケースを検査する。
 全word書込み前の読出しや、全word読戻し前の反転pass移行を禁止し、昇順WRITE・逆順READ、
 byte mask、独立計算したpattern、最初の失敗位置とactualの保持を照合する。
 既存の32 word診断とUARTの従来形式も回帰試験する。
@@ -202,7 +207,8 @@ byte mask、独立計算したpattern、最初の失敗位置とactualの保持�
 ログ`logs/board/20261006-105953-DdrFull-*`。初版UARTはtraining値のみの8桁で、
 90秒時点には`!V5AA5A55A`となっていた。LCD復帰は成功した。
 この結果を受け、上記の最初の失敗位置・actualを出力する64 bit診断を追加した。
-全容量の実機検証は未合格であり、限定32 word診断の成功から全容量正常とは判定しない。
+この既存設定の全容量試験は未合格であり、限定32 word診断の成功から全容量正常とは判定しない。
+後述の受信遅延調整版とは測定結果を分けて扱う。
 
 64 bit診断版はSHA256
 `85e71c03dd6dc30fa456263fad98c277f3ea3df5acc0b3e662a225db852dff6f`。
@@ -219,6 +225,48 @@ byte mask、独立計算したpattern、最初の失敗位置とactualの保持�
 位置が変化するため固定アドレス故障とは断定せず、当該patternの反復アクセスと
 失敗wordの再読出しで書込み側・読出し側を切り分ける。全回LCD復帰・UART確認は成功した。
 初版と64 bit版のbitstreamはローカルの`logs/board-images/`にも保存している。
+
+#### 最初の失敗wordの再読出し
+
+再読出し版はSHA256
+`2c9a9f8d4bb28cf84581ca78d46621a1645790b09897a293b140899300abcc7f`。
+実機ログ`20261006-111921-DdrFull`では、通常passの`0x8757EB54`で期待値
+`0x18EF8A10`に対し`0x18FF8A10`を受信したが、書込みなしの直後の再読出しは期待値に一致した。
+終端フレーム`!V89D5FAD518FF8A10`のbit27が再読出し一致を示す。
+この結果は当該読出しの一過性不一致を示し、固定した保存データ不良という説明だけでは足りない。
+全走査の失敗判定は解除していない。所要72.616秒、LCD復帰・UART確認は成功。
+7ケースのシミュレーションは`sim/full-retry-boundary-tests.log`に記録した。
+
+受信タイミングの比較用に`TangDdrFullShiftTop`を追加し、`READ_TAPS`で
+DQS受信遅延の変更段数、`READ_DECREASE`で減少方向を指定する。変更完了を待って
+array trainingを開始する。PLL/DLL設定、書込み位相、396/99 MHzの周波数は変更しない。
+ビルドは`DDR_FULL_SHIFT=1 bash scripts/build_ddr_mpr.sh`、実機は`-Mode DdrFullShift`。
+この比較診断にも全128 MiB・2極性・最初の失敗後の再読出しを適用する。
+現在の比較用topは4 tap減少を指定する。通常の`TangDdrFullTop`は変更しない。
+`ddr-mpr-delay-test`は増加方向の全走査に加え、減少方向で0→−5→−2 tapとなることを
+プリミティブ入力の独立したカウンタで検査する。
+
+| 受信遅延 | 実機ログ | 結果 |
+|---|---|---|
+| +4 tap | `20261006-112322-DdrFullShift` | `!B0000000000000000`、training失敗 |
+| +1 tap | `20261006-112707-DdrFullShift` | `!V89FFF8C498C58801`、`0x87FFE310`で期待値`0x18C58801`に対し`0x98C58801`。再読出し一致 |
+| −1 tap | `20261006-113259-DdrFullShift` | `!V8885708619FF0043`、`0x8215C218`で期待値`0x19BF0043`に対し`0x19FF0043`。再読出し一致 |
+| −2 tap | `20261006-113532-DdrFullShift` | `!VA97B8F7AE7FE0040`、通常pass一致。反転passの`0x85EE3DE8`で期待値`0xE7BE0040`に対し`0xE7FE0040`。再読出し一致 |
+| −3 tap | `20261006-113753-DdrFullShift` | `!VA97ACF7AE7FF4040`、通常pass一致。反転passの`0x85EB3DE8`で期待値`0xE7BF4040`に対し`0xE7FF4040`。再読出し一致 |
+| −4 tap | `20261006-114045-DdrFullShift` | `!A0000000000000000`、全128 MiB・両極性一致（72.604秒） |
+
++4 tapのSHA256は`e20c510b0ffe55348a2fa3c1750d25b5fd8039bc40cd9ffd9bd70af37a026e34`、
++1 tapは`2ce646e7cd68a166d89475588ee832a135a2907a9ce5b17fccf82db2c6252b5b`。
+−1 tapは`2d219a8408895a5181d681b842e8bade364d36987bc329aef10baf2ac2789a12`。
+−2 tapは`08e91c85aed4ce781b76492f91d8efa11e0cbec099f1bd510c21b282110194ee`。
+−3 tapは`4842de129d9385fa138738dbb206fa892c05c9a7367c4523cff85bbeacbbb940`。
+−4 tapは`a2ebd649c977b6f265f5c3c435eadb3e93949d25e69875a1efb9b513910c11fa`。
+各回路ともsetup/hold違反は0件で、試験後のLCD復帰・UART確認は成功した。
+−4 tapで初めて全容量走査が一致した。同一bitstreamを再書込みした
+`20261006-114226-DdrFullShift`（72.597秒）と`20261006-114404-DdrFullShift`（72.603秒）も
+全容量・両極性が一致し、計3回の独立起動を確認した。各回LCD復帰・UART確認も成功。
+3回目は最初のFTDI reset errorを既存の再試行処理で回復してから書き込んだ。
+隣接設定の比較は継続する。単一基板・室内条件であり、温度・電圧変動の検証ではない。
 
 ### コマンドとrefresh
 
