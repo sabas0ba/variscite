@@ -11,15 +11,38 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
         run-isa cov-test coverage cov-check cosim linux-build linux-boot \
         fpga-fw fpga-sim por-test lcd-test fpga-lcd fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
-all: lint veryl-test plic-multi-test tb isa-build run-isa cov-test cov-check \
+all: lint veryl-test plic-multi-test core-bus-error-test tb isa-build run-isa cov-test cov-check \
      cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test \
-     ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test
+     ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test \
+     ddr-burst-controller-test ddr-controller-probe-test
 
 lint:
 	@test -z "$$(find src fpga -type f \( -name '*.sv' -o -name '*.v' \))" || \
 	    { echo 'RTL sources under src/ and fpga/ must be Veryl' >&2; exit 1; }
 	veryl fmt --check
 	veryl check
+
+.PHONY: core-bus-error-test
+.PHONY: ddr-cpu-port-test
+ddr-cpu-port-test: veryl-build
+	FULL_WORDS=64 HOLD_CYCLES=1000 OUTPUT_NAME=ddr_cpu_test bash scripts/build_ddr_cpu.sh
+	for ratio in '19 5' '5 19' '7 11'; do \
+	    set -- $$ratio; \
+	    verilator --binary --timing -Wno-fatal --top-module tb_ddr_cpu_port \
+	    -GCPU_HALF=$$1 -GMEM_HALF=$$2 \
+	    -Mdir sim/obj_ddr_cpu_port -o ddr_cpu_port \
+	    $(RTL) target/ram.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_cpu_port.sv \
+	    tb/tb_ddr_cpu_port.sv || exit 1; \
+	    sim/obj_ddr_cpu_port/ddr_cpu_port || exit 1; \
+	done
+
+core-bus-error-test: veryl-build
+	mkdir -p sim logs/cov
+	verilator --cc --exe --build --coverage --trace --top-module rv32ima_Soc \
+	    -Mdir sim/obj_core_bus_error -o core_bus_error \
+	    $(RTL) tb/tb_core_bus_error.cpp
+	sim/obj_core_bus_error/core_bus_error
 
 veryl-build:
 	veryl build
@@ -66,7 +89,7 @@ DIRECTED_TESTS := coverage_boost irq_test umode_test pmp_test clint_plic_test
 # clint_plic_test runs with a divided mtime tick so that the CLINT counter is
 # exercised on both the ticking and the idle cycle.
 
-cov-test:
+cov-test: core-bus-error-test
 	mkdir -p sim logs/isa logs/cov
 	for t in $(DIRECTED_TESTS); do \
 	    $(RISCV_PREFIX)gcc -march=rv32g -mabi=ilp32 -static -mcmodel=medany \
@@ -94,6 +117,69 @@ coverage:
 	    logs/cov/*.dat 2>&1 | tee logs/cov/summary.txt
 
 # --- FPGA ports ----------------------------------------------------------
+.PHONY: ddr-burst-controller-test
+.PHONY: ddr-controller-probe-test
+.PHONY: ddr-word-probe-test
+.PHONY: ddr-full-probe-test ddr-training-diagnostic-test
+ddr-training-diagnostic-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_training_diagnostic \
+	    -Mdir sim/obj_ddr_training_diagnostic -o tb_ddr_training_diagnostic \
+	    target/tang_primer_20k/ddr_training_diagnostic.sv tb/tb_ddr_training_diagnostic.sv
+	sim/obj_ddr_training_diagnostic/tb_ddr_training_diagnostic
+
+ddr-full-probe-test: veryl-build ddr-training-diagnostic-test
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_full_probe \
+	    -Mdir sim/obj_ddr_full_probe -o tb_ddr_full_probe \
+	    target/tang_primer_20k/ddr_word_cdc.sv target/tang_primer_20k/ddr_word_port.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_full_probe.sv
+	sim/obj_ddr_full_probe/tb_ddr_full_probe
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_full_probe -GMIXED=1 \
+	    -Mdir sim/obj_ddr_full_mixed_probe -o tb_ddr_full_mixed_probe \
+	    target/tang_primer_20k/ddr_word_cdc.sv target/tang_primer_20k/ddr_word_port.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_full_probe.sv
+	sim/obj_ddr_full_mixed_probe/tb_ddr_full_mixed_probe
+
+ddr-word-probe-test: veryl-build ddr-full-probe-test
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_word_probe \
+	    -Mdir sim/obj_ddr_word_probe -o tb_ddr_word_probe \
+	    target/tang_primer_20k/ddr_word_cdc.sv target/tang_primer_20k/ddr_word_port.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_word_probe.sv
+	sim/obj_ddr_word_probe/tb_ddr_word_probe
+
+.PHONY: ddr-cpu-access-test
+ddr-cpu-access-test: veryl-build
+	CPU_PROGRAM=access bash scripts/build_ddr_cpu.sh
+	verilator --binary --timing -Wno-fatal --top-module tb_ddr_cpu_access \
+	    -Mdir sim/obj_ddr_cpu_access -o ddr_cpu_access \
+	    $(RTL) target/ram.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_cpu_port.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_cpu_probe.sv \
+	    tb/tb_ddr_cpu_access.sv
+	sim/obj_ddr_cpu_access/ddr_cpu_access
+
+.PHONY: ddr-cpu-probe-test
+ddr-cpu-probe-test: veryl-build
+	FULL_WORDS=64 HOLD_CYCLES=1000 OUTPUT_NAME=ddr_cpu_test bash scripts/build_ddr_cpu.sh
+	verilator --binary --timing -Wno-fatal --top-module tb_ddr_cpu_probe \
+	    -Mdir sim/obj_ddr_cpu_probe -o ddr_cpu_probe \
+	    $(RTL) target/ram.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_cpu_port.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_cpu_probe.sv \
+	    tb/tb_ddr_cpu_probe.sv
+	sim/obj_ddr_cpu_probe/ddr_cpu_probe
+
+ddr-controller-probe-test: veryl-build ddr-word-probe-test ddr-cpu-port-test ddr-cpu-probe-test ddr-cpu-access-test
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_controller_probe \
+	    -Mdir sim/obj_ddr_controller_probe -o tb_ddr_controller_probe \
+	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_controller_probe.sv tb/tb_ddr_controller_probe.sv
+	sim/obj_ddr_controller_probe/tb_ddr_controller_probe
+
+ddr-burst-controller-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_burst_controller \
+	    -Mdir sim/obj_ddr_burst_controller -o tb_ddr_burst_controller \
+	    target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_burst_controller.sv
+	sim/obj_ddr_burst_controller/tb_ddr_burst_controller
+
 .PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test ddr-timeline-test ddr-full-timeline-test ddr-status-uart-test
 
 .PHONY: ddr-array-phase-test
@@ -278,6 +364,14 @@ ddr-status-uart-test: veryl-build
 	    -Mdir sim/obj_ddr_status_uart_framed -o tb_ddr_status_uart_framed \
 	    target/tang_primer_20k/ddr_init_probe.sv tb/tb_ddr_status_uart.sv
 	sim/obj_ddr_status_uart_framed/tb_ddr_status_uart_framed
+	verilator --binary --timing --timescale 1ns/1ps -GFRAMED=1 -GWIDE=1 --top-module tb_ddr_status_uart \
+	    -Mdir sim/obj_ddr_status_uart_wide -o tb_ddr_status_uart_wide \
+	    target/tang_primer_20k/ddr_init_probe.sv tb/tb_ddr_status_uart.sv
+	sim/obj_ddr_status_uart_wide/tb_ddr_status_uart_wide
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_status_uart -GFRAMED=1 -GWIDE=1 -GSTREAM=1 \
+	    -Mdir sim/obj_ddr_status_uart_stream -o tb_ddr_status_uart_stream \
+	    target/tang_primer_20k/ddr_init_probe.sv tb/tb_ddr_status_uart.sv
+	sim/obj_ddr_status_uart_stream/tb_ddr_status_uart_stream
 
 ddr-mpr-delay-test: veryl-build
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_mpr_delay_sweep \
@@ -305,7 +399,18 @@ ddr-read-gate-test: veryl-build
 	    target/tang_primer_20k/ddr_read_gate_sweep.sv tb/tb_ddr_read_gate_sweep.sv
 	sim/obj_ddr_read_gate_sweep/tb_ddr_read_gate_sweep
 
-ddr-word-cdc-test: veryl-build
+.PHONY: ddr-cdc-controller-test
+ddr-cdc-controller-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_cdc_controller \
+	    -Mdir sim/obj_ddr_cdc_controller -o tb_ddr_cdc_controller \
+	    target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_cdc_controller.sv
+	sim/obj_ddr_cdc_controller/tb_ddr_cdc_controller
+	sim/obj_ddr_cdc_controller/tb_ddr_cdc_controller +cpu_half=3 +mem_half=11
+	sim/obj_ddr_cdc_controller/tb_ddr_cdc_controller +cpu_half=13 +mem_half=2
+
+ddr-word-cdc-test: veryl-build ddr-cdc-controller-test
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_word_cdc \
 	    -Mdir sim/obj_ddr_word_cdc -o tb_ddr_word_cdc \
 	    target/tang_primer_20k/ddr_word_cdc.sv tb/tb_ddr_word_cdc.sv

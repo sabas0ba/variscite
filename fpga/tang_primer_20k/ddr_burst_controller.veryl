@@ -1,0 +1,242 @@
+/// One outstanding aligned BL8 request for H5TQ1G63EFR x16, 99 MHz control.
+/// Enable only after initialization/training and PRE/tRP. Disabling requires
+/// a common DRAM/PHY reset. Read data comes from the trained read assembler.
+/// CA slot 3 for WRITE (CWL=5), slot 2 for all other commands (CL=6).
+module DdrBurstController (
+    i_clk        : input  clock     ,
+    i_rst        : input  reset     ,
+    i_enable     : input  logic     ,
+    i_req_valid  : input  logic     ,
+    o_req_ready  : output logic     ,
+    i_req_addr   : input  logic<27> ,
+    i_req_data   : input  logic<128>,
+    i_req_strb   : input  logic<16> ,
+    o_rsp_valid  : output logic     ,
+    i_rsp_ready  : input  logic     ,
+    o_rsp_data   : output logic<128>,
+    o_rsp_error  : output logic     ,
+    i_read_data  : input  logic<128>,
+    i_read_valid : input  logic<2>  ,
+    o_cmd_valid  : output logic     ,
+    o_cmd        : output logic<3>  ,
+    o_addr       : output logic<14> ,
+    o_bank       : output logic<3>  ,
+    o_read       : output logic<8>  ,
+    o_odt        : output logic<4>  ,
+    o_data       : output logic<128>,
+    o_mask       : output logic<16> ,
+    o_dq_enable  : output logic<4>  ,
+    o_dqs_enable : output logic<4>  ,
+    o_dqs_pattern: output logic<8>  ,
+) {
+    enum State: logic<4> {
+        refresh,
+        refresh_wait,
+        idle,
+        activate,
+        act_wait,
+        write,
+        wave,
+        read,
+        sample,
+        precharge,
+        pre_wait,
+    }
+    var state      : State     ;
+    var age        : logic<9>  ;
+    var elapsed    : logic<5>  ;
+    var address    : logic<27> ;
+    var write_data : logic<128>;
+    var strobe     : logic<16> ;
+    var received   : logic<2>  ;
+    var read_data  : logic<128>;
+    var read_error : logic     ;
+    let refresh_due: logic      = age >= 9'd256;
+    assign o_req_ready = i_enable && state == State::idle && !refresh_due && !o_rsp_valid;
+
+    always_ff {
+        if_reset {
+            state       = State::refresh;
+            age         = 0;
+            elapsed     = 0;
+            address     = 0;
+            write_data  = 0;
+            strobe      = 0;
+            received    = 0;
+            read_data   = 0;
+            read_error  = 0;
+            o_rsp_valid = 0;
+            o_rsp_data  = 0;
+            o_rsp_error = 0;
+        } else if !i_enable {
+            state       = State::refresh;
+            age         = 0;
+            elapsed     = 0;
+            address     = 0;
+            write_data  = 0;
+            strobe      = 0;
+            received    = 0;
+            read_data   = 0;
+            read_error  = 0;
+            o_rsp_valid = 0;
+            o_rsp_data  = 0;
+            o_rsp_error = 0;
+        } else {
+            age = age + 9'd1;
+            if o_rsp_valid && i_rsp_ready {
+                o_rsp_valid = 0;
+            }
+            case state {
+                State::refresh: {
+                    age     = 0;
+                    elapsed = 0;
+                    state   = State::refresh_wait;
+                }
+                State::refresh_wait: {
+                    // 32 cycles (323 ns) of recovery; no external response can
+                    // block the periodic refresh state machine.
+                    if elapsed == 30 {
+                        state = State::idle;
+                    } else {
+                        elapsed = elapsed + 5'd1;
+                    }
+                }
+                State::idle: {
+                    if refresh_due {
+                        state = State::refresh;
+                    } else if i_req_valid && o_req_ready {
+                        address    = i_req_addr;
+                        write_data = i_req_data;
+                        strobe     = i_req_strb;
+                        received   = 0;
+                        read_data  = 0;
+                        read_error = 0;
+                        if i_req_addr[3:0] != 0 {
+                            o_rsp_data  = 0;
+                            o_rsp_error = 1;
+                            o_rsp_valid = 1;
+                        } else {
+                            state = State::activate;
+                        }
+                    }
+                }
+                State::activate: {
+                    elapsed = 0;
+                    state   = State::act_wait;
+                }
+                State::act_wait: {
+                    if elapsed == 2 {
+                        state = if strobe != 0 ? State::write : State::read;
+                    } else {
+                        elapsed = elapsed + 5'd1;
+                    }
+                }
+                State::write: {
+                    elapsed = 0;
+                    state   = State::wave;
+                }
+                State::wave: {
+                    if elapsed == 8 {
+                        state = State::precharge;
+                    } else {
+                        elapsed = elapsed + 5'd1;
+                    }
+                }
+                State::read: {
+                    elapsed = 0;
+                    state   = State::sample;
+                }
+                State::sample: {
+                    for lane in 0..2 {
+                        // Capture each lane once; later unsolicited data must not overwrite it.
+                        if i_read_valid[lane] && !received[lane] {
+                            for beat in 0..8 {
+                                read_data[16 * beat + 8 * lane+:8] = i_read_data[16 * beat + 8 * lane+:8];
+                            }
+                        }
+                    }
+                    received = received | i_read_valid;
+                    if elapsed == 11 {
+                        read_error = (received | i_read_valid) != 2'b11;
+                        state      = State::precharge;
+                    } else {
+                        elapsed = elapsed + 5'd1;
+                    }
+                }
+                State::precharge: {
+                    elapsed = 0;
+                    state   = State::pre_wait;
+                }
+                State::pre_wait: {
+                    if elapsed == 2 {
+                        o_rsp_data  = if read_error ? 128'b0 : read_data;
+                        o_rsp_error = read_error;
+                        o_rsp_valid = 1;
+                        state       = State::idle;
+                    } else {
+                        elapsed = elapsed + 5'd1;
+                    }
+                }
+                default: state = State::refresh;
+            }
+        }
+    }
+
+    always_comb {
+        o_cmd_valid   = 0;
+        o_cmd         = 3'b111;
+        o_addr        = 0;
+        o_bank        = address[26:24];
+        o_read        = 0;
+        o_odt         = 0;
+        o_data        = 0;
+        o_mask        = 16'hffff;
+        o_dq_enable   = 0;
+        o_dqs_enable  = 0;
+        o_dqs_pattern = 0;
+        if i_enable {
+            case state {
+                State::refresh: {
+                    o_cmd_valid = 1;
+                    o_cmd       = 3'b001;
+                }
+                State::activate: {
+                    o_cmd_valid = 1;
+                    o_cmd       = 3'b011;
+                    o_addr      = {1'b0, address[23:11]};
+                }
+                State::write, State::read: {
+                    o_cmd_valid = 1;
+                    o_cmd       = if state == State::write ? 3'b100 : 3'b101;
+                    o_addr      = {4'b0, address[10:4], 3'b0};
+                    o_odt       = if state == State::write ? 4'b1111 : 4'b0;
+                }
+                State::wave: {
+                    o_odt = 4'b1111;
+                    if elapsed == 0 {
+                        o_dqs_enable = 4'b1000;
+                    } else if elapsed == 1 {
+                        o_data        = write_data;
+                        o_mask        = ~strobe;
+                        o_dq_enable   = 4'b1111;
+                        o_dqs_enable  = 4'b1111;
+                        o_dqs_pattern = 8'haa;
+                    } else if elapsed == 2 {
+                        o_dqs_enable = 4'b0001;
+                    }
+                }
+                State::sample: {
+                    if elapsed == 1 {
+                        o_read = 8'hff;
+                    }
+                }
+                State::precharge: {
+                    o_cmd_valid = 1;
+                    o_cmd       = 3'b010;
+                    o_addr      = 14'h0400;
+                }
+                default: {}
+            }
+        }
+    }
+}

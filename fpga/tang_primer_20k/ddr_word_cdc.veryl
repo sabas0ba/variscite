@@ -2,6 +2,8 @@
 /// Payload mailboxes stay stable until acknowledged; only toggles are synced.
 /// Both domains require the SAME asynchronous reset (e.g. POR or PLL loss).
 /// Backend response must occur after or on request acceptance, exactly once.
+/// The backend holds response valid/data/error until o_rsp_ready.
+/// CPU samples o_rdata/o_error with the one-cycle o_ready completion pulse.
 module DdrWordCdc (
     i_cpu_clk  : input  'cpu   clock                ,
     i_mem_clk  : input  'mem   clock                ,
@@ -12,13 +14,16 @@ module DdrWordCdc (
     i_wstrb    : input  'cpu   logic           <4>  ,
     o_ready    : output 'cpu   logic                ,
     o_rdata    : output 'cpu   logic           <32> ,
+    o_error    : output 'cpu   logic                ,
     o_req_valid: output 'mem   logic                ,
     i_req_ready: input  'mem   logic                ,
     o_req_addr : output 'mem   logic           <32> ,
     o_req_wdata: output 'mem   logic           <128>,
     o_req_wstrb: output 'mem   logic           <16> ,
     i_rsp_valid: input  'mem   logic                ,
+    o_rsp_ready: output 'mem   logic                ,
     i_rsp_data : input  'mem   logic           <128>,
+    i_rsp_error: input  'mem   logic                ,
 ) {
     enum CpuState: logic<2> {
         idle,
@@ -38,6 +43,7 @@ module DdrWordCdc (
     var write_mailbox   : 'cpu logic   <32> ;
     var strobe_mailbox  : 'cpu logic   <4>  ;
     var response_mailbox: 'mem logic   <128>;
+    var error_mailbox   : 'mem logic        ;
     #[sv("async_reg = \"true\"")]
     var request_sync: 'mem logic<2>;
     #[sv("async_reg = \"true\"")]
@@ -79,6 +85,7 @@ module DdrWordCdc (
                 write_mailbox   = 0;
                 strobe_mailbox  = 0;
                 o_rdata         = 0;
+                o_error         = 0;
             } else {
                 response_sync = {response_sync[0], response_toggle};
                 case cpu_state {
@@ -91,9 +98,11 @@ module DdrWordCdc (
                     }
                     CpuState::waiting : if response_sync[1] == request_toggle {
                         o_rdata   = response_mailbox[32 * address_mailbox[3:2]+:32];
+                        o_error   = error_mailbox;
                         cpu_state = CpuState::response;
                     }
                     CpuState::response: {
+                        o_error   = 0;
                         cpu_state = CpuState::idle;
                     }
                     default: {
@@ -108,6 +117,7 @@ module DdrWordCdc (
                 response_toggle  = 0;
                 request_sync     = 0;
                 response_mailbox = 0;
+                error_mailbox    = 0;
                 mem_address      = 0;
                 mem_write        = 0;
                 mem_strobe       = 0;
@@ -123,6 +133,7 @@ module DdrWordCdc (
                     MemState::request: if i_req_ready {
                         if i_rsp_valid {
                             response_mailbox = i_rsp_data;
+                            error_mailbox    = i_rsp_error;
                             response_toggle  = request_sync[1];
                             mem_state        = MemState::idle;
                         } else {
@@ -131,6 +142,7 @@ module DdrWordCdc (
                     }
                     MemState::waiting: if i_rsp_valid {
                         response_mailbox = i_rsp_data;
+                        error_mailbox    = i_rsp_error;
                         response_toggle  = request_sync[1];
                         mem_state        = MemState::idle;
                     }
@@ -143,6 +155,7 @@ module DdrWordCdc (
     }
     assign o_ready     = cpu_state == CpuState::response;
     assign o_req_valid = mem_state == MemState::request;
+    assign o_rsp_ready = mem_state == MemState::waiting || (mem_state == MemState::request && i_req_ready);
     assign o_req_addr  = {mem_address[31:4], 4'b0};
     always_comb {
         o_req_wdata                            = 0;

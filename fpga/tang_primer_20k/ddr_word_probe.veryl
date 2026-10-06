@@ -1,0 +1,247 @@
+/// Reference-clock word requests through range checking, CDC and controller.
+/// Write 32 words across all banks, hold under refresh, then verify each word.
+module DdrWordProbe #(
+    param HOLD_CYCLES: u32 = 2_700_000,
+    /// Zero selects the sparse 32-word diagnostic; otherwise scan this many
+    /// consecutive words twice, with complementary address-derived patterns.
+    param FULL_WORDS: u32 = 0,
+    /// Mix the address into all data bits for the full-capacity diagnostic.
+    param FULL_MIXED: u32 = 0,
+) (
+    i_cpu_clk   : input  'cpu   clock                ,
+    i_clk       : input  'mem   clock                ,
+    i_reset     : input  'async reset_async_high     ,
+    i_enable    : input  'mem   logic                ,
+    i_read_data : input  'mem   logic           <128>,
+    i_read_valid: input  'mem   logic           <2>  ,
+    o_done      : output 'mem   logic                ,
+    o_found     : output 'mem   logic                ,
+    /// First failure: valid/error/inverted/write/retry match/error/same/index[24:0].
+    o_failure    : output 'cpu logic<32> ,
+    o_actual     : output 'cpu logic<32> ,
+    o_cmd_valid  : output 'mem logic     ,
+    o_cmd        : output 'mem logic<3>  ,
+    o_addr       : output 'mem logic<14> ,
+    o_bank       : output 'mem logic<3>  ,
+    o_read       : output 'mem logic<8>  ,
+    o_odt        : output 'mem logic<4>  ,
+    o_data       : output 'mem logic<128>,
+    o_mask       : output 'mem logic<16> ,
+    o_dq_enable  : output 'mem logic<4>  ,
+    o_dqs_enable : output 'mem logic<4>  ,
+    o_dqs_pattern: output 'mem logic<8>  ,
+) {
+    function full_pattern (
+        word_index: input logic<25>,
+    ) -> logic<32> {
+        let seed: logic<32> = 32'h193a_70c5 ^ {7'b0, word_index};
+        let mix0: logic<32> = seed ^ (seed << 13);
+        let mix1: logic<32> = mix0 ^ (mix0 >> 17);
+        return if FULL_MIXED != 0 ? mix1 ^ (mix1 << 5) : seed;
+    }
+    enum State: logic<3> {
+        write,
+        hold,
+        read,
+        gap,
+        done,
+        retry,
+    }
+    var state       : 'cpu State    ;
+    var index       : 'cpu logic<25>;
+    var inverted    : 'cpu logic    ;
+    var elapsed     : 'cpu logic<24>;
+    var failed      : 'cpu logic    ;
+    var after_gap   : 'cpu State    ;
+    var resume_state: 'cpu State    ;
+    #[sv("async_reg = \"true\"")]
+    var enable_sync: 'cpu logic<2>;
+    #[sv("async_reg = \"true\"")]
+    var done_sync: 'mem logic<3>;
+    #[sv("async_reg = \"true\"")]
+    var found_sync    : 'mem logic<2>  ;
+    var mem_reset     : 'mem reset     ;
+    var ready         : 'cpu logic     ;
+    var error         : 'cpu logic     ;
+    var rdata         : 'cpu logic<32> ;
+    let sparse_word   : 'cpu logic<32>  = 32'h193a_70c5
+        ^ {index[4:0], index[4:0], index[4:0], index[4:0], index[4:0], index[4:0], 2'b01};
+    let full_word     : 'cpu logic<32>  = full_pattern(index);
+    let word          : 'cpu logic<32>  = if FULL_WORDS == 0 ? sparse_word : if inverted ? ~full_word : full_word;
+    let last_write    : 'cpu logic      = if FULL_WORDS == 0 ? index == 31 : {7'b0, index} == FULL_WORDS - 1;
+    let last_read     : 'cpu logic      = if FULL_WORDS == 0 ? index == 31 : index == 0;
+    let address       : 'cpu logic<32>  = if state == State::retry ?
+        {5'b10000, o_failure[24:0], 2'b0}
+    : if FULL_WORDS == 0 ?
+        {5'b10000, index[2:0], 8'b0, index[4:0], 2'b0, index[4:0], index[1:0], 2'b0}
+    :
+        {5'b10000, index, 2'b0}
+    ;
+    let valid         : 'cpu logic      = enable_sync[1]
+        && (state == State::write || state == State::read || state == State::retry);
+    let retry_pattern : 'cpu logic<32>  = full_pattern(o_failure[24:0]);
+    let retry_expected: 'cpu logic<32>  = if o_failure[29] ? ~retry_pattern : retry_pattern;
+    var req_valid     : 'mem logic     ;
+    var req_ready     : 'mem logic     ;
+    var req_addr      : 'mem logic<27> ;
+    var req_data      : 'mem logic<128>;
+    var req_strb      : 'mem logic<16> ;
+    var rsp_valid     : 'mem logic     ;
+    var rsp_ready     : 'mem logic     ;
+    var rsp_data      : 'mem logic<128>;
+    var rsp_error     : 'mem logic     ;
+    unsafe (cdc) {
+        assign mem_reset = i_reset as reset;
+        always_ff (i_cpu_clk, i_reset) {
+            if_reset {
+                enable_sync = 0;
+            } else {
+                enable_sync = {enable_sync[0], i_enable};
+            }
+        }
+        always_ff (i_clk, i_reset) {
+            if_reset {
+                done_sync  = 0;
+                found_sync = 0;
+            } else {
+                done_sync  = {done_sync[1:0], state == State::done};
+                found_sync = {found_sync[0], state == State::done && !failed};
+            }
+        }
+        always_ff (i_cpu_clk, i_reset) {
+            if_reset {
+                state        = State::write;
+                index        = 0;
+                inverted     = 0;
+                elapsed      = 0;
+                failed       = 0;
+                o_failure    = 0;
+                o_actual     = 0;
+                after_gap    = State::write;
+                resume_state = State::read;
+            } else if !enable_sync[1] {
+                state        = State::write;
+                index        = 0;
+                inverted     = 0;
+                elapsed      = 0;
+                failed       = 0;
+                o_failure    = 0;
+                o_actual     = 0;
+                after_gap    = State::write;
+                resume_state = State::read;
+            } else {
+                case state {
+                    State::write: if ready {
+                        if error && !failed {
+                            o_failure = {1'b1, error, inverted, 1'b1, 3'b0, index};
+                            o_actual  = rdata;
+                        }
+                        failed = failed || error;
+                        state  = State::gap;
+                        if last_write {
+                            index     = if FULL_WORDS == 0 ? 25'b0 : index;
+                            elapsed   = 0;
+                            after_gap = State::hold;
+                        } else {
+                            index     = index + 25'd1;
+                            after_gap = State::write;
+                        }
+                    }
+                    State::hold : {
+                        if {8'b0, elapsed} == HOLD_CYCLES - 1 {
+                            state = State::read;
+                        } else {
+                            elapsed = elapsed + 24'd1;
+                        }
+                    }
+                    State::read : if ready {
+                        if (error || rdata != word) && !failed {
+                            o_failure = {1'b1, error, inverted, 1'b0, 3'b0, index};
+                            o_actual  = rdata;
+                        }
+                        failed = failed || error || rdata != word;
+                        state  = State::gap;
+                        if last_read {
+                            if FULL_WORDS != 0 && !inverted {
+                                inverted  = 1;
+                                index     = 0;
+                                after_gap = State::write;
+                            } else {
+                                after_gap = State::done;
+                            }
+                        } else {
+                            index     = if FULL_WORDS == 0 ? index + 25'd1 : index - 25'd1;
+                            after_gap = State::read;
+                        }
+                        if FULL_WORDS != 0 && (error || rdata != word) && !failed {
+                            resume_state = if last_read ? (if !inverted ? State::write : State::done) : State::read;
+                            after_gap    = State::retry;
+                        }
+                    }
+                    State::retry: if ready {
+                        // Preserve the original failure and original data even
+                        // if rereading succeeds. No intervening write is issued.
+                        o_failure[27] = !error && rdata == retry_expected;
+                        o_failure[26] = error;
+                        o_failure[25] = !error && rdata == o_actual;
+                        state         = State::gap;
+                        after_gap     = resume_state;
+                    }
+                    State::gap  : state = after_gap;
+                    State::done : {}
+                    default: state = State::write;
+                }
+            }
+        }
+    }
+    assign o_done  = done_sync[2];
+    assign o_found = o_done && found_sync[1];
+    inst port: DdrWordPort (
+        i_cpu_clk                                          ,
+        i_mem_clk  : i_clk                                 ,
+        i_reset                                            ,
+        i_valid    : valid                                 ,
+        i_addr     : address                               ,
+        i_wdata    : word                                  ,
+        i_wstrb    : if state == State::write ? 4'hf : 4'b0,
+        o_ready    : ready                                 ,
+        o_rdata    : rdata                                 ,
+        o_error    : error                                 ,
+        o_req_valid: req_valid                             ,
+        i_req_ready: req_ready                             ,
+        o_req_addr : req_addr                              ,
+        o_req_wdata: req_data                              ,
+        o_req_wstrb: req_strb                              ,
+        i_rsp_valid: rsp_valid                             ,
+        o_rsp_ready: rsp_ready                             ,
+        i_rsp_data : rsp_data                              ,
+        i_rsp_error: rsp_error                             ,
+    );
+    inst controller: DdrBurstController (
+        i_clk                   ,
+        i_rst        : mem_reset,
+        i_enable                ,
+        i_req_valid  : req_valid,
+        o_req_ready  : req_ready,
+        i_req_addr   : req_addr ,
+        i_req_data   : req_data ,
+        i_req_strb   : req_strb ,
+        o_rsp_valid  : rsp_valid,
+        i_rsp_ready  : rsp_ready,
+        o_rsp_data   : rsp_data ,
+        o_rsp_error  : rsp_error,
+        i_read_data             ,
+        i_read_valid            ,
+        o_cmd_valid             ,
+        o_cmd                   ,
+        o_addr                  ,
+        o_bank                  ,
+        o_read                  ,
+        o_odt                   ,
+        o_data                  ,
+        o_mask                  ,
+        o_dq_enable             ,
+        o_dqs_enable            ,
+        o_dqs_pattern           ,
+    );
+}

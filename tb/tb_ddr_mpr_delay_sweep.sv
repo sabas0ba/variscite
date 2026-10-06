@@ -26,7 +26,7 @@ module tb_ddr_mpr_delay_sweep;
         .i_target(delay_target), .o_rloadn(rloadn), .o_rmove(rmove),
         .o_rdir(rdir), .o_ready(delay_ready)
     );
-    rv32ima_DdrReadDelayStepper reverse_stepper (
+    rv32ima_DdrReadDelayStepper #(.DECREASE(1)) reverse_stepper (
         .i_clk(clk), .i_rst(rst), .i_enable(reverse_enable),
         .i_target(reverse_target), .o_rloadn(reverse_loadn),
         .o_rmove(reverse_move), .o_rdir(reverse_dir), .o_ready(reverse_ready)
@@ -68,11 +68,13 @@ module tb_ddr_mpr_delay_sweep;
         reverse_enable=1;
         wait (reverse_ready);
         @(negedge clk);
+        if (reverse_code!=-5 || reverse_moves!=5)
+            $fatal(1,"negative delay target failed: code=%0d moves=%0d", reverse_code, reverse_moves);
         reverse_target=2;
         @(negedge clk);
         wait (reverse_ready);
         @(negedge clk);
-        if (reverse_code!=2 || reverse_moves!=8)
+        if (reverse_code!=-2 || reverse_moves!=8)
             $fatal(1,"reverse delay move failed: code=%0d moves=%0d", reverse_code, reverse_moves);
         reverse_done=1;
     end

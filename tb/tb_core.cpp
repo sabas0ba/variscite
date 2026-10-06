@@ -169,6 +169,7 @@ int main(int argc, char** argv) {
 
     top->i_rst = 1;
     top->i_mem_ready = 0;
+    top->i_mem_error = 0;
     top->i_mem_rdata = 0;
     top->i_mtime_tick = 0;
     top->i_irq_src = 0;

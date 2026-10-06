@@ -1,6 +1,12 @@
 set root [file normalize [file join [file dirname [info script]] ..]]
 set out [pwd]
 set_device -name GW2A-18C GW2A-LV18PG256C8/I7
+foreach source {rv_pkg alu core clint plic soc ram} {
+    add_file -type verilog [file join $root target ${source}.sv]
+}
+foreach source {ddr_cpu_port ddr_cpu_probe ddr_cpu_top ddr_cpu_access_top} {
+    add_file -type verilog [file join $root target tang_primer_20k ${source}.sv]
+}
 add_file -type verilog [file join $root target power_on_reset.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_clock.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_phy_startup.sv]
@@ -24,6 +30,7 @@ add_file -type verilog [file join $root target tang_primer_20k ddr_timeline.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_raw_burst.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_read_assembler.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_read_training.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_training_diagnostic.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_timeline_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_simple_timeline_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_early_timeline_top.sv]
@@ -45,6 +52,17 @@ add_file -type verilog [file join $root target tang_primer_20k ddr_array_retain_
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_refresh_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_mask_top.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_array_address_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_burst_controller.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_controller_probe.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_controller_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_word_cdc.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_word_port.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_word_probe.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_word_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_full_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_full_shift_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_full_mixed_top.sv]
+add_file -type verilog [file join $root target tang_primer_20k ddr_full_slow_top.sv]
 add_file -type cst [file join $out "$::env(DDR_MPR_NAME).cst"]
 add_file -type sdc [file join $out "$::env(DDR_MPR_NAME).sdc"]
 set_option -top_module $::env(DDR_MPR_TOP)

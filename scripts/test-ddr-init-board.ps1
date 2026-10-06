@@ -5,7 +5,7 @@ param(
     [string]$Suite,
     [Parameter(Mandatory = $true)]
     [string]$Port,
-    [ValidateSet('DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayAddress', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
+    [ValidateSet('DdrInit', 'DdrRead', 'DdrMpr', 'DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrFull', 'DdrFullShift', 'DdrFullMixed', 'DdrFullSlow', 'DdrCpu', 'DdrCpuAccess', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')]
     [string]$Mode = 'DdrInit'
 )
 Set-StrictMode -Version Latest
@@ -18,8 +18,10 @@ if ((Get-FileHash -Algorithm SHA256 $lcd).Hash.ToLowerInvariant() -ne $knownLcdS
     throw 'The LCD restore image differs from the validated hardware image.'
 }
 try {
-    $probeSeconds = if ($Mode -in @('DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayAddress', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')) { 6 } else { 4 }
-    if ($Mode -eq 'DdrArrayAddress') { $probeSeconds = 8 }
+    $probeSeconds = if ($Mode -in @('DdrMprDelay', 'DdrMprAlign', 'DdrArray', 'DdrArrayAssembled', 'DdrArrayTrained', 'DdrArrayMulti', 'DdrArrayRetain', 'DdrArrayRefresh', 'DdrArrayMask', 'DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrFull', 'DdrFullShift', 'DdrFullMixed', 'DdrFullSlow', 'DdrCpu', 'DdrCpuAccess', 'DdrArrayScan', 'DdrArraySame', 'DdrArrayTrace', 'DdrArrayMatch', 'DdrArrayFlags', 'DdrArrayTimeline', 'DdrArraySimpleTimeline', 'DdrArrayEarlyTimeline', 'DdrArrayFullTimeline', 'DdrArrayExpectedTimeline', 'DdrArrayPhaseTimeline', 'DdrArrayAlignTimeline', 'DdrArrayRawBurst', 'DdrArrayRawScaled', 'DdrArrayPhaseScan', 'DdrArrayContinuousScan', 'DdrArrayQuarterScan', 'DdrArrayAlignedScan', 'DdrArrayStartupScan')) { 6 } else { 4 }
+    if ($Mode -in @('DdrArrayAddress', 'DdrController', 'DdrWord', 'DdrFull', 'DdrFullShift', 'DdrFullMixed', 'DdrFullSlow', 'DdrCpu', 'DdrCpuAccess')) { $probeSeconds = 8 }
+    if ($Mode -in @('DdrFull', 'DdrFullShift', 'DdrFullMixed', 'DdrFullSlow', 'DdrCpu', 'DdrCpuAccess')) { $probeSeconds = 300 }
+    if ($Mode -eq 'DdrCpu') { $probeSeconds = 1800 }
     & (Join-Path $PSScriptRoot 'test-board.ps1') -Suite $Suite -Port $Port -Mode $Mode -Seconds $probeSeconds
 } finally {
     & (Join-Path $PSScriptRoot 'test-board.ps1') -Suite $Suite -Port $Port -Mode LcdSoc -Seconds 5

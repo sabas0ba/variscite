@@ -1,0 +1,34 @@
+/// Observe the first raw PHY response per lane without changing training.
+module DdrTrainingDiagnostic (
+    i_clk    : input  clock     ,
+    i_rst    : input  reset     ,
+    i_train  : input  logic     ,
+    i_valid  : input  logic<2>  ,
+    i_burst  : input  logic<2>  ,
+    i_data   : input  logic<128>,
+    i_ready  : input  logic<2>  ,
+    i_offsets: input  logic<10> ,
+    o_status : output logic<32> ,
+    o_sample : output logic<128>,
+) {
+    var valid_seen: logic<2>;
+    var burst_seen: logic<2>;
+    always_ff {
+        if_reset {
+            valid_seen = 0;
+            burst_seen = 0;
+            o_sample   = 0;
+        } else if i_train {
+            valid_seen = valid_seen | i_valid;
+            burst_seen = burst_seen | i_burst;
+            for lane in 0..2 {
+                if i_valid[lane] && !valid_seen[lane] {
+                    for beat in 0..8 {
+                        o_sample[16 * beat + 8 * lane+:8] = i_data[16 * beat + 8 * lane+:8];
+                    }
+                }
+            }
+        }
+    }
+    assign o_status = {8'hd3, 8'b0, i_offsets, i_ready, valid_seen, burst_seen};
+}

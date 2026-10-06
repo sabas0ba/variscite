@@ -1,0 +1,71 @@
+/// CPU word port for the Tang Primer 20K's 128 MiB DDR3.
+/// The caller holds valid/address/data/strobes until ready, one request at a time.
+/// Requests must be word aligned; subword selection uses byte strobes.
+/// Addresses outside 0x80000000..0x87ffffff cannot alias physical DDR.
+/// A rejected request completes locally with error and no backend transaction.
+/// Both clock domains and the backend require a common reset.
+module DdrWordPort (
+    i_cpu_clk  : input  'cpu   clock                ,
+    i_mem_clk  : input  'mem   clock                ,
+    i_reset    : input  'async reset_async_high     ,
+    i_valid    : input  'cpu   logic                ,
+    i_addr     : input  'cpu   logic           <32> ,
+    i_wdata    : input  'cpu   logic           <32> ,
+    i_wstrb    : input  'cpu   logic           <4>  ,
+    o_ready    : output 'cpu   logic                ,
+    o_rdata    : output 'cpu   logic           <32> ,
+    o_error    : output 'cpu   logic                ,
+    o_req_valid: output 'mem   logic                ,
+    i_req_ready: input  'mem   logic                ,
+    o_req_addr : output 'mem   logic           <27> ,
+    o_req_wdata: output 'mem   logic           <128>,
+    o_req_wstrb: output 'mem   logic           <16> ,
+    i_rsp_valid: input  'mem   logic                ,
+    o_rsp_ready: output 'mem   logic                ,
+    i_rsp_data : input  'mem   logic           <128>,
+    i_rsp_error: input  'mem   logic                ,
+) {
+    let address_ok   : 'cpu logic     = i_addr[31:27] == 5'b10000 && i_addr[1:0] == 0;
+    var rejected     : 'cpu logic    ;
+    var cdc_valid    : 'cpu logic    ;
+    var cdc_ready    : 'cpu logic    ;
+    var cdc_data     : 'cpu logic<32>;
+    var cdc_error    : 'cpu logic    ;
+    var burst_address: 'mem logic<32>;
+    // Assertion of the common asynchronous reset suppresses local completion.
+    unsafe (cdc) {
+        assign rejected  = i_valid && !address_ok && !i_reset;
+        assign cdc_valid = i_valid && address_ok && !i_reset;
+    }
+    assign o_ready   = rejected || cdc_ready;
+    assign o_error   = rejected || cdc_error;
+    always_comb {
+        if rejected {
+            o_rdata = 0;
+        } else {
+            o_rdata = cdc_data;
+        }
+    }
+    assign o_req_addr = burst_address[26:0];
+    inst u_cdc: DdrWordCdc (
+        i_cpu_clk                 ,
+        i_mem_clk                 ,
+        i_reset                   ,
+        i_valid    : cdc_valid    ,
+        i_addr                    ,
+        i_wdata                   ,
+        i_wstrb                   ,
+        o_ready    : cdc_ready    ,
+        o_rdata    : cdc_data     ,
+        o_error    : cdc_error    ,
+        o_req_valid               ,
+        i_req_ready               ,
+        o_req_addr : burst_address,
+        o_req_wdata               ,
+        o_req_wstrb               ,
+        i_rsp_valid               ,
+        o_rsp_ready               ,
+        i_rsp_data                ,
+        i_rsp_error               ,
+    );
+}

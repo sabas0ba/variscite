@@ -6,17 +6,20 @@
 module TangDdrStatusUart #(
     param GAP_BITS: u32 = 22,
     param FRAMED  : u32 = 0 ,
+    param WIDE    : u32 = 0 ,
 ) (
-    i_clk         : input  'reference clock   ,
-    i_rst         : input  'reference reset   ,
-    i_status      : input  'reference logic<4>,
-    i_debug_enable: input  'reference logic   ,
-    i_debug_extra : input  'reference logic   ,
-    i_debug0      : input  'reference logic<8>,
-    i_debug1      : input  'reference logic<8>,
-    i_debug2      : input  'reference logic<8>,
-    i_debug3      : input  'reference logic<8>,
-    o_tx          : output 'reference logic   ,
+    i_clk         : input  'reference clock    ,
+    i_rst         : input  'reference reset    ,
+    i_status      : input  'reference logic<4> ,
+    i_debug_enable: input  'reference logic    ,
+    i_debug_extra : input  'reference logic    ,
+    i_debug0      : input  'reference logic<8> ,
+    i_debug1      : input  'reference logic<8> ,
+    i_debug2      : input  'reference logic<8> ,
+    i_debug3      : input  'reference logic<8> ,
+    i_wide_data   : input  'reference logic<32>,
+    o_tx          : output 'reference logic    ,
+    o_frame_index : output 'reference logic<2> ,
 ) {
     const BIT_CYCLES   : logic<8>        = 234;
     var   gap          : 'reference logic<GAP_BITS>;
@@ -26,10 +29,14 @@ module TangDdrStatusUart #(
     var   data         : 'reference logic<8>       ;
     var   status_data  : 'reference logic<8>       ;
     var   debug_nibble : 'reference logic<4>       ;
-    var   report_index : 'reference logic<4>       ;
-    let   payload_index: 'reference logic<4>        = if FRAMED != 0 ? report_index - 4'd1 : report_index;
-    let   last_payload : 'reference logic<4>        = if i_debug_enable ? (if i_debug_extra ? 4'd8 : 4'd4) : 4'd0;
-    let   last_index   : 'reference logic<4>        = last_payload + (if FRAMED != 0 ? 4'd1 : 4'd0);
+    var   report_index : 'reference logic<5>       ;
+    let   payload_index: 'reference logic<5>        = if FRAMED != 0 ? report_index - 5'd1 : report_index;
+    let   last_payload : 'reference logic<5>        = if i_debug_enable ?
+        (if WIDE != 0 ? 5'd16 : if i_debug_extra ? 5'd8 : 5'd4)
+    :
+        5'd0
+    ;
+    let   last_index   : 'reference logic<5>        = last_payload + (if FRAMED != 0 ? 5'd1 : 5'd0);
     let   decimal_digit: 'reference logic           = debug_nibble <: 4'd10;
     let   debug_ascii  : 'reference logic<8>        = if decimal_digit ?
         8'h30 + {4'b0, debug_nibble}
@@ -52,14 +59,22 @@ module TangDdrStatusUart #(
             default: status_data = 8'h45; // E: DQS gate timeout
         }
         case payload_index {
-            4'd1   : debug_nibble = i_debug0[7:4];
-            4'd2   : debug_nibble = i_debug0[3:0];
-            4'd3   : debug_nibble = i_debug1[7:4];
-            4'd4   : debug_nibble = i_debug1[3:0];
-            4'd5   : debug_nibble = i_debug2[7:4];
-            4'd6   : debug_nibble = i_debug2[3:0];
-            4'd7   : debug_nibble = i_debug3[7:4];
-            default: debug_nibble = i_debug3[3:0];
+            5'd1   : debug_nibble = i_debug0[7:4];
+            5'd2   : debug_nibble = i_debug0[3:0];
+            5'd3   : debug_nibble = i_debug1[7:4];
+            5'd4   : debug_nibble = i_debug1[3:0];
+            5'd5   : debug_nibble = i_debug2[7:4];
+            5'd6   : debug_nibble = i_debug2[3:0];
+            5'd7   : debug_nibble = i_debug3[7:4];
+            5'd8   : debug_nibble = i_debug3[3:0];
+            5'd9   : debug_nibble = i_wide_data[31:28];
+            5'd10  : debug_nibble = i_wide_data[27:24];
+            5'd11  : debug_nibble = i_wide_data[23:20];
+            5'd12  : debug_nibble = i_wide_data[19:16];
+            5'd13  : debug_nibble = i_wide_data[15:12];
+            5'd14  : debug_nibble = i_wide_data[11:8];
+            5'd15  : debug_nibble = i_wide_data[7:4];
+            default: debug_nibble = i_wide_data[3:0];
         }
         data = if FRAMED != 0 && report_index == 0 ?
             8'h21
@@ -71,11 +86,12 @@ module TangDdrStatusUart #(
     }
     always_ff (i_clk, i_rst) {
         if_reset {
-            gap          = 0;
-            bit_time     = 0;
-            bits         = 0;
-            shift        = 10'h3ff;
-            report_index = 0;
+            gap           = 0;
+            bit_time      = 0;
+            bits          = 0;
+            shift         = 10'h3ff;
+            report_index  = 0;
+            o_frame_index = 0;
         } else if bits == 0 {
             gap = (gap + 1) as GAP_BITS;
             if gap == 0 {
@@ -83,7 +99,10 @@ module TangDdrStatusUart #(
                 bits     = 4'd10;
                 bit_time = 0;
                 if i_debug_enable || FRAMED != 0 {
-                    report_index = if report_index == last_index ? 0 : report_index + 4'd1;
+                    report_index = if report_index == last_index ? 0 : report_index + 5'd1;
+                }
+                if report_index == last_index {
+                    o_frame_index = o_frame_index + 2'd1;
                 }
             }
         } else if bit_time == BIT_CYCLES - 1 {
@@ -101,36 +120,43 @@ module TangDdrStatusUart #(
 /// DQS bursts. RUN_MPR checks the fixed MPR read pattern on DQ0 and DQ8.
 /// Neither mode verifies write timing or RAM retention.
 module TangDdrInitProbe #(
-    param RUN_READ_SWEEP   : u32      = 0    ,
-    param RUN_MPR          : u32      = 0    ,
-    param RUN_MPR_DELAY    : u32      = 0    ,
-    param RUN_MPR_ALIGN    : u32      = 0    ,
-    param RUN_ARRAY        : u32      = 0    ,
-    param ARRAY_SCAN       : u32      = 0    ,
-    param ARRAY_SAME       : u32      = 0    ,
-    param ARRAY_TRACE      : u32      = 0    ,
-    param ARRAY_MATCH      : u32      = 0    ,
-    param ARRAY_FLAGS      : u32      = 0    ,
-    param ARRAY_ADDRESS    : u32      = 0    ,
-    param ARRAY_BYTE_MASK  : u32      = 0    ,
-    param ARRAY_REFRESH    : u32      = 0    ,
-    param ARRAY_RETAIN     : u32      = 0    ,
-    param ARRAY_MULTI      : u32      = 0    ,
-    param ARRAY_TRAIN      : u32      = 0    ,
-    param ARRAY_ASSEMBLE   : u32      = 0    ,
-    param ARRAY_RAW        : u32      = 0    ,
-    param ARRAY_TIMELINE   : u32      = 0    ,
-    param ARRAY_SIMPLE     : u32      = 0    ,
-    param ARRAY_EARLY      : u32      = 0    ,
-    param ARRAY_FULL       : u32      = 0    ,
-    param ARRAY_EXPECTED   : u32      = 0    ,
-    param ARRAY_READ_SEL   : logic<6> = 6'h20,
-    param ARRAY_ALIGN      : u32      = 0    ,
-    param ARRAY_PHASE_SCAN : u32      = 0    ,
-    param ARRAY_READ_HOLD  : u32      = 1    ,
-    param DLL_QUARTER      : u32      = 0    ,
-    param ARRAY_PHASE_ALIGN: u32      = 0    ,
-    param PHY_STARTUP      : u32      = 0    ,
+    param CPU_ROM_INIT    : string    = "sim/ddr_cpu.hex",
+    param RUN_CONTROLLER  : u32       = 0                ,
+    param RUN_READ_SWEEP  : u32       = 0                ,
+    param RUN_MPR         : u32       = 0                ,
+    param RUN_MPR_DELAY   : u32       = 0                ,
+    param RUN_MPR_ALIGN   : u32       = 0                ,
+    param RUN_ARRAY       : u32       = 0                ,
+    param ARRAY_SCAN      : u32       = 0                ,
+    param ARRAY_SAME      : u32       = 0                ,
+    param ARRAY_TRACE     : u32       = 0                ,
+    param ARRAY_MATCH     : u32       = 0                ,
+    param ARRAY_FLAGS     : u32       = 0                ,
+    param ARRAY_ADDRESS   : u32       = 0                ,
+    param ARRAY_BYTE_MASK : u32       = 0                ,
+    param ARRAY_REFRESH   : u32       = 0                ,
+    param ARRAY_RETAIN    : u32       = 0                ,
+    param ARRAY_MULTI     : u32       = 0                ,
+    param ARRAY_TRAIN     : u32       = 0                ,
+    param ARRAY_ASSEMBLE  : u32       = 0                ,
+    param ARRAY_RAW       : u32       = 0                ,
+    param ARRAY_TIMELINE  : u32       = 0                ,
+    param ARRAY_SIMPLE    : u32       = 0                ,
+    param ARRAY_EARLY     : u32       = 0                ,
+    param ARRAY_FULL      : u32       = 0                ,
+    param ARRAY_EXPECTED  : u32       = 0                ,
+    param ARRAY_READ_SEL  : logic <6> = 6'h20            ,
+    param ARRAY_ALIGN     : u32       = 0                ,
+    param ARRAY_PHASE_SCAN: u32       = 0                ,
+    param ARRAY_READ_HOLD : u32       = 1                ,
+    param DLL_QUARTER     : u32       = 0                ,
+    /// Receive-only offset in primitive taps, applied before array training.
+    param READ_TAPS        : logic<5> = 0 ,
+    param READ_DECREASE    : u32      = 0 ,
+    param FULL_MIXED       : u32      = 0 ,
+    param PLL_MULTIPLY     : u32      = 44,
+    param ARRAY_PHASE_ALIGN: u32      = 0 ,
+    param PHY_STARTUP      : u32      = 0 ,
 ) (
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
@@ -150,165 +176,219 @@ module TangDdrInitProbe #(
     ddr_clk_p  : output 'fast      logic        ,
     ddr_clk_n  : output 'fast      logic        ,
 ) {
-    var por                : 'reference logic                    ;
-    var fast_clk           : 'fast      clock                    ;
-    var ctrl_clk           : 'ctrl      clock                    ;
-    var pll_locked         : 'async     logic                    ;
-    var dll_locked         : 'async     logic                    ;
-    var dll_step           : 'async     logic           <8>      ;
-    var pll_lock_sync      : 'reference logic           <2>      ;
-    var dll_lock_sync      : 'reference logic           <2>      ;
-    var startup_freeze     : 'reference logic                    ;
-    var startup_stop       : 'reference logic                    ;
-    var startup_div_reset  : 'reference logic                    ;
-    var startup_phy_reset  : 'reference logic                    ;
-    var startup_hold       : 'reference logic                    ;
-    var startup_update_n   : 'reference logic                    ;
-    var startup_ready      : 'reference logic                    ;
-    var phy_reset          : 'async     reset_async_high         ;
-    var ready_pipe         : 'ctrl      logic           <2>      ;
-    var ready_reset        : 'ctrl      reset                    ;
-    var cmd_valid          : 'ctrl      logic                    ;
-    var cmd                : 'ctrl      logic           <3>      ;
-    var bank               : 'ctrl      logic           <3>      ;
-    var addr               : 'ctrl      logic           <14>     ;
-    var reset_n            : 'ctrl      logic                    ;
-    var cke                : 'ctrl      logic                    ;
-    var done               : 'ctrl      logic                    ;
-    var status_pipe        : 'reference logic           <2>      ;
-    var status             : 'reference logic           <4>      ;
-    var ref_reset          : 'reference reset                    ;
-    var sweep_valid        : 'ctrl      logic                    ;
-    var sweep_cmd          : 'ctrl      logic           <3>      ;
-    var sweep_bank         : 'ctrl      logic           <3>      ;
-    var sweep_addr         : 'ctrl      logic           <14>     ;
-    var sweep_read         : 'ctrl      logic           <8>      ;
-    var sweep_sel          : 'ctrl      logic           <6>      ;
-    var sweep_hold         : 'ctrl      logic           <2>      ;
-    var sweep_done         : 'ctrl      logic                    ;
-    var sweep_found        : 'ctrl      logic           <2>      ;
-    var sweep_burst_seen   : 'ctrl      logic           <2>      ;
-    var sweep_valid_seen   : 'ctrl      logic           <2>      ;
-    var sweep_pattern0     : 'ctrl      logic           <8>      ;
-    var sweep_pattern1     : 'ctrl      logic           <8>      ;
-    var sweep_phase0       : 'ctrl      logic           <6>      ;
-    var sweep_phase1       : 'ctrl      logic           <6>      ;
-    var sweep_delay_target : 'ctrl      logic           <5>      ;
-    var sweep_delay_ready  : 'ctrl      logic                    ;
-    var sweep_pass_delay0  : 'ctrl      logic           <8>      ;
-    var sweep_pass_delay1  : 'ctrl      logic           <8>      ;
-    var sweep_align_pass0  : 'ctrl      logic           <3>      ;
-    var sweep_align_pass1  : 'ctrl      logic           <3>      ;
-    var array_valid        : 'ctrl      logic                    ;
-    var array_cmd          : 'ctrl      logic           <3>      ;
-    var array_addr         : 'ctrl      logic           <14>     ;
-    var array_bank         : 'ctrl      logic           <3>      ;
-    var array_read         : 'ctrl      logic           <8>      ;
-    var array_sel          : 'ctrl      logic           <6>      ;
-    var array_hold         : 'ctrl      logic           <2>      ;
-    var array_odt          : 'ctrl      logic           <4>      ;
-    var array_data         : 'ctrl      logic           <128>    ;
-    var array_mask         : 'ctrl      logic           <16>     ;
-    var array_dq_enable    : 'ctrl      logic           <4>      ;
-    var array_dqs_enable   : 'ctrl      logic           <4>      ;
-    var array_dqs_pattern  : 'ctrl      logic           <8>      ;
-    var array_done         : 'ctrl      logic                    ;
-    var array_found        : 'ctrl      logic                    ;
-    var array_burst_seen   : 'ctrl      logic           <2>      ;
-    var array_valid_seen   : 'ctrl      logic           <2>      ;
-    var array_match0       : 'ctrl      logic           <8>      ;
-    var array_match1       : 'ctrl      logic           <8>      ;
-    var array_pass_gate0   : 'ctrl      logic           <8>      ;
-    var array_pass_gate1   : 'ctrl      logic           <8>      ;
-    var array_change_gate0 : 'ctrl      logic           <8>      ;
-    var array_change_gate1 : 'ctrl      logic           <8>      ;
-    var array_col0_match0  : 'ctrl      logic           <8>      ;
-    var array_col0_match1  : 'ctrl      logic           <8>      ;
-    var array_col8_match0  : 'ctrl      logic           <8>      ;
-    var array_col8_match1  : 'ctrl      logic           <8>      ;
-    var array_first_raw0   : 'ctrl      logic           <8>      ;
-    var array_first_raw1   : 'ctrl      logic           <8>      ;
-    var array_raw0         : 'ctrl      logic           <8>      ;
-    var array_raw1         : 'ctrl      logic           <8>      ;
-    var delay_rloadn       : 'ctrl      logic                    ;
-    var delay_rmove        : 'ctrl      logic                    ;
-    var delay_rdir         : 'ctrl      logic                    ;
-    var phy_burst          : 'ctrl      logic           <2>      ;
-    var phy_valid          : 'ctrl      logic           <2>      ;
-    var phy_rflag          : 'ctrl      logic           <2>      ;
-    var phy_wflag          : 'ctrl      logic           <2>      ;
-    var phy_rpoint         : 'ctrl      logic           <6>      ;
-    var phy_wpoint         : 'ctrl      logic           <6>      ;
-    var flag_seen          : 'ctrl      logic           <4>      ;
-    var first_rpoint       : 'ctrl      logic           <6>      ;
-    var last_rpoint        : 'ctrl      logic           <6>      ;
-    var last_wpoint        : 'ctrl      logic           <6>      ;
-    var first_captured     : 'ctrl      logic           <2>      ;
-    var training_window    : 'ctrl      logic                    ;
-    var assembly_data_pipe : 'ctrl      logic           <128> [2];
-    var assembly_valid_pipe: 'ctrl      logic           <2>   [2];
-    var trained_offsets    : 'ctrl      logic           <8>      ;
-    var trained_ready      : 'ctrl      logic           <2>      ;
-    var assembled_data     : 'ctrl      logic           <128>    ;
-    var assembled_valid    : 'ctrl      logic           <2>      ;
-    var raw_captured       : 'ctrl      logic                    ;
-    var regular_captured   : 'ctrl      logic                    ;
-    var raw_word           : 'ctrl      logic           <32>     ;
-    var regular_word       : 'ctrl      logic           <32>     ;
-    var timeline_captured  : 'ctrl      logic                    ;
-    var array_expected     : 'ctrl      logic           <128>    ;
-    var timeline_word      : 'ctrl      logic           <32>     ;
-    var timeline_index     : 'reference logic           <5>      ;
-    var timeline_ready     : 'reference logic           <2>      ;
-    var normal_uart_tx     : 'reference logic                    ;
-    var timeline_uart_tx   : 'reference logic                    ;
-    var phy_data           : 'ctrl      logic           <128>    ;
-    var sweep_pipe         : 'reference logic           <2>      ;
-    var found_pipe         : 'reference logic           <2>      ;
-    var burst_pipe         : 'reference logic           <2>      ;
-    var valid_pipe         : 'reference logic           <2>      ;
-    var pattern0_meta      : 'reference logic           <8>      ;
-    var pattern0_ref       : 'reference logic           <8>      ;
-    var pattern1_meta      : 'reference logic           <8>      ;
-    var pattern1_ref       : 'reference logic           <8>      ;
-    var raw0_meta          : 'reference logic           <8>      ;
-    var raw0_ref           : 'reference logic           <8>      ;
-    var raw1_meta          : 'reference logic           <8>      ;
-    var raw1_ref           : 'reference logic           <8>      ;
-    let mpr_debug          : 'reference logic                     = RUN_READ_SWEEP != 0 || RUN_MPR != 0 || RUN_MPR_DELAY
-        != 0 || RUN_MPR_ALIGN != 0 || RUN_ARRAY != 0;
-    let use_sweep          : 'ctrl      logic                     = RUN_READ_SWEEP != 0 || RUN_MPR != 0 || RUN_MPR_DELAY
-        != 0 || RUN_MPR_ALIGN != 0 || RUN_ARRAY != 0;
-    let use_mpr            : 'ctrl      logic                     = RUN_MPR != 0 || RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN
-        != 0;
-    let sweep_active       : 'ctrl      logic                     = use_sweep && done;
-    let probe_valid        : 'ctrl      logic                     = if RUN_ARRAY != 0 ? array_valid : sweep_valid;
-    let probe_cmd          : 'ctrl      logic           <3>       = if RUN_ARRAY != 0 ? array_cmd : sweep_cmd;
-    let probe_bank         : 'ctrl      logic           <3>       = if RUN_ARRAY != 0 ? array_bank : sweep_bank;
-    let probe_addr         : 'ctrl      logic           <14>      = if RUN_ARRAY != 0 ? array_addr : sweep_addr;
-    let probe_done         : 'ctrl      logic                     = if RUN_ARRAY != 0 ? array_done : sweep_done;
-    let probe_found        : 'ctrl      logic                     = if RUN_ARRAY != 0 ?
+    var por                    : 'reference logic                    ;
+    var fast_clk               : 'fast      clock                    ;
+    var ctrl_clk               : 'ctrl      clock                    ;
+    var pll_locked             : 'async     logic                    ;
+    var dll_locked             : 'async     logic                    ;
+    var dll_step               : 'async     logic           <8>      ;
+    var pll_lock_sync          : 'reference logic           <2>      ;
+    var dll_lock_sync          : 'reference logic           <2>      ;
+    var startup_freeze         : 'reference logic                    ;
+    var startup_stop           : 'reference logic                    ;
+    var startup_div_reset      : 'reference logic                    ;
+    var startup_phy_reset      : 'reference logic                    ;
+    var startup_hold           : 'reference logic                    ;
+    var startup_update_n       : 'reference logic                    ;
+    var startup_ready          : 'reference logic                    ;
+    var phy_reset              : 'async     reset_async_high         ;
+    var ready_pipe             : 'ctrl      logic           <2>      ;
+    var ready_reset            : 'ctrl      reset                    ;
+    var cmd_valid              : 'ctrl      logic                    ;
+    var cmd                    : 'ctrl      logic           <3>      ;
+    var bank                   : 'ctrl      logic           <3>      ;
+    var addr                   : 'ctrl      logic           <14>     ;
+    var reset_n                : 'ctrl      logic                    ;
+    var cke                    : 'ctrl      logic                    ;
+    var done                   : 'ctrl      logic                    ;
+    var status_pipe            : 'reference logic           <2>      ;
+    var status                 : 'reference logic           <4>      ;
+    var ref_reset              : 'reference reset                    ;
+    var sweep_valid            : 'ctrl      logic                    ;
+    var sweep_cmd              : 'ctrl      logic           <3>      ;
+    var sweep_bank             : 'ctrl      logic           <3>      ;
+    var sweep_addr             : 'ctrl      logic           <14>     ;
+    var sweep_read             : 'ctrl      logic           <8>      ;
+    var sweep_sel              : 'ctrl      logic           <6>      ;
+    var sweep_hold             : 'ctrl      logic           <2>      ;
+    var sweep_done             : 'ctrl      logic                    ;
+    var sweep_found            : 'ctrl      logic           <2>      ;
+    var sweep_burst_seen       : 'ctrl      logic           <2>      ;
+    var sweep_valid_seen       : 'ctrl      logic           <2>      ;
+    var sweep_pattern0         : 'ctrl      logic           <8>      ;
+    var sweep_pattern1         : 'ctrl      logic           <8>      ;
+    var sweep_phase0           : 'ctrl      logic           <6>      ;
+    var sweep_phase1           : 'ctrl      logic           <6>      ;
+    var sweep_delay_target     : 'ctrl      logic           <5>      ;
+    var sweep_delay_ready      : 'ctrl      logic                    ;
+    var sweep_pass_delay0      : 'ctrl      logic           <8>      ;
+    var sweep_pass_delay1      : 'ctrl      logic           <8>      ;
+    var sweep_align_pass0      : 'ctrl      logic           <3>      ;
+    var sweep_align_pass1      : 'ctrl      logic           <3>      ;
+    var array_valid            : 'ctrl      logic                    ;
+    var array_cmd              : 'ctrl      logic           <3>      ;
+    var array_addr             : 'ctrl      logic           <14>     ;
+    var array_bank             : 'ctrl      logic           <3>      ;
+    var array_read             : 'ctrl      logic           <8>      ;
+    var array_sel              : 'ctrl      logic           <6>      ;
+    var array_hold             : 'ctrl      logic           <2>      ;
+    var array_odt              : 'ctrl      logic           <4>      ;
+    var array_data             : 'ctrl      logic           <128>    ;
+    var array_mask             : 'ctrl      logic           <16>     ;
+    var array_dq_enable        : 'ctrl      logic           <4>      ;
+    var array_dqs_enable       : 'ctrl      logic           <4>      ;
+    var array_dqs_pattern      : 'ctrl      logic           <8>      ;
+    var array_done             : 'ctrl      logic                    ;
+    var array_found            : 'ctrl      logic                    ;
+    var array_burst_seen       : 'ctrl      logic           <2>      ;
+    var array_valid_seen       : 'ctrl      logic           <2>      ;
+    var array_match0           : 'ctrl      logic           <8>      ;
+    var array_match1           : 'ctrl      logic           <8>      ;
+    var array_pass_gate0       : 'ctrl      logic           <8>      ;
+    var array_pass_gate1       : 'ctrl      logic           <8>      ;
+    var array_change_gate0     : 'ctrl      logic           <8>      ;
+    var array_change_gate1     : 'ctrl      logic           <8>      ;
+    var array_col0_match0      : 'ctrl      logic           <8>      ;
+    var array_col0_match1      : 'ctrl      logic           <8>      ;
+    var array_col8_match0      : 'ctrl      logic           <8>      ;
+    var array_col8_match1      : 'ctrl      logic           <8>      ;
+    var array_first_raw0       : 'ctrl      logic           <8>      ;
+    var array_first_raw1       : 'ctrl      logic           <8>      ;
+    var array_raw0             : 'ctrl      logic           <8>      ;
+    var array_raw1             : 'ctrl      logic           <8>      ;
+    var delay_rloadn           : 'ctrl      logic                    ;
+    var delay_rmove            : 'ctrl      logic                    ;
+    var delay_rdir             : 'ctrl      logic                    ;
+    var phy_burst              : 'ctrl      logic           <2>      ;
+    var phy_valid              : 'ctrl      logic           <2>      ;
+    var phy_rflag              : 'ctrl      logic           <2>      ;
+    var phy_wflag              : 'ctrl      logic           <2>      ;
+    var phy_rpoint             : 'ctrl      logic           <6>      ;
+    var phy_wpoint             : 'ctrl      logic           <6>      ;
+    var flag_seen              : 'ctrl      logic           <4>      ;
+    var first_rpoint           : 'ctrl      logic           <6>      ;
+    var last_rpoint            : 'ctrl      logic           <6>      ;
+    var last_wpoint            : 'ctrl      logic           <6>      ;
+    var first_captured         : 'ctrl      logic           <2>      ;
+    var training_window        : 'ctrl      logic                    ;
+    var assembly_data_pipe     : 'ctrl      logic           <128> [2];
+    var assembly_valid_pipe    : 'ctrl      logic           <2>   [3];
+    var trained_offsets        : 'ctrl      logic           <10>     ;
+    var trained_ready          : 'ctrl      logic           <2>      ;
+    var training_status_ctrl   : 'ctrl      logic           <32>     ;
+    var training_sample_ctrl   : 'ctrl      logic           <128>    ;
+    var training_status_meta   : 'reference logic           <32>     ;
+    var training_status_ref    : 'reference logic           <32>     ;
+    var training_sample_meta   : 'reference logic           <128>    ;
+    var training_sample_ref    : 'reference logic           <128>    ;
+    var uart_frame_index       : 'reference logic           <2>      ;
+    var controller_started_sync: 'reference logic           <2>      ;
+    var assembled_data         : 'ctrl      logic           <128>    ;
+    var assembled_valid        : 'ctrl      logic           <2>      ;
+    var raw_captured           : 'ctrl      logic                    ;
+    var regular_captured       : 'ctrl      logic                    ;
+    var raw_word               : 'ctrl      logic           <32>     ;
+    var regular_word           : 'ctrl      logic           <32>     ;
+    var timeline_captured      : 'ctrl      logic                    ;
+    var array_expected         : 'ctrl      logic           <128>    ;
+    var timeline_word          : 'ctrl      logic           <32>     ;
+    var timeline_index         : 'reference logic           <5>      ;
+    var timeline_ready         : 'reference logic           <2>      ;
+    var normal_uart_tx         : 'reference logic                    ;
+    var timeline_uart_tx       : 'reference logic                    ;
+    var phy_data               : 'ctrl      logic           <128>    ;
+    var sweep_pipe             : 'reference logic           <2>      ;
+    var found_pipe             : 'reference logic           <2>      ;
+    var burst_pipe             : 'reference logic           <2>      ;
+    var valid_pipe             : 'reference logic           <2>      ;
+    var pattern0_meta          : 'reference logic           <8>      ;
+    var pattern0_ref           : 'reference logic           <8>      ;
+    var pattern1_meta          : 'reference logic           <8>      ;
+    var pattern1_ref           : 'reference logic           <8>      ;
+    var raw0_meta              : 'reference logic           <8>      ;
+    var raw0_ref               : 'reference logic           <8>      ;
+    var raw1_meta              : 'reference logic           <8>      ;
+    var raw1_ref               : 'reference logic           <8>      ;
+    let mpr_debug              : 'reference logic                     = RUN_READ_SWEEP != 0 || RUN_MPR != 0
+        || RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0 || RUN_ARRAY != 0;
+    let use_sweep              : 'ctrl      logic                     = RUN_READ_SWEEP != 0 || RUN_MPR != 0
+        || RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0 || RUN_ARRAY != 0;
+    let use_mpr                : 'ctrl      logic                     = RUN_MPR != 0 || RUN_MPR_DELAY != 0
+        || RUN_MPR_ALIGN != 0;
+    let sweep_active           : 'ctrl      logic                     = use_sweep && done;
+    var controller_valid       : 'ctrl      logic                    ;
+    var controller_cmd         : 'ctrl      logic           <3>      ;
+    var controller_bank        : 'ctrl      logic           <3>      ;
+    var controller_addr        : 'ctrl      logic           <14>     ;
+    var controller_read        : 'ctrl      logic           <8>      ;
+    var controller_odt         : 'ctrl      logic           <4>      ;
+    var controller_data        : 'ctrl      logic           <128>    ;
+    var controller_mask        : 'ctrl      logic           <16>     ;
+    var controller_dq_enable   : 'ctrl      logic           <4>      ;
+    var controller_dqs_enable  : 'ctrl      logic           <4>      ;
+    var controller_dqs_pattern : 'ctrl      logic           <8>      ;
+    var controller_done        : 'ctrl      logic                    ;
+    var controller_found       : 'ctrl      logic                    ;
+    var controller_active      : 'ctrl      logic                    ;
+    // Register the completed training result before it selects the PHY outputs.
+    // The array remains idle after completion, so the extra handoff cycle is safe.
+    always_ff (ctrl_clk, ready_reset) {
+        if_reset {
+            controller_active = 0;
+        } else {
+            controller_active = RUN_CONTROLLER != 0 && array_done && array_found;
+        }
+    }
+    let probe_valid     : 'ctrl logic     = if controller_active ?
+        controller_valid
+    : if RUN_ARRAY != 0 ?
+        array_valid
+    :
+        sweep_valid
+    ;
+    let probe_cmd       : 'ctrl logic<3>  = if controller_active ?
+        controller_cmd
+    : if RUN_ARRAY != 0 ?
+        array_cmd
+    :
+        sweep_cmd
+    ;
+    let probe_bank      : 'ctrl logic<3>  = if controller_active ?
+        controller_bank
+    : if RUN_ARRAY != 0 ?
+        array_bank
+    :
+        sweep_bank
+    ;
+    let probe_addr      : 'ctrl logic<14> = if controller_active ?
+        controller_addr
+    : if RUN_ARRAY != 0 ?
+        array_addr
+    :
+        sweep_addr
+    ;
+    let probe_done      : 'ctrl logic     = if RUN_CONTROLLER != 0 ?
+        array_done && (!array_found || controller_done)
+    : if RUN_ARRAY != 0 ?
+        array_done
+    :
+        sweep_done
+    ;
+    let probe_found     : 'ctrl logic     = if RUN_CONTROLLER != 0 ?
+        array_found && controller_found
+    : if RUN_ARRAY != 0 ?
         array_found
     :
         sweep_found == 2'b11
     ;
-    let probe_burst        : 'ctrl      logic           <2>       = if RUN_ARRAY != 0 ?
-        array_burst_seen
-    :
-        sweep_burst_seen
-    ;
-    let probe_valid_seen   : 'ctrl      logic           <2>       = if RUN_ARRAY != 0 ?
-        array_valid_seen
-    :
-        sweep_valid_seen
-    ;
-    let phy_cmd_valid      : 'ctrl      logic                     = if sweep_active ? probe_valid : cmd_valid;
-    let phy_cmd            : 'ctrl      logic           <3>       = if sweep_active ? probe_cmd : cmd;
-    let phy_bank           : 'ctrl      logic           <3>       = if sweep_active ? probe_bank : bank;
-    let phy_addr           : 'ctrl      logic           <14>      = if sweep_active ? probe_addr : addr;
-    let phy_cke            : 'ctrl      logic                     = cke && !(use_sweep && probe_done);
-    let write_slot         : 'ctrl      logic                     = RUN_ARRAY != 0 && sweep_active && phy_cmd_valid
-        && phy_cmd == 3'b100;
+    let probe_burst     : 'ctrl logic<2>  = if RUN_ARRAY != 0 ? array_burst_seen : sweep_burst_seen;
+    let probe_valid_seen: 'ctrl logic<2>  = if RUN_ARRAY != 0 ? array_valid_seen : sweep_valid_seen;
+    let phy_cmd_valid   : 'ctrl logic     = if sweep_active ? probe_valid : cmd_valid;
+    let phy_cmd         : 'ctrl logic<3>  = if sweep_active ? probe_cmd : cmd;
+    let phy_bank        : 'ctrl logic<3>  = if sweep_active ? probe_bank : bank;
+    let phy_addr        : 'ctrl logic<14> = if sweep_active ? probe_addr : addr;
+    let phy_cke         : 'ctrl logic     = cke && !(use_sweep && probe_done);
+    let write_slot      : 'ctrl logic     = RUN_ARRAY != 0 && sweep_active && phy_cmd_valid && phy_cmd == 3'b100;
     // At CL=6/AL=0, the Gowin PHY timing example launches READ in slot 2.
     // Keep the startup sequencer in slot 0; shift diagnostic commands together.
     let phy_addr_slots: 'ctrl logic<56> = if write_slot ?
@@ -343,7 +423,9 @@ module TangDdrInitProbe #(
         o_rst: por,
     );
     unsafe (cdc) {
-        inst clocks: TangDdrClock (
+        inst clocks: TangDdrClock #(
+            MULTIPLY: PLL_MULTIPLY,
+        ) (
             i_clk                                                      ,
             i_reset    : por                                           ,
             i_stop     : if PHY_STARTUP != 0 ? startup_stop : 1'b0,
@@ -466,17 +548,36 @@ module TangDdrInitProbe #(
         o_ready  : trained_ready  ,
         o_trained: _              ,
     );
+    if RUN_CONTROLLER >= 3 :training_diagnostic {
+        inst capture: DdrTrainingDiagnostic (
+            i_clk    : ctrl_clk            ,
+            i_rst    : ready_reset         ,
+            i_train  : training_window     ,
+            i_valid  : phy_valid           ,
+            i_burst  : phy_burst           ,
+            i_data   : phy_data            ,
+            i_ready  : trained_ready       ,
+            i_offsets: trained_offsets     ,
+            o_status : training_status_ctrl,
+            o_sample : training_sample_ctrl,
+        );
+    } else :no_training_diagnostic {
+        assign training_status_ctrl = 0;
+        assign training_sample_ctrl = 0;
+    }
     always_ff (ctrl_clk, ready_reset) {
         if_reset {
             assembly_data_pipe[0]  = 0;
             assembly_data_pipe[1]  = 0;
             assembly_valid_pipe[0] = 0;
             assembly_valid_pipe[1] = 0;
+            assembly_valid_pipe[2] = 0;
         } else {
             assembly_data_pipe[0]  = phy_data;
             assembly_data_pipe[1]  = assembly_data_pipe[0];
             assembly_valid_pipe[0] = phy_valid;
             assembly_valid_pipe[1] = assembly_valid_pipe[0];
+            assembly_valid_pipe[2] = assembly_valid_pipe[1];
         }
     }
     inst assembler: DdrReadAssembler #(
@@ -486,7 +587,7 @@ module TangDdrInitProbe #(
         i_clk    : ctrl_clk                                                                ,
         i_rst    : ready_reset                                                             ,
         i_data   : if ARRAY_TRAIN != 0 ? assembly_data_pipe[1] : phy_data,
-        i_valid  : if ARRAY_TRAIN != 0 ? assembly_valid_pipe[1] & trained_ready : phy_valid,
+        i_valid  : if ARRAY_TRAIN != 0 ? assembly_valid_pipe[2] & trained_ready : phy_valid,
         o_data   : assembled_data                                                          ,
         o_valid  : assembled_valid                                                         ,
     );
@@ -505,68 +606,153 @@ module TangDdrInitProbe #(
         READ_HOLD     : ARRAY_READ_HOLD  ,
         PHASE_ALIGN   : ARRAY_PHASE_ALIGN,
     ) (
-        i_clk         : ctrl_clk                                            ,
-        i_rst         : ready_reset                                         ,
-        i_enable      : done && RUN_ARRAY != 0,
-        i_burst       : phy_burst                                           ,
+        i_clk         : ctrl_clk                                                       ,
+        i_rst         : ready_reset                                                    ,
+        i_enable      : done && RUN_ARRAY != 0 && (READ_TAPS == 0 || sweep_delay_ready),
+        i_burst       : phy_burst                                                      ,
         i_valid       : if ARRAY_ASSEMBLE != 0 ? assembled_valid : phy_valid,
         i_data        : if ARRAY_ASSEMBLE != 0 ? assembled_data : phy_data,
-        o_cmd_valid   : array_valid                                         ,
-        o_cmd         : array_cmd                                           ,
-        o_addr        : array_addr                                          ,
-        o_bank        : array_bank                                          ,
-        o_read        : array_read                                          ,
-        o_sel         : array_sel                                           ,
-        o_hold        : array_hold                                          ,
-        o_odt         : array_odt                                           ,
-        o_data        : array_data                                          ,
-        o_mask        : array_mask                                          ,
-        o_dq_enable   : array_dq_enable                                     ,
-        o_dqs_enable  : array_dqs_enable                                    ,
-        o_dqs_pattern : array_dqs_pattern                                   ,
-        o_done        : array_done                                          ,
-        o_found       : array_found                                         ,
-        o_burst_seen  : array_burst_seen                                    ,
-        o_valid_seen  : array_valid_seen                                    ,
-        o_match0      : array_match0                                        ,
-        o_match1      : array_match1                                        ,
-        o_pass_gate0  : array_pass_gate0                                    ,
-        o_pass_gate1  : array_pass_gate1                                    ,
-        o_change_gate0: array_change_gate0                                  ,
-        o_change_gate1: array_change_gate1                                  ,
-        o_col0_match0 : array_col0_match0                                   ,
-        o_col0_match1 : array_col0_match1                                   ,
-        o_col8_match0 : array_col8_match0                                   ,
-        o_col8_match1 : array_col8_match1                                   ,
-        o_first_raw0  : array_first_raw0                                    ,
-        o_first_raw1  : array_first_raw1                                    ,
-        o_raw0        : array_raw0                                          ,
-        o_raw1        : array_raw1                                          ,
-        o_expected    : array_expected                                      ,
+        o_cmd_valid   : array_valid                                                    ,
+        o_cmd         : array_cmd                                                      ,
+        o_addr        : array_addr                                                     ,
+        o_bank        : array_bank                                                     ,
+        o_read        : array_read                                                     ,
+        o_sel         : array_sel                                                      ,
+        o_hold        : array_hold                                                     ,
+        o_odt         : array_odt                                                      ,
+        o_data        : array_data                                                     ,
+        o_mask        : array_mask                                                     ,
+        o_dq_enable   : array_dq_enable                                                ,
+        o_dqs_enable  : array_dqs_enable                                               ,
+        o_dqs_pattern : array_dqs_pattern                                              ,
+        o_done        : array_done                                                     ,
+        o_found       : array_found                                                    ,
+        o_burst_seen  : array_burst_seen                                               ,
+        o_valid_seen  : array_valid_seen                                               ,
+        o_match0      : array_match0                                                   ,
+        o_match1      : array_match1                                                   ,
+        o_pass_gate0  : array_pass_gate0                                               ,
+        o_pass_gate1  : array_pass_gate1                                               ,
+        o_change_gate0: array_change_gate0                                             ,
+        o_change_gate1: array_change_gate1                                             ,
+        o_col0_match0 : array_col0_match0                                              ,
+        o_col0_match1 : array_col0_match1                                              ,
+        o_col8_match0 : array_col8_match0                                              ,
+        o_col8_match1 : array_col8_match1                                              ,
+        o_first_raw0  : array_first_raw0                                               ,
+        o_first_raw1  : array_first_raw1                                               ,
+        o_raw0        : array_raw0                                                     ,
+        o_raw1        : array_raw1                                                     ,
+        o_expected    : array_expected                                                 ,
     );
-    inst delay_stepper: DdrReadDelayStepper (
-        i_clk   : ctrl_clk                                                  ,
-        i_rst   : ready_reset                                               ,
-        i_enable: sweep_active && (RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0),
-        i_target: sweep_delay_target                                        ,
-        o_rloadn: delay_rloadn                                              ,
-        o_rmove : delay_rmove                                               ,
-        o_rdir  : delay_rdir                                                ,
-        o_ready : sweep_delay_ready                                         ,
+    var word_failure: 'reference logic<32>;
+    var word_actual : 'reference logic<32>;
+    if RUN_CONTROLLER == 4 :cpu_mode {
+        unsafe (cdc) {
+            inst cpu_probe: DdrCpuProbe #(
+                ROM_INIT: CPU_ROM_INIT,
+            ) (
+                o_failure    : word_failure                   ,
+                o_actual     : word_actual                    ,
+                i_clk        : ctrl_clk                       ,
+                i_cpu_clk    : i_clk                          ,
+                i_reset      : ready_reset as reset_async_high,
+                i_enable     : controller_active              ,
+                i_read_data  : assembled_data                 ,
+                i_read_valid : assembled_valid                ,
+                o_done       : controller_done                ,
+                o_found      : controller_found               ,
+                o_cmd_valid  : controller_valid               ,
+                o_cmd        : controller_cmd                 ,
+                o_bank       : controller_bank                ,
+                o_addr       : controller_addr                ,
+                o_read       : controller_read                ,
+                o_odt        : controller_odt                 ,
+                o_data       : controller_data                ,
+                o_mask       : controller_mask                ,
+                o_dq_enable  : controller_dq_enable           ,
+                o_dqs_enable : controller_dqs_enable          ,
+                o_dqs_pattern: controller_dqs_pattern         ,
+            );
+        }
+    } else if RUN_CONTROLLER >= 2 :word_port_mode {
+        unsafe (cdc) {
+            inst word_probe: DdrWordProbe #(
+                FULL_WORDS: if RUN_CONTROLLER >= 3 ? 33_554_432 : 0,
+                FULL_MIXED: FULL_MIXED                             ,
+            ) (
+                o_failure    : word_failure                   ,
+                o_actual     : word_actual                    ,
+                i_clk        : ctrl_clk                       ,
+                i_cpu_clk    : i_clk                          ,
+                i_reset      : ready_reset as reset_async_high,
+                i_enable     : controller_active              ,
+                i_read_data  : assembled_data                 ,
+                i_read_valid : assembled_valid                ,
+                o_done       : controller_done                ,
+                o_found      : controller_found               ,
+                o_cmd_valid  : controller_valid               ,
+                o_cmd        : controller_cmd                 ,
+                o_bank       : controller_bank                ,
+                o_addr       : controller_addr                ,
+                o_read       : controller_read                ,
+                o_odt        : controller_odt                 ,
+                o_data       : controller_data                ,
+                o_mask       : controller_mask                ,
+                o_dq_enable  : controller_dq_enable           ,
+                o_dqs_enable : controller_dqs_enable          ,
+                o_dqs_pattern: controller_dqs_pattern         ,
+            );
+        }
+    } else :burst_mode {
+        assign word_failure = 0;
+        assign word_actual  = 0;
+        inst controller_probe: DdrControllerProbe (
+            i_clk        : ctrl_clk              ,
+            i_rst        : ready_reset           ,
+            i_enable     : controller_active     ,
+            i_read_data  : assembled_data        ,
+            i_read_valid : assembled_valid       ,
+            o_done       : controller_done       ,
+            o_found      : controller_found      ,
+            o_cmd_valid  : controller_valid      ,
+            o_cmd        : controller_cmd        ,
+            o_bank       : controller_bank       ,
+            o_addr       : controller_addr       ,
+            o_read       : controller_read       ,
+            o_odt        : controller_odt        ,
+            o_data       : controller_data       ,
+            o_mask       : controller_mask       ,
+            o_dq_enable  : controller_dq_enable  ,
+            o_dqs_enable : controller_dqs_enable ,
+            o_dqs_pattern: controller_dqs_pattern,
+        );
+    }
+    inst delay_stepper: DdrReadDelayStepper #(
+        DECREASE: READ_DECREASE,
+    ) (
+        i_clk   : ctrl_clk                                                                    ,
+        i_rst   : ready_reset                                                                 ,
+        i_enable: sweep_active && (RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0 || READ_TAPS != 0),
+        i_target: if READ_TAPS != 0 ? READ_TAPS : sweep_delay_target,
+        o_rloadn: delay_rloadn                                                                ,
+        o_rmove : delay_rmove                                                                 ,
+        o_rdir  : delay_rdir                                                                  ,
+        o_ready : sweep_delay_ready                                                           ,
     );
     unsafe (cdc) {
         inst phy: TangDdrPhyIo (
-            i_clk        : ctrl_clk                             ,
-            i_fast       : fast_clk                             ,
-            i_reset      : phy_reset                            ,
-            i_dll_step   : dll_step                             ,
+            i_clk        : ctrl_clk                                                                    ,
+            i_fast       : fast_clk                                                                    ,
+            i_reset      : phy_reset                                                                   ,
+            i_dll_step   : dll_step                                                                    ,
             i_mem_reset_n: reset_n && !(use_sweep && probe_done),
-            i_addr       : phy_addr_slots                       ,
-            i_bank       : phy_bank_slots                       ,
-            i_cmd        : phy_cmd_slots                        ,
-            i_cs_n       : phy_cs_slots                         ,
+            i_addr       : phy_addr_slots                                                              ,
+            i_bank       : phy_bank_slots                                                              ,
+            i_cmd        : phy_cmd_slots                                                               ,
+            i_cs_n       : phy_cs_slots                                                                ,
             i_cke        : {phy_cke, phy_cke, phy_cke, phy_cke},
-            i_odt        : if RUN_ARRAY != 0 ? array_odt : 4'b0,
+            i_odt        : if controller_active ? controller_odt : if RUN_ARRAY != 0 ? array_odt : 4'b0,
             i_hold       : if PHY_STARTUP != 0 && startup_hold ?
                 2'b11
             : if RUN_ARRAY != 0 ?
@@ -576,40 +762,48 @@ module TangDdrInitProbe #(
             :
                 2'b0
             ,
-            i_read       : if RUN_ARRAY != 0 ? array_read : if use_sweep ? sweep_read : 8'b0,
+            i_read: if controller_active ?
+                controller_read
+            : if RUN_ARRAY != 0 ?
+                array_read
+            : if use_sweep ?
+                sweep_read
+            :
+                8'b0
+            ,
             i_read_sel   : if RUN_ARRAY != 0 ? array_sel : if use_sweep ? sweep_sel : 6'b0,
-            i_rloadn     : delay_rloadn                                                     ,
-            i_rmove      : delay_rmove                                                      ,
-            i_rdir       : delay_rdir                                                       ,
-            i_write_step : 16'b0                                                            ,
-            i_data       : if RUN_ARRAY != 0 ? array_data : 128'b0,
-            i_mask       : if RUN_ARRAY != 0 ? array_mask : 16'hffff,
-            i_dq_enable  : if RUN_ARRAY != 0 ? array_dq_enable : 4'b0,
-            i_dqs_enable : if RUN_ARRAY != 0 ? array_dqs_enable : 4'b0,
-            i_dqs_pattern: if RUN_ARRAY != 0 ? array_dqs_pattern : 8'b0,
-            o_data       : phy_data                                                         ,
-            o_raw        : _                                                                ,
-            o_burst      : phy_burst                                                        ,
-            o_valid      : phy_valid                                                        ,
-            o_rflag      : phy_rflag                                                        ,
-            o_wflag      : phy_wflag                                                        ,
-            o_rpoint     : phy_rpoint                                                       ,
-            o_wpoint     : phy_wpoint                                                       ,
-            ddr_dq                                                                          ,
-            ddr_dqs_p                                                                       ,
-            ddr_dqs_n                                                                       ,
-            ddr_dm                                                                          ,
-            ddr_addr                                                                        ,
-            ddr_bank                                                                        ,
-            ddr_ras_n                                                                       ,
-            ddr_cas_n                                                                       ,
-            ddr_we_n                                                                        ,
-            ddr_cs_n                                                                        ,
-            ddr_cke                                                                         ,
-            ddr_odt                                                                         ,
-            ddr_reset_n                                                                     ,
-            ddr_clk_p                                                                       ,
-            ddr_clk_n                                                                       ,
+            i_rloadn     : delay_rloadn                                                                                ,
+            i_rmove      : delay_rmove                                                                                 ,
+            i_rdir       : delay_rdir                                                                                  ,
+            i_write_step : 16'b0                                                                                       ,
+            i_data       : if controller_active ? controller_data : if RUN_ARRAY != 0 ? array_data : 128'b0,
+            i_mask       : if controller_active ? controller_mask : if RUN_ARRAY != 0 ? array_mask : 16'hffff,
+            i_dq_enable  : if controller_active ? controller_dq_enable : if RUN_ARRAY != 0 ? array_dq_enable : 4'b0,
+            i_dqs_enable : if controller_active ? controller_dqs_enable : if RUN_ARRAY != 0 ? array_dqs_enable : 4'b0,
+            i_dqs_pattern: if controller_active ? controller_dqs_pattern : if RUN_ARRAY != 0 ? array_dqs_pattern : 8'b0,
+            o_data       : phy_data                                                                                    ,
+            o_raw        : _                                                                                           ,
+            o_burst      : phy_burst                                                                                   ,
+            o_valid      : phy_valid                                                                                   ,
+            o_rflag      : phy_rflag                                                                                   ,
+            o_wflag      : phy_wflag                                                                                   ,
+            o_rpoint     : phy_rpoint                                                                                  ,
+            o_wpoint     : phy_wpoint                                                                                  ,
+            ddr_dq                                                                                                     ,
+            ddr_dqs_p                                                                                                  ,
+            ddr_dqs_n                                                                                                  ,
+            ddr_dm                                                                                                     ,
+            ddr_addr                                                                                                   ,
+            ddr_bank                                                                                                   ,
+            ddr_ras_n                                                                                                  ,
+            ddr_cas_n                                                                                                  ,
+            ddr_we_n                                                                                                   ,
+            ddr_cs_n                                                                                                   ,
+            ddr_cke                                                                                                    ,
+            ddr_odt                                                                                                    ,
+            ddr_reset_n                                                                                                ,
+            ddr_clk_p                                                                                                  ,
+            ddr_clk_n                                                                                                  ,
         );
         always_ff (ctrl_clk, ready_reset) {
             if_reset {
@@ -641,27 +835,37 @@ module TangDdrInitProbe #(
         }
         always_ff (i_clk, ref_reset) {
             if_reset {
-                status_pipe    = 0;
-                sweep_pipe     = 0;
-                found_pipe     = 0;
-                burst_pipe     = 0;
-                valid_pipe     = 0;
-                pattern0_meta  = 0;
-                pattern0_ref   = 0;
-                pattern1_meta  = 0;
-                pattern1_ref   = 0;
-                raw0_meta      = 0;
-                raw0_ref       = 0;
-                raw1_meta      = 0;
-                raw1_ref       = 0;
-                timeline_ready = 0;
+                status_pipe             = 0;
+                sweep_pipe              = 0;
+                found_pipe              = 0;
+                burst_pipe              = 0;
+                valid_pipe              = 0;
+                pattern0_meta           = 0;
+                pattern0_ref            = 0;
+                pattern1_meta           = 0;
+                pattern1_ref            = 0;
+                raw0_meta               = 0;
+                raw0_ref                = 0;
+                raw1_meta               = 0;
+                raw1_ref                = 0;
+                timeline_ready          = 0;
+                training_status_meta    = 0;
+                training_status_ref     = 0;
+                training_sample_meta    = 0;
+                training_sample_ref     = 0;
+                controller_started_sync = 0;
             } else {
-                status_pipe    = {status_pipe[0], done};
-                sweep_pipe     = {sweep_pipe[0], probe_done};
-                found_pipe     = {found_pipe[0], probe_found};
-                burst_pipe     = {burst_pipe[0], probe_burst == 2'b11};
-                valid_pipe     = {valid_pipe[0], probe_valid_seen == 2'b11};
-                pattern0_meta  = if ARRAY_FLAGS != 0 ?
+                training_status_meta    = training_status_ctrl;
+                training_status_ref     = training_status_meta;
+                training_sample_meta    = training_sample_ctrl;
+                training_sample_ref     = training_sample_meta;
+                controller_started_sync = {controller_started_sync[0], controller_active};
+                status_pipe             = {status_pipe[0], done};
+                sweep_pipe              = {sweep_pipe[0], probe_done};
+                found_pipe              = {found_pipe[0], probe_found};
+                burst_pipe              = {burst_pipe[0], probe_burst == 2'b11};
+                valid_pipe              = {valid_pipe[0], probe_valid_seen == 2'b11};
+                pattern0_meta           = if ARRAY_FLAGS != 0 ?
                     {4'b0, flag_seen}
                 : if ARRAY_MATCH != 0 ?
                     array_col0_match0
@@ -680,8 +884,8 @@ module TangDdrInitProbe #(
                 :
                     sweep_pattern0
                 ;
-                pattern0_ref   = pattern0_meta;
-                pattern1_meta  = if ARRAY_FLAGS != 0 ?
+                pattern0_ref            = pattern0_meta;
+                pattern1_meta           = if ARRAY_FLAGS != 0 ?
                     {2'b0, last_rpoint}
                 : if ARRAY_MATCH != 0 ?
                     array_col0_match1
@@ -700,8 +904,8 @@ module TangDdrInitProbe #(
                 :
                     sweep_pattern1
                 ;
-                pattern1_ref   = pattern1_meta;
-                raw0_meta      = if ARRAY_FLAGS != 0 ?
+                pattern1_ref            = pattern1_meta;
+                raw0_meta               = if ARRAY_FLAGS != 0 ?
                     {2'b0, last_wpoint}
                 : if ARRAY_MATCH != 0 ?
                     array_col8_match0
@@ -714,8 +918,8 @@ module TangDdrInitProbe #(
                 :
                     sweep_pattern0
                 ;
-                raw0_ref       = raw0_meta;
-                raw1_meta      = if ARRAY_FLAGS != 0 ?
+                raw0_ref                = raw0_meta;
+                raw1_meta               = if ARRAY_FLAGS != 0 ?
                     {2'b0, first_rpoint}
                 : if ARRAY_MATCH != 0 ?
                     array_col8_match1
@@ -728,8 +932,8 @@ module TangDdrInitProbe #(
                 :
                     sweep_pattern1
                 ;
-                raw1_ref       = raw1_meta;
-                timeline_ready = {timeline_ready[0], array_done && timeline_captured};
+                raw1_ref                = raw1_meta;
+                timeline_ready          = {timeline_ready[0], array_done && timeline_captured};
             }
         }
         assign status = if !pll_locked ?
@@ -791,19 +995,32 @@ module TangDdrInitProbe #(
     }
     assign timeline_word     = if ARRAY_RAW != 0 ? raw_word : regular_word;
     assign timeline_captured = if ARRAY_RAW != 0 ? raw_captured : regular_captured;
+    let full_debug : 'reference logic<32> = if controller_started_sync[1] ?
+        word_failure
+    :
+        training_status_ref | {8'b0, 6'b0, uart_frame_index, 16'b0}
+    ;
+    let full_sample: 'reference logic<32> = if controller_started_sync[1] ?
+        word_actual
+    :
+        training_sample_ref[32 * (uart_frame_index as u32)+:32]
+    ;
     inst uart: TangDdrStatusUart #(
-        FRAMED: ARRAY_ADDRESS,
+        FRAMED: if RUN_CONTROLLER != 0 ? 1 : ARRAY_ADDRESS,
+        WIDE  : if RUN_CONTROLLER >= 3 ? 1 : 0,
     ) (
         i_clk                                                                     ,
         i_rst         : ref_reset                                                 ,
         i_status      : status                                                    ,
         i_debug_enable: mpr_debug                                                 ,
         i_debug_extra : RUN_MPR_DELAY != 0 || RUN_MPR_ALIGN != 0 || RUN_ARRAY != 0,
-        i_debug0      : pattern0_ref                                              ,
-        i_debug1      : pattern1_ref                                              ,
-        i_debug2      : raw0_ref                                                  ,
-        i_debug3      : raw1_ref                                                  ,
+        i_debug0      : if RUN_CONTROLLER >= 3 ? full_debug[31:24] : pattern0_ref,
+        i_debug1      : if RUN_CONTROLLER >= 3 ? full_debug[23:16] : pattern1_ref,
+        i_debug2      : if RUN_CONTROLLER >= 3 ? full_debug[15:8] : raw0_ref,
+        i_debug3      : if RUN_CONTROLLER >= 3 ? full_debug[7:0] : raw1_ref,
+        i_wide_data   : full_sample                                               ,
         o_tx          : normal_uart_tx                                            ,
+        o_frame_index : uart_frame_index                                          ,
     );
     assign o_uart_tx = if ARRAY_TIMELINE != 0 ? timeline_uart_tx : normal_uart_tx;
 }

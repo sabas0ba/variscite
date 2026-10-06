@@ -1,7 +1,9 @@
-/// Advance the DQS receive delay from the DLL-provided code by a requested
-/// number of primitive taps. The caller must change the target only between
+/// Offset the DQS receive delay from the DLL-provided code by a requested
+/// number of primitive taps (negative when DECREASE=1). Change the target only between
 /// READ bursts and wait for o_ready before issuing the next READ.
-module DdrReadDelayStepper (
+module DdrReadDelayStepper #(
+    param DECREASE: u32 = 0,
+) (
     i_clk   : input  clock   ,
     i_rst   : input  reset   ,
     i_enable: input  logic   ,
@@ -62,6 +64,6 @@ module DdrReadDelayStepper (
     }
     assign o_rloadn = i_enable && state != State::load;
     assign o_rmove  = state == State::move_high;
-    assign o_rdir   = dir;
+    assign o_rdir   = if DECREASE != 0 ? !dir : dir;
     assign o_ready  = i_enable && state == State::idle && current == i_target;
 }

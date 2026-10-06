@@ -10,10 +10,11 @@
 RTL は DDR3 制御、LCD 読み出し、基板トップまで Veryl で実装する。
 
 現在の実機はオンチップ RAM 32 KiB とベアメタルの矩形表示で動作している。
-Linux はシミュレータ上で起動済みだが、実機のCPUからDDR3への接続、カーネル転送、
-Linux用フレームバッファは未実装である。DDR3は下記の独立診断で実機検証を進めている。
+Linux はシミュレータ上で起動済みである。実機のCPU診断回路ではDDR3の全容量走査と命令実行が
+成功した。Linux用SoCへの統合、カーネル転送、Linux用フレームバッファは未実装である。
+DDR3は下記の診断回路で実機検証を進めている。
 
-## 今回の取り込み範囲
+## DDR基礎実装の範囲 (PR #5)
 
 この変更の完成単位は、DDR3のPHY・初期化・受信trainingと、単独で実行できる診断である。
 既存CPU/LCD SoCのメモリ構成は変更していない。合成対象はGowinプリミティブの接続まで
@@ -25,7 +26,7 @@ Verylで実装し、SVはテストベンチとVerylの生成物に限る。
 | 読出し | lane別の拍位置trainingとburst組立、後続データで校正値を保持 | [読出しtraining](ddr-read-training.md) |
 | 保持と部分書込み | 約127 msのrefresh保持、burst内全16 byte位置のDM選択を各3回実機検証 | [アレイ診断](ddr-multi-pattern.md) |
 | アドレス | 23本の有効アドレスbitと公称容量末尾を含む48 burst、全96 READを3回実機検証 | [アレイ診断](ddr-multi-pattern.md) |
-| CPU側の受渡し | `DdrWordCdc`の32/128 bit変換とクロック間要求・応答をシミュレーションで検証 | 本書の初期化・CDCの検証記録、[RTL](../fpga/tang_primer_20k/ddr_word_cdc.veryl) |
+| CPU側の受渡し | 範囲検査・CDC・controller経由の32 word読書きを独立実機診断で確認。CPUコアは未接続 | 本書のwordポート診断、[RTL](../fpga/tang_primer_20k/ddr_word_probe.veryl) |
 
 最新の各実機診断は配置配線のsetup/hold違反0を確認し、診断後に既知のLCD SoCへ戻して
 UART検査を行った。これは限定アドレス・単一基板での確認であり、全セル走査、任意の
@@ -50,16 +51,542 @@ GOWIN用コンテナの構築手順は本書の「GOWIN EDA による配置配�
 git ignoreされた`logs/board/`、`sim/fpga/`に保存し、測定時のSHA256と結果を文書に残す。
 これらの生成物はcloneには含まれない。実機実行には、復帰用の検証済みLCD SoC bitstreamも必要である。
 
-### 次のPRで行う作業
+### DDR検証の完了範囲と次工程
 
-1. 任意のメモリ要求と周期的refreshを仲裁するDDR controllerを実装する。
-   応答待ち・停止中にもrefresh期限を守り、timeoutやreset時の扱いを検証する。
-2. `DdrWordCdc`とCPUバスへ接続し、可変レイテンシ、byte strobe、境界アクセスを検証する。
-   接続後に全容量走査と継続アクセスを実機で確認する。
+2026-10-06に、以下のDDRと周辺回路の機能検証を完了した。CPUを含む実機診断と
+シミュレーションでの異常注入試験を区別して記録する。対象は記載した単一基板・固定条件であり、
+温度・電圧変動の評価や量産向けの信頼性保証は含まない。Linux用SoCへの統合は次工程である。
+
+| 検証項目 | 現在の根拠と残作業 |
+| --- | --- |
+| 初期化・PHY起動・lane training | 単体試験と独立実機診断。PLL/DLL異常時の復帰はシミュレーション対象 |
+| DDRコマンド間隔・周期refresh | controllerとCPU結合モデルでコマンド間隔・REF期限を監視。実機で保持診断と全容量走査が成功 |
+| 全128 MiB・全word・両極性 | 独立mixed診断が396 MHzで3回、324 MHzで2回成功。従来patternも修正後に成功。CPU経由でも全容量mixed/反転値とDDR命令実行が成功 |
+| 部分書込み・word lane・隣接word保持 | 単体・結合試験、DM・wordポート独立診断に加え、CPU経由の全16 byte位置、SH/SW、隣接word/guard保持が実機3回成功 |
+| 範囲外・非整列・timeout・後続要求 | CPU/controller結合で破損・timeoutを検出。CPU実機で非整列と容量末尾、範囲外のload/store/fetch/AMO例外、handler復帰・後続要求を確認 |
+| CDCの要求保持・応答一対一・reset取消し | 3クロック比の結合試験、停止clockでのreset試験、独立実機word診断 |
+| Coreを含むDDRアクセス | Core・ROM・CDC・controller・PHYを接続。全容量mixed/反転値・DDR命令実行と、部分書込み・境界・LR/SC・全AMOの実機試験が成功 |
+| 配置配線・実機再現性 | 記載した合格bitstreamはsetup/hold違反0。制約・SHA256・繰返し実行結果を記録。切替回路修正後もCPU全容量回帰が成功 |
+| 再現手順・自動試験・PR | 試験をmake/CIへ組込み、README・本書・Draft PR #6へ結果と未実装範囲を記録。CI結果待ちは行わない |
+
+1. DDR controllerの単体・独立実機検証は下記のとおり完了した。
+   応答待ち中にもrefresh期限を守ること、timeoutやreset時の扱いを検証した。
+2. wordポートとCDCの独立実機診断、CPUアクセス例外の個別試験は完了した。Coreとwordポートを
+   接続した診断は、burst境界のメモリモデルで3クロック比すべて成功した。fetch応答待ち中の割込みは
+   要求を取り消さず、応答と命令PCを対応させる。controller/PHYへ接続したCPU全容量走査と
+   DDR命令実行も実機で成功した。CPU経由のbyte strobe・境界アクセス・LR/SC・AMOは独立書込み3回成功した。
 3. UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、Linuxの`/init`到達を確認する。
 
 LCDのframebuffer/DMA、fbconによるbootlog、LinuxユーザプロセスによるGUIは、
 Linux実機起動後の段階として扱う。
+
+## 要求・応答型DDR controller (2026-10-05)
+
+### CPU側のエラー応答契約
+
+`Core`と`Soc`の`i_mem_error`は、`o_mem_valid && i_mem_ready`の応答時だけ有効である。
+命令fetchはcause 1、load/LRはcause 5、store/SC/AMO（read段階を含む）はcause 7へ変換する。
+失敗した命令はretireせず、`minstret`も増やさない。`mepc`は命令PC、`mtval`は失敗した
+データアドレスを保持する。分割アクセスの後半では次の整列wordのアドレスを記録する。
+これは[RISC-V privileged specificationのmtval規定](https://docs.riscv.org/reference/isa/priv/machine.html)に基づく。
+分割storeの前半が成功した後のエラーは、前半のメモリ更新を取り消さない。
+
+AMOの旧値とSCの成功値は書込み成功後にだけdestinationへ反映する。LRのreservationは
+読出し成功時に設定し、SC発行時とバスエラー時に解除する。CLINT/PLICへのSoC内部アクセスは
+外部error入力から独立する。既存`FpgaSoc`ではerrorを0へ固定しており、DDRとの物理接続は残る。
+
+`make core-bus-error-test`はfetch/load/store、分割の前半・後半、LR、SC、AMOのread/write失敗と
+成功、ready前のerror、trap後の実行再開、SoC内部アクセスを検査する。`make cov-test`からも
+実行し、通常の命令試験とともにカバレッジへ集計する。CPU変更の検証完了には、これに加えて
+`make all`と`make linux-boot`の回帰を通す。
+
+2026-10-06の応答注入試験は、上記に加えて未完了load・分割後半・AMO write中のreset、
+要求のない周期のerrorも確認した。riscv-testsは76件、Spike照合は77件すべて成功。
+カバレッジの未到達数はline 4、branch 1、expression 13で既存の許容数内だった。
+Linux回帰は`/init`、Mandelbrot、donutの24 frame描画、SYSCON poweroffまで到達した
+（854,021,016 cycle、300,417,048 retire）。これはシミュレーション結果であり、Linux実機起動ではない。
+
+### CPU診断プラットフォーム
+
+`DdrCpuPort`はPMP 4 entryの`Soc`、4 KiB boot ROM、結果レジスタ、`DdrWordPort`を接続する。
+boot ROMは`0x1000..0x1fff`で、DDRのburst要求・応答はモジュール境界へ出す。
+現時点の結合試験はこの境界に待ち時間とbackpressureを持つメモリモデルを接続している。
+`DdrCpuProbe`はこのburst境界を`DdrBurstController`へ接続する。
+PHYを含む実機用回路も配置配線・タイミングを満たし、下記の全容量試験が成功した。
+
+ROMプログラム`fpga/firmware/ddr_cpu.S`は、CPU命令でmixed patternと反転値を書込み、保持後に
+逆順で照合する。その後DDRへ2命令を書き、DDRからfetch・実行してROMへ戻ることを確認する。
+`0x10000004`へ最初の失敗アドレス、`0x10000008`へ実測値（trap時はmcause）、
+最後に`0x10000000`へ1（成功）または2（失敗）を書いて終了する。結果はresetまで保持する。
+予期しないtrapはmtvalとmcauseを失敗レジスタへ保存する。
+
+`bash scripts/build_ddr_cpu.sh`の既定値は全33,554,432 word・各pass最低2,700,000 CPU cycle保持で、
+`sim/ddr_cpu.{elf,bin,hex}`を生成する。実機用ROMの構築は固定開発コンテナ内で行う。
+`make ddr-cpu-port-test`は64 word・1,000 cycle保持の`sim/ddr_cpu_test.hex`を生成し、
+正常、データ破損、load/storeエラー、DDR上の各命令のfetchエラー、要求受理後のresetを検査する。
+CPU/memoryクロックの半周期は19/5、5/19、7/11の3組を使う。
+この試験は`ddr-controller-probe-test`経由で既存のmake all/CIへ含める。
+
+2026-10-06に上記6ケース×3クロック比が成功した。正常ケースはCPUから130 word書込み・
+130 word読出しを行う（64 word×2 passとDDR上の2命令）。結果は失敗アドレス・実測値とも0。
+エラーケースは期待したmtval/mcauseまたは破損値を報告した。
+`make all`も成功し、命令試験76件、Spike照合77件、カバレッジ未到達line 4 / branch 1 /
+expression 13を確認した。Linux回帰もSYSCON poweroffまで成功した
+（849,581,975 cycle、298,794,956 retire）。この段階ではCPU経由の実機DDRアクセスは未検証である。
+
+Coreのfetchは最初の要求cycleをラッチし、応答までvalid/addressを保持する。
+その間に割込みが発生しても要求を取り消さず、成功した命令を完了してから割込みを取る。
+エラー応答は元のPCに対するアクセス例外を優先する。CLINTタイマがfetch待ち中に満了する
+成功・失敗の両ケースを`core-bus-error-test`で検証する。
+
+### burst要求と応答
+
+`make ddr-cpu-probe-test`は実際のCore・ROM・wordポート・CDC・controllerを接続し、
+DDRコマンド境界のBL8モデルで検証する。正常、データ破損、load timeout、DDR命令fetch timeoutの
+4ケースが成功した。書込みのアドレス・データ・mask、逆順READ、ACTからアクセスまでの間隔、
+PREの間隔、REF間隔315 controller cycle以内も検査する。READ応答待ち中の共通resetと
+CPU・CDC・controllerの再実行も通過した。CPU firmwareと結果レジスタは
+wordポート試験と共通であり、実機のために期待データをRTLから供給する経路は追加しない。
+
+実機用`TangDdrCpuTop`は396/99 MHz、受信遅延−6 tap、3 word校正窓を使う。
+固定開発コンテナで`bash scripts/build_ddr_cpu.sh`、固定GOWINコンテナで
+`DDR_CPU=1 bash scripts/build_ddr_mpr.sh`を実行する。
+出力は`sim/fpga/ddr_cpu/impl/pnr/ddr_cpu.fs`、制約は`ddr_cpu_probe.sdc`である。
+実機試験は`test-ddr-init-board.ps1 -Mode DdrCpu`を使い、最長1,800秒で終端フレームを待ち、
+成否にかかわらず既知のLCD SoCへ復帰する。
+
+最初の配置配線ではsetup違反121 endpoint、hold違反0となり、実機へは書き込まなかった。
+主な経路は初期化の`elapsed + 1 >= CYCLES`だったため、正の待ち時間という既存契約のもとで
+`elapsed >= CYCLES - 1`へ変更した。待ち時間を変えずに加算と比較を分離し、短縮設定・実時間設定の
+初期化試験各9 scenarioとCPU/controller結合試験が通過した。再配置配線はsetup/hold違反0件となった。
+使用量はLUT 11,363、ALU 1,188、register 3,924。実機用bitstream SHA256は
+`bdeefaa32a29e23742dc8839177e6691005398f920096bdf6e58afc95175d442`、
+取り込んだ全容量ROMのSHA256は
+`d0ffb0f78f294c17879cc63b0a647d151b4e7b50d115c1ec5434a63f2d079eff`。
+`20261006-133625-DdrCpu`でCPUによる全容量mixed pattern・反転値の照合と、DDR上の2命令の
+実行・ROMへの復帰が成功した。終端は`!A0000000000000000`、所要332.804秒。
+初回FTDI reset errorは既存の再試行で回復した。LCD復帰とUART検査も成功した。
+同一bitstreamの再書込み`20261006-134257-DdrCpu`も成功し、終端は同じ、所要332.784秒だった。
+独立書込み2回で全容量一致とDDR命令実行を確認し、いずれもLCD復帰・UART検査が成功した。
+CPU経由の部分書込み・境界アクセスは、以下の追加診断で検証した。
+
+CPUアクセス幅・境界の追加診断では、全容量ROMとは別のROMイメージを使い、同じCPU/controller/PHY経路で
+次を確認する。`fpga/firmware/ddr_cpu_access.S`を`CPU_PROGRAM=access bash scripts/build_ddr_cpu.sh`
+で構築し、`sim/ddr_cpu_access.hex`を生成する。全容量ROMは別ファイルで保持する。
+
+| 追加ケース | 確認する結果 |
+| --- | --- |
+| BL8内の全16 byte位置へのSB | 書き換えたbyteのみ変化し、他byteと前後のguard wordが保持される |
+| 各offsetへのSH/SW、LH/LHU/LW | 非整列・word境界・BL8境界を含む分割アクセスと読出し形式が一致する |
+| 容量末尾の有効な分割アクセス | `0x87fffffb`からのwordが一致し、最後の有効byteまで正しく更新される |
+| 容量末尾を越えるload/store | 後半の`0x88000000`でcause 5/7、mtvalは失敗部分。先に完了したstore部分は保持される |
+| 範囲外load/store/fetch/AMO | cause 5/7/1/7、正しいmtval、handlerからの復帰。物理DDR要求を出さない |
+| LR/SC・AMO | 成功SCと予約なしSC、全9種類のAMOの旧値と更新値、符号付き/なしMIN/MAXの両operand順、隣接word・guard保持 |
+
+`make ddr-cpu-access-test`は同じROMをcommand-levelモデルで検証し、正常時に加えデータ破損・read
+timeoutも検出させる。正常時は435 WRITE、2,256 READ、1,294 REFを確認した。
+全16 byte laneへの単一byte書込み、容量末尾へのアクセス、315 controller cycle以内のREFを監視する。
+許可領域以外の物理要求はfatalとし、範囲外CPUアクセスのアドレス折返しを検出する。
+ROM側では6回の期待trap、cause/mtval、handler復帰を確認してから成功を報告する。
+本試験は`ddr-controller-probe-test`経由で通常make/CIに含まれる。
+全容量診断で確認済みの128 MiB走査・refresh・DDR命令実行を、この追加診断で置き換えない。
+
+実機用は固定GOWINコンテナで`DDR_CPU_ACCESS=1 bash scripts/build_ddr_mpr.sh`を構築する。
+出力は`sim/fpga/ddr_cpu_access/impl/pnr/ddr_cpu_access.fs`、実機試験は
+`test-ddr-init-board.ps1 -Mode DdrCpuAccess`で行う。CPU 27 MHz、DDR 396/99 MHz、受信−6 tap、
+3 word校正窓は全容量CPU診断と共通であり、終了後はLCD SoCへ復帰する。
+
+初回配置配線はsetup違反268 endpoint、hold違反0だった。trainingのmatch結果からPHYの
+送信データ選択までの組合せ経路が最悪−1.612 nsとなったため、`controller_active`を
+controller clockのレジスタで受ける構成へ変更した。training終了後は診断器がidleを保持し、
+1 cycle後にcontrollerを有効にする。要求・DDRコマンドの間隔は変更しない。
+再配置配線はsetup/hold違反0、LUT 11,419、ALU 1,188、register 3,925となった。
+タイミング不合格時は構築スクリプトがレポートの場所を表示して失敗する。
+
+CPU部分アクセスbitstreamのSHA256は
+`995dea2b3f5c2a5660a6f9f7cb48fc850421427f18aa7666db96760b8293f8d7`、ROMのSHA256は
+`88cd320f279fe19d8328eb18b157a3bdc42318453d4e2bce587d441451a7b8c3`。
+2026-10-06に独立書込み3回が成功し、いずれも終端`!A0000000000000000`とLCD復帰・UART検査を確認した。
+所要時間はUARTの複数終端フレーム待ちを含み、CPU試験のみの実行時間ではない。
+
+| 実機ログ識別子 | 所要時間 | 結果 |
+| --- | --- | --- |
+| `20261006-140120-DdrCpuAccess` | 11.061秒 | 成功 |
+| `20261006-140221-DdrCpuAccess` | 13.857秒 | 成功 |
+| `20261006-140316-DdrCpuAccess` | 13.866秒 | 成功 |
+
+変更後の`make lint ddr-controller-probe-test`も成功した。全容量モデルの2 pattern、word診断、
+CPUポートの3クロック比、CPU/controllerと部分アクセス診断、controller診断を含む。
+
+切替信号をレジスタ化した全容量CPU版も再構築し、setup/hold違反0を確認した。
+LUT 11,736、ALU 1,188、register 3,925、bitstream SHA256は
+`80485d120d6d07b956cfd1e73f2f61bf1ac0b576b58f4b1557b92b8e2c5f1fdf`。
+全容量ROMのSHA256は前述の`d0ffb0f7...`と同一である。
+`20261006-140515-DdrCpu`は332.794秒で終端`!A0000000000000000`となり、全128 MiBの
+mixed/反転値照合、DDR命令実行、LCD復帰・UART検査が成功した。部分アクセス試験の追加によって
+全容量走査が省略されていないことを、修正後回路でも確認した。
+
+`DdrBurstController`は初期化とtrainingが完了したPHYへ、任意のBL8要求を1件ずつ発行する。
+各要求の終了時にall-bank PRECHARGEし、tRP待機後に応答する。rowを開いたままにする
+最適化、複数outstanding要求、CPU/DMA仲裁は含まない。既存CPUトップへの接続は未完了である。
+
+### 接続契約
+
+| 信号 | 意味 |
+| --- | --- |
+| `i_enable` | PHY初期化・trainingとPRE/tRPが完了して使用可能。解除時はDRAM/PHYも共通resetする |
+| `i_req_valid` / `o_req_ready` | 同一cycleで1のとき要求を受理し、address/data/strobeを内部に保持 |
+| `i_req_addr[26:0]` | 128 MiB内の相対byte address。16 byte整列必須。bank=[26:24]、row=[23:11]、burst列=[10:4] |
+| `i_req_data[127:0]` / `i_req_strb[15:0]` | byte enableは正極性でPHYのDMへ反転。strobe=0はREAD、非0はWRITE |
+| `o_rsp_valid` / `i_rsp_ready` | 応答受理までvalid/data/errorを保持。その間は次要求を受理しない |
+| `o_rsp_data` / `o_rsp_error` | READは全128 bit、WRITEは0。非整列要求とread valid timeoutはerror=1/data=0 |
+| `i_read_data` / `i_read_valid[1:0]` | training済みassemblerのlane別応答。各laneの最初のvalidだけを採用 |
+
+CPUの絶対アドレスの範囲検査・相対化は`DdrWordPort`で行う。
+`0x80000000..0x87ffffff`内のword整列要求だけを内蔵の`DdrWordCdc`へ渡し、
+backendには27 bitの相対burst addressを出力する。範囲外または非整列の要求は
+ローカルでready=1/error=1/data=0を返し、DDR要求を発行しない。範囲検査は上位bitを
+捨てる前に行うため、`0x88000000`などがDDR先頭へaliasすることはない。
+要求元は完了までvalid/address/data/strobeを保持し、同時に発行する要求は1件とする。
+範囲エラーは組合せ応答で、共通reset中は抑制する。byte/halfword転送はword整列addressと
+byte strobeで表現し、非整列アクセスの分割はCPU側の責務とする。
+errorのCPU例外への変換は未実装である。
+`DdrWordCdc`は`i_rsp_error`を応答mailboxに保持し、CPU側の`o_ready`と同時に
+`o_error`へ伝える。`o_rsp_ready`は要求受理サイクルまたは応答待ち中だけ立つ。
+CPUコア自体にはまだ外部メモリエラー入力がなく、timeoutを正常完了として扱う接続は行わない。
+`i_enable`解除/resetは未完了要求・応答を破棄する。
+独立した片側resetやDRAM内容の保持は契約に含めない。
+
+### CDCとの結合試験
+
+`make ddr-cdc-controller-test`は実際の`DdrWordPort`（内蔵CDC）と`DdrBurstController`を接続し、
+PHYのtraining済み読出し出力だけをテストベンチで供給する。初期化完了前の要求保持、
+4 word laneの抽出、片lane欠落によるtimeout/error伝達、後続正常読出し、
+要求・応答の一対一対応、15種類の書込みstrobeと4 word laneの組合せ、
+各部分書込み後の全4 word読戻し、要求がない期間のrefresh、READ受理後の共通resetと復帰を検査する。
+`ddr-word-cdc-test`の依存先に含め、`make all`と既存CIの両方から実行する。
+3種類のクロック比で、各334要求完了、resetによる1要求取消し、70要求のローカル拒否を検査する。
+拒否ケースは容量直前・直後、上位5 bitの全範囲外組合せのREAD/WRITE、先頭・末尾wordの
+非整列アクセスを含む。正常ケースでは相対addressのbit [26:4]と容量末尾を検査する。
+結合試験はシミュレーション限定であり、CPUコアと実PHYは含まない。
+strobe=0は読出しとして検証する。データモデルは1 burstに限定し、複数addressの独立した
+記憶内容と物理bank/row/column commandの検査はcontroller単体試験で行う。
+
+CPU例外接続では通常のload/store以外に分割アクセスの後半、AMOの読出し・書込み失敗も
+扱う必要がある。現在のCoreはAMOの読出し時点で宛先レジスタを更新するため、
+外部エラー入力を追加する際は書込み成功まで結果の確定を遅らせる変更も必要になる。
+Coreは今回変更していないため、Linux起動回帰は再実行していない。
+
+### 27 MHz wordポートの独立診断
+
+`DdrWordProbe`は27 MHzの要求生成回路から`DdrWordPort`、`DdrWordCdc`、
+99 MHzの`DdrBurstController`を経由し、32箇所へ各1 wordを書き込む。
+全8 bank、32 row、4 word laneを含むaddress列を使用し、refreshを続けながら100 ms保持後、
+再書込みせずに32 wordを比較する。CPUコアは含まない。training失敗、応答error、
+読出し不一致のいずれかがあれば成功しない。完了・成功は同期して診断ハーネスへ返す。
+独立したenableの再投入は運用せず、再初期化にはCDCとcontrollerの共通resetを用いる。
+
+```bash
+make ddr-word-probe-test
+DDR_WORD=1 bash scripts/build_ddr_mpr.sh  # 固定GOWINコンテナ
+```
+
+ホストからの実行は`scripts/test-ddr-init-board.ps1 -Mode DdrWord`。
+既存診断と同じく、直近3フレームの成功を確認した後、既知のLCD SoCへ復帰する。
+シミュレーションでは保持時間を1,024 CPU cycleへ短縮し、正常・14番目の読出し破損・
+20番目の応答欠落の3ケースを検査する。正常・異常とも32 WRITEと32 READまで継続し、
+途中の異常が後続成功で消えないことを確認する。`ddr-controller-probe-test`の依存先として
+既存の`make all`とCIから実行される。
+
+この診断には専用の`ddr_word_probe.sdc`を使う。既存診断のctrl→reference一括false pathを
+引き継がず、CDC・UART診断転送に30 nsの最大遅延を設定する。応答mailboxのdataはtoggleの
+2段同期後まで保持され、captureまで74 ns以上ある。要求address/dataのmailboxは
+99 MHz側の2段同期後まで保持され、captureまで20 ns以上あるため最大遅延を10 nsとする。
+同期器初段の位相関係によるsetup検査と、ctrl→referenceの同一エッジhold検査は除外する。
+mailboxの保持契約、2段目以降とDDR内部の通常検査、CDCの最大遅延検査は維持する。
+制約構文は[GOWIN Design Timing Constraints（SUG940）](https://cdn.gowinsemi.com.cn/SUG940E.pdf)
+の最大遅延・例外制約に基づく。
+
+2026-10-06、lint、word診断の3ケース、既存controller診断、CDC単体とcontroller結合の
+各3クロック比、controller単体、UART両形式が通過した（`sim/word-probe-final-tests.log`）。
+GOWINの配置配線は専用CDC制約下でsetup/hold違反0。bitstream SHA256は
+`43dba6f5125af877ed1de4b8dafee765086374659a8a73b1d124061ea0cb71d9`。
+独立した書込み3回の実機診断はいずれも直近3 UARTフレームが`!A5AA5A55A`であり、
+全32 wordが一致した。全回で既知LCD SoCへの復帰とUART確認も通過した。
+ログは`logs/board/20261006-104734-DdrWord-*`、`104819`、`104858`。
+status後の8桁はtraining値であり、word件数ではない。範囲外要求の拒否、timeoutの注入、
+全容量走査、CPU命令によるアクセス、Linux実機起動はこの実機診断に含まない。
+
+### 全128 MiBの2極性走査（調査中）
+
+`TangDdrFullTop`は`DdrWordProbe.FULL_WORDS=33_554_432`を使用する。
+全wordを昇順に`0x193a70c5 XOR word番号`で書き、100 ms保持後に逆順で全wordを比較する。
+次に値を全bit反転し、同じ書込み・保持・逆順比較を繰り返す。総数は67,108,864 WRITEと
+67,108,864 READ。最初のREAD失敗時だけ、書込みを挟まず同じwordを1回再読出しする。
+再読出しが成功しても元の失敗は保持し、残りの全走査を継続する。
+全期間で通常controllerのrefreshを継続する。
+
+```bash
+make ddr-full-probe-test
+DDR_FULL=1 bash scripts/build_ddr_mpr.sh
+```
+
+ホストの`scripts/test-ddr-init-board.ps1 -Mode DdrFull`は最大300秒で実行し、
+終端statusを3回受信すると早期終了する。30秒ごとにstatusを表示し、終了後LCDへ復帰する。
+結果JSONは上限時間`seconds`と実測時間`elapsed_seconds`を分けて保存する。
+
+UART形式は`!<status><failure:8hex><actual:8hex>`。failureはbit31が失敗あり、
+bit30がcontroller error、bit29が反転pass、bit28がWRITE、bit[24:0]が最初の失敗word番号。
+bit27は再読出しが期待値と一致、bit26は再読出しのcontroller error、bit25は再読出しが
+最初の実測値と一致したことを表す。元のactualは再読出し結果で上書きしない。
+byte addressは`0x80000000 + 4 * word番号`。actualはその応答の32 bit値である。
+statusが処理中のRでも最初の失敗は読み取れる。失敗なしの場合、failure/actualは0である。
+他の診断の8桁payloadと混同しないよう、ホストはDdrFullだけ16桁を要求する。
+
+短縮した64 wordモデルは正常・bit破損・valid欠落・stuck addressによるaliasに加え、
+再読出しのtimeout、通常pass末尾の失敗、反転pass末尾の失敗の7ケースを検査する。
+従来patternと後述のmixed patternを別々にビルドし、計14ケースを実行する。
+全word書込み前の読出しや、全word読戻し前の反転pass移行を禁止し、昇順WRITE・逆順READ、
+byte mask、独立計算したpattern、最初の失敗位置とactualの保持を照合する。
+既存の32 word診断とUARTの従来形式も回帰試験する。
+
+2026-10-06の最初の実機試験は失敗した。SHA256
+`718727881cb37f9eed05ef96fea1f095b33a85785b2afbbdb96f434aefe60891`、
+ログ`logs/board/20261006-105953-DdrFull-*`。初版UARTはtraining値のみの8桁で、
+90秒時点には`!V5AA5A55A`となっていた。LCD復帰は成功した。
+この結果を受け、上記の最初の失敗位置・actualを出力する64 bit診断を追加した。
+この既存設定の全容量試験は未合格であり、限定32 word診断の成功から全容量正常とは判定しない。
+後述の受信遅延調整版とは測定結果を分けて扱う。
+
+64 bit診断版はSHA256
+`85e71c03dd6dc30fa456263fad98c277f3ea3df5acc0b3e662a225db852dff6f`。
+専用CDC制約下でsetup/hold違反0、短縮走査の4ケース、最初の失敗情報照合、
+既存word診断、UARTの従来2形式と64 bit形式が通過した（`sim/full-debug-tests.log`）。
+実機2回は約72.6秒で走査終了し、いずれも不一致を報告した。
+
+| 実機ログ接頭辞 | 最初の失敗byte address | 期待値 | 実測値 | 終端フレーム |
+| --- | --- | --- | --- | --- |
+| `20261006-110843-DdrFull` | `0x8757E754` | `0x18EF8910` | `0x18FF8910` | `!V81D5F9D518FF8910` |
+| `20261006-111057-DdrFull` | `0x8757FB54` | `0x18EF8E10` | `0x18FF8E10` | `!V81D5FED518FF8E10` |
+
+ともに通常passのREADで、controller timeoutではなくbit 20の不一致。
+位置が変化するため固定アドレス故障とは断定せず、当該patternの反復アクセスと
+失敗wordの再読出しで書込み側・読出し側を切り分ける。全回LCD復帰・UART確認は成功した。
+初版と64 bit版のbitstreamはローカルの`logs/board-images/`にも保存している。
+
+#### 最初の失敗wordの再読出し
+
+再読出し版はSHA256
+`2c9a9f8d4bb28cf84581ca78d46621a1645790b09897a293b140899300abcc7f`。
+実機ログ`20261006-111921-DdrFull`では、通常passの`0x8757EB54`で期待値
+`0x18EF8A10`に対し`0x18FF8A10`を受信したが、書込みなしの直後の再読出しは期待値に一致した。
+終端フレーム`!V89D5FAD518FF8A10`のbit27が再読出し一致を示す。
+この結果は当該読出しの一過性不一致を示し、固定した保存データ不良という説明だけでは足りない。
+全走査の失敗判定は解除していない。所要72.616秒、LCD復帰・UART確認は成功。
+7ケースのシミュレーションは`sim/full-retry-boundary-tests.log`に記録した。
+
+受信タイミングの比較用に`TangDdrFullShiftTop`を追加し、`READ_TAPS`で
+DQS受信遅延の変更段数、`READ_DECREASE`で減少方向を指定する。変更完了を待って
+array trainingを開始する。PLL/DLL設定、書込み位相、396/99 MHzの周波数は変更しない。
+ビルドは`DDR_FULL_SHIFT=1 bash scripts/build_ddr_mpr.sh`、実機は`-Mode DdrFullShift`。
+この比較診断にも全128 MiB・2極性・最初の失敗後の再読出しを適用する。
+現在の比較用topは6 tap減少を指定する。通常の`TangDdrFullTop`は変更しない。
+`ddr-mpr-delay-test`は増加方向の全走査に加え、減少方向で0→−5→−2 tapとなることを
+プリミティブ入力の独立したカウンタで検査する。
+
+| 受信遅延 | 実機ログ | 結果 |
+|---|---|---|
+| +4 tap | `20261006-112322-DdrFullShift` | `!B0000000000000000`、training失敗 |
+| +1 tap | `20261006-112707-DdrFullShift` | `!V89FFF8C498C58801`、`0x87FFE310`で期待値`0x18C58801`に対し`0x98C58801`。再読出し一致 |
+| −1 tap | `20261006-113259-DdrFullShift` | `!V8885708619FF0043`、`0x8215C218`で期待値`0x19BF0043`に対し`0x19FF0043`。再読出し一致 |
+| −2 tap | `20261006-113532-DdrFullShift` | `!VA97B8F7AE7FE0040`、通常pass一致。反転passの`0x85EE3DE8`で期待値`0xE7BE0040`に対し`0xE7FE0040`。再読出し一致 |
+| −3 tap | `20261006-113753-DdrFullShift` | `!VA97ACF7AE7FF4040`、通常pass一致。反転passの`0x85EB3DE8`で期待値`0xE7BF4040`に対し`0xE7FF4040`。再読出し一致 |
+| −4 tap | `20261006-114045-DdrFullShift` | `!A0000000000000000`、全128 MiB・両極性一致（72.604秒） |
+| −5 tap | `20261006-114757-DdrFullShift` | `!A0000000000000000`、全128 MiB・両極性一致（72.597秒） |
+| −6 tap | `20261006-115037-DdrFullShift` | `!A0000000000000000`、全128 MiB・両極性一致（72.604秒） |
+| −8 tap | `20261006-115313-DdrFullShift` | `!A0000000000000000`、全128 MiB・両極性一致（72.604秒） |
+
++4 tapのSHA256は`e20c510b0ffe55348a2fa3c1750d25b5fd8039bc40cd9ffd9bd70af37a026e34`、
++1 tapは`2ce646e7cd68a166d89475588ee832a135a2907a9ce5b17fccf82db2c6252b5b`。
+−1 tapは`2d219a8408895a5181d681b842e8bade364d36987bc329aef10baf2ac2789a12`。
+−2 tapは`08e91c85aed4ce781b76492f91d8efa11e0cbec099f1bd510c21b282110194ee`。
+−3 tapは`4842de129d9385fa138738dbb206fa892c05c9a7367c4523cff85bbeacbbb940`。
+−4 tapは`a2ebd649c977b6f265f5c3c435eadb3e93949d25e69875a1efb9b513910c11fa`。
+−5 tapは`9d8d08f8b257ce52ff22c1bf8fb52bf7fa0ab1df9d65ea03853b30807e4d77cf`。
+−6 tapは`ea7f52effddfcefad133938cd46f10743b2fbc511bc693abd049ac2ac168c1ff`。
+−8 tapは`eaab540ec56c3880291627218ade2605a6226bc0bdf57d8bf1fdf4308d27bd3f`。
+各回路ともsetup/hold違反は0件で、試験後のLCD復帰・UART確認は成功した。
+−4 tapで初めて全容量走査が一致した。同一bitstreamを再書込みした
+`20261006-114226-DdrFullShift`（72.597秒）と`20261006-114404-DdrFullShift`（72.603秒）も
+全容量・両極性が一致し、計3回の独立起動を確認した。各回LCD復帰・UART確認も成功。
+3回目は最初のFTDI reset errorを既存の再試行処理で回復してから書き込んだ。
+追加比較で−5、−6、−8 tapも一致したため、次の診断は−6 tapを基準とする。
+これは測定した4設定の結果であり、未測定の−7 tapや設定限界は保証しない。
+単一基板・室内条件であり、温度・電圧変動の検証ではない。
+
+#### 上位データbitも変化する追加pattern
+
+`TangDdrFullMixedTop`は受信遅延−6 tap、396/99 MHzで、全128 MiBを次の32 bit演算で
+生成したwordと、その反転値で走査する。演算ごとに32 bitへ切り詰め、右shiftは論理shiftとする。
+
+```text
+x = 0x193A70C5 XOR word_index
+x = x XOR (x << 13)
+x = x XOR (x >> 17)
+x = x XOR (x << 5)
+```
+
+従来のアドレスXORでは固定だった上位7 bitもアドレスに応じて変化する。
+各変換は可逆であり、異なるword indexの期待値が同じ値になる変換ではない。
+最初の失敗wordの再読出しも同じ変換を使い、元の失敗判定を保持する。
+テストベンチは独立したpattern計算と固定3ベクトルを使い、全WRITEのデータ・mask、
+故障注入時の最初の失敗・再読出し結果を照合する（`sim/full-mixed-tests.log`）。
+buildは`DDR_FULL_MIXED=1 bash scripts/build_ddr_mpr.sh`、実機は`-Mode DdrFullMixed`。
+
+−6 tap版（SHA256 `0ff7cb72680c1c0f258c7edf7aac383ae09a4260b25ec1270d1053ce35f039ef`）は
+`20261006-115916-DdrFullMixed`と`20261006-120001-DdrFullMixed`でともに
+`!B0000000000000000`となった。全容量走査前のtraining失敗であり、mixed patternの
+データ不一致とは区別する。従来patternの−8 tap保存bitstreamは、その後の
+`20261006-120146-DdrFullShift`でも全容量一致した。
+
+−4 tap版（SHA256 `200e3a7a73abdcbec3dc71f440fe4edb72c034e14cfdc4da76c191b86e996a8e`）は
+trainingを通過したが、`20261006-120325-DdrFullMixed`で`!V8359303AFFEF80E1`となった。
+通常passの`0x8564C0E8`で期待値`0x7FEF80E1`に対し`0xFFEF80E1`を受信し、
+再読出しも同じ不正値だった（bit25=1）。この結果だけでは書込み不良と再現性のある
+読出し不良を区別できない。全走査は72.604秒で終了し、失敗判定を保持した。
+両回路はsetup/hold違反0件、全試験後のLCD復帰とUART検査は成功。
+従来patternの全容量成功を、追加patternや別の回路構成へ一般化しない。
+
+#### 324/81 MHzでの比較
+
+`TangDdrFullSlowTop`はmixed patternでPLL倍率を44/3から36/3へ変更する。
+DDR clockは324 MHz、controllerは81 MHz、要求元とUARTは27 MHzである。
+[H5TQ1G63EFR-PBCの速度表](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf)
+のCL=6/CWL=5ではtCK(AVG)=2.5〜3.3 nsであり、3.086 nsは範囲内となる。
+コマンド待機cycle数は短縮しない。controllerのrefresh間隔を315 cycle以内に制限する
+モデル検査を追加し、81 MHzでも約3.889 µs以内となることを確認する。
+
+buildは`DDR_FULL_SLOW=1 bash scripts/build_ddr_mpr.sh`、実機は`-Mode DdrFullSlow`。
+build時にSDCのPLL倍率も36へ変更し、タイミングreportにfast=3.086 ns、ctrl=12.346 nsが
+現れることを検査する。CDC mailboxの最大遅延制約とsetup/hold違反0件の条件は維持する。
+従来の比較回路は396/99 MHzのままとする。
+
+最初の−4 tap版はSHA256
+`35851ae74686cb197aad2fa4f3a67bfccfdd44bd46bbda72089d698da021b1fe`。
+`20261006-121010-DdrFullSlow`でtraining失敗となり、全容量走査には入らなかった。
+setup/hold違反0件、試験後のLCD復帰・UART検査は成功。
+追加遅延0 tap版はSHA256
+`7057bc2ad7966ba7748ee8de993714d633bc379345f531c113d7d0d64c179651`。
+`20261006-121330-DdrFullSlow`でもtraining失敗となった。setup/hold違反0件、
+LCD復帰・UART検査は成功。現在の比較用topはこの0 tap版である。
+周波数低下だけでは解消しておらず、次にtrainingのlane別valid・校正結果を観測する。
+
+#### training中のUART診断
+
+全容量診断のcontroller開始前は、64 bit UART payloadをtrainingの観測値に使う。
+上位32 bitは`0xD3000000 | (word_index << 16) | (offsets << 6) | (trained << 4) | (valid_seen << 2) | burst_seen`。
+`trained`、`valid_seen`、`burst_seen`はいずれもlane別の2 bitであり、offsetsはlane0を下位5 bit、
+lane1を上位5 bitに格納する。各laneの最初のraw RVALIDで全8 beatを格納し、
+下位32 bitへ128 bit捕捉値の`word_index`番目のwordを出す。indexはフレームごとに0〜3を巡回する。
+各wordのbyte0/2がlane0、byte1/3がlane1である。lane別に捕捉するため、同一cycleの32 bit値とは限らない。
+後続のvalidやデータで最初のsampleを上書きしない。
+
+`DdrTrainingDiagnostic`は観測専用であり、trainingやDDR要求を変更しない。
+controller開始をreference clockへ2段同期した後は、従来の失敗情報・actualの形式へ切り替える。
+`ddr-training-diagnostic-test`でlaneの独立捕捉、training外の入力無視、後続データの保持、
+flagsとresetを検査し、全容量試験の依存関係としてCIにも組み込む。
+UART試験は4 wordの順序とindexのwrapを照合する。実機スクリプトは4回の終端フレームを
+取得してから終了し、training sampleの全wordを保存する。
+
+最初の32 bit観測版（SHA256
+`5eb89d71d584e12028594dfd5a1b3f60e40ab8bea4d2a1ac0d6ad1f23dfe29b3`）は
+`20261006-121850-DdrFullSlow`で`!BD300000FF00F0FF0`を得た。
+両laneのburst/valid検出は成立し、先頭2 beatはtraining patternと一致したが、
+両laneの校正照合が不成立だった。これを受けて観測を全8 beatへ拡張した。
+
+128 bit観測版はSHA256
+`96a81b5477ad8ea7d9aab71359f80994a440114afa82e4618ddb762d1a477af3`。
+`20261006-122523-DdrFullSlow`でindex 0〜3のsampleは順に
+`F00F0FF0 / F00F0FF0 / 96696996 / C33C3CC3`だった。両laneでburst/validを検出したが、
+校正結果は不成立である。先頭2 beatが重複し、期待patternの先頭は当該wordのbeat 2から
+始まる配置となっている。末尾の`5AA5/A55A`はこの捕捉範囲に入らない。
+従来の前cycle＋現在cycleだけの照合では、この配置の全patternを評価できないため、
+次cycleも含む3 word窓とlane別5 bit offsetを追加した。モデルは全17 offsetと実機の
+重複prefix（offset 10）を再現し、後続payload・不正pattern拒否・再training禁止を検査する。
+保持・refresh・byte mask・23アドレスbitの結合試験も通過した。
+setup/hold違反0件、LCD復帰とUART検査は成功した。
+
+3 word窓の324/81 MHz版（受信追加遅延なし）はSHA256
+`02d7485f05cf48521578ff3f209f6e76210d79a06952fbfa4092ac2b2bd9637e`。
+`20261006-123505-DdrFullSlow`でtrainingが成立し、全128 MiBのmixed patternと反転値の
+走査も一致した。終端は`!A0000000000000000`、所要83.798秒。
+setup/hold違反0件、LCD復帰・UART検査も成功した。
+同じ回路の再書込み`20261006-123721-DdrFullSlow`も全容量一致した（83.792秒）。
+
+396/99 MHz・受信遅延−6 tap版はSHA256
+`fa7dfdd9ed1a3cfde251b484eae8e055fa5bb1c711fd2025f974b1100b7aa742`。
+`20261006-123926-DdrFullMixed`で全128 MiBのmixed patternと反転値が一致し、
+終端は`!A0000000000000000`、所要75.426秒だった。setup/hold違反0件、
+LCD復帰・UART検査も成功。
+同一bitstreamの`20261006-124145-DdrFullMixed`と`20261006-124401-DdrFullMixed`も
+全容量一致した（いずれも75.393秒）。計3回の独立書込みで確認し、全回LCD復帰も成功。
+2回目は初回のFTDI reset errorを既存の再試行処理で回復した。
+
+従来のアドレスXOR／反転patternも、同じ3 word窓・396/99 MHz・受信遅延−6 tapで
+全容量一致した。SHA256は
+`c338915a0e3c5763a24940a63eaa192f47cb0a35e05755c2906a8343baffc639`、
+ログは`20261006-124540-DdrFullShift`、終端は`!A0000000000000000`、所要75.400秒。
+setup/hold違反0件、LCD復帰・UART検査も成功した。
+ここまでの全容量試験はCPUを含まない独立診断であり、CPU接続後の実機検証は別途行う。
+
+### コマンドとrefresh
+
+99 MHz制御、396 MHz DDR clock、CL=6/CWL=5を使用する。WRITEはCA slot 3、他のアクセス
+コマンドはslot 2で発行し、DQS preamble/data/postambleは既存診断と同じ配置を使う。
+ACT後4 controller cycleでREAD/WRITEし、WRITE後10 cycleでPRECHARGE、READは12 cycleの
+受信窓を終えてPRECHARGEする。両laneが揃わない場合も窓を延長せずerrorを返す。
+
+開始時にREFRESHし、以後は前回REFから256 cycle以上経過すると、新規要求よりrefreshを
+優先する。処理中の1要求はPRE/tRPまで完了してからREFへ進む。REF後は32 cycle（約323 ns）
+待機する。これは[Hynix資料](https://dl.sipeed.com/fileList/TANG/Primer_20K/07_Chip_manual/sk_hynix.pdf)
+page 14の1 Gbit向けIDD測定条件（nRFC=59 CK @1.875 ns等）より長く取った保守的な待機値である。
+controller単体と全容量モデルではREF間隔が315 cycleを超えないことを監視する。
+これは99 MHzで約3.182 µs、81 MHzで約3.889 µsに相当する。
+未消費の応答は独立レジスタに保持し、その間もidle/REFの処理を継続する。
+
+### 検証と実機診断
+
+```bash
+make ddr-burst-controller-test ddr-controller-probe-test
+DDR_CONTROLLER=1 bash scripts/build_ddr_mpr.sh  # 固定GOWINコンテナ
+```
+
+controller単体試験では全有効アドレスbit・容量末尾、16位置のbyte strobe、非整列要求、
+応答backpressure、idle中のrefresh、lane別valid、重複valid、片lane／全laneのtimeout、
+要求処理中・応答保留中のresetを検査する。応答の保持、1要求1応答、CA/DQS/DMの順序・
+間隔とrefresh期限をモデルで監視する。
+
+`DdrControllerProbe`は32箇所を書き、100 ms保持してから再書込みなしで32 READを照合する。
+最初のWRITE応答は1,024 cycle保留し、その間もrefreshを継続させる。
+短縮した保持時間で、正常系、途中のデータ破損、valid欠落の3ケースをシミュレーションする。
+`TangDdrControllerTop`は既存の2列診断でPHYをtrainingした後にcontrollerへ引き渡す。
+trainingまたはcontroller照合が失敗すれば成功statusにはならない。
+
+実機は`scripts/test-ddr-init-board.ps1 -Mode DdrController`で検査する。
+合格には開始記号付きUARTフレームの直近3個がすべて`!A`で始まることを要求し、
+終了後は既知のLCD SoCへ復帰する。status後の8桁はtraining診断の値であり、
+controllerのREAD件数やrefresh件数ではない。
+
+2026-10-05、lint、controller単体試験、診断3ケース、UART両形式、CDCの3クロック比、
+既存trained/address/PHY起動回帰試験が通過した。ログは`sim/controller-regression.log`と
+`sim/controller-final-tests.log`。新規2試験を`make all`とCIへ追加した。
+実機用回路は配置配線のsetup/hold違反0、bitstream SHA256は
+`169049dbbb7bcb5b09c98db7d7262f0cabe6368c4ef06b455bec862d5fbd2ca2`。
+独立した実機書込み3回で全32 READが一致し、UARTは全回`!A5AA5A55A`だった。
+全回LCD SoCへの復帰とUART検査も成功した。実機ログは
+`logs/board/20261005-174426-DdrController-*`、174527、174548。
+CPUからのアクセス、errorのCPU例外への変換、全容量走査、
+LCD DMAとの仲裁と必要帯域はまだ検証していない。
 
 ## 最初の実測: DDR3 PHY のツール対応
 
@@ -184,7 +711,7 @@ DDR3 の実メモリ試験に先立ち、以下を独立した Veryl モジュ�
 | モジュール | 内容 | 検証 |
 |---|---|---|
 | `Ddr3Startup` | RESET 保持、RESET 解除後待ち、CKE、MR2→MR3→MR1→MR0、ZQCL、完了待ち | 短縮/実時間相当の 2 設定で各 9 回の初期化。コマンド受理待ち、途中リセット、PHY readiness 喪失を検査 |
-| `DdrWordCdc` | CPU 32 bit と DDR 128 bit バースト間のメールボックス CDC | 3 種類のクロック比で各 133 トランザクション。全 16 通りの byte mask と 4 word lane、遅延応答、同時応答、停止クロック中の共通リセットを検査 |
+| `DdrWordCdc` | CPU 32 bit と DDR 128 bit バースト間のメールボックス CDC | 3 種類のクロック比で各149トランザクション。全16通りのbyte maskと4 word lane、遅延・同時応答、error伝達と後続正常応答、停止クロック中の共通resetを検査 |
 | `TangDdrClock` | 27 MHz → PLL 396 MHz → DHCEN → CLKDIV /4 → 99 MHz | SERDES を負荷とする検証トップで GOWIN 合成・配置配線。派生クロック周期 2.525 ns / 10.101 ns の認識を確認 |
 
 ```bash
