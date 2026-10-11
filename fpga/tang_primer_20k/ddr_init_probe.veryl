@@ -158,6 +158,7 @@ module TangDdrInitProbe #(
     param ARRAY_PHASE_ALIGN: u32      = 0 ,
     param PHY_STARTUP      : u32      = 0 ,
 ) (
+    i_uart_rx  : input  'reference logic        ,
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
     ddr_dq     : inout  'async     tri logic<16>,
@@ -645,9 +646,41 @@ module TangDdrInitProbe #(
         o_raw1        : array_raw1                                                     ,
         o_expected    : array_expected                                                 ,
     );
-    var word_failure: 'reference logic<32>;
-    var word_actual : 'reference logic<32>;
-    if RUN_CONTROLLER == 4 :cpu_mode {
+    var word_failure : 'reference logic<32>;
+    var word_actual  : 'reference logic<32>;
+    var linux_uart_tx: 'reference logic    ;
+    if RUN_CONTROLLER == 5 :linux_mode {
+        unsafe (cdc) {
+            inst linux_probe: DdrLinuxProbe #(
+                ROM_INIT: CPU_ROM_INIT,
+            ) (
+                i_uart_rx                                     ,
+                o_uart_tx    : linux_uart_tx                  ,
+                o_failure    : word_failure                   ,
+                o_actual     : word_actual                    ,
+                i_clk        : ctrl_clk                       ,
+                i_cpu_clk    : i_clk                          ,
+                i_reset      : ready_reset as reset_async_high,
+                i_enable     : controller_active              ,
+                i_read_data  : assembled_data                 ,
+                i_read_valid : assembled_valid                ,
+                o_done       : controller_done                ,
+                o_found      : controller_found               ,
+                o_cmd_valid  : controller_valid               ,
+                o_cmd        : controller_cmd                 ,
+                o_bank       : controller_bank                ,
+                o_addr       : controller_addr                ,
+                o_read       : controller_read                ,
+                o_odt        : controller_odt                 ,
+                o_data       : controller_data                ,
+                o_mask       : controller_mask                ,
+                o_dq_enable  : controller_dq_enable           ,
+                o_dqs_enable : controller_dqs_enable          ,
+                o_dqs_pattern: controller_dqs_pattern         ,
+            );
+        }
+    } else if RUN_CONTROLLER == 4 :cpu_mode {
+        assign linux_uart_tx = 1;
         unsafe (cdc) {
             inst cpu_probe: DdrCpuProbe #(
                 ROM_INIT: CPU_ROM_INIT,
@@ -676,6 +709,7 @@ module TangDdrInitProbe #(
             );
         }
     } else if RUN_CONTROLLER >= 2 :word_port_mode {
+        assign linux_uart_tx = 1;
         unsafe (cdc) {
             inst word_probe: DdrWordProbe #(
                 FULL_WORDS: if RUN_CONTROLLER >= 3 ? 33_554_432 : 0,
@@ -705,8 +739,9 @@ module TangDdrInitProbe #(
             );
         }
     } else :burst_mode {
-        assign word_failure = 0;
-        assign word_actual  = 0;
+        assign linux_uart_tx = 1;
+        assign word_failure  = 0;
+        assign word_actual   = 0;
         inst controller_probe: DdrControllerProbe (
             i_clk        : ctrl_clk              ,
             i_rst        : ready_reset           ,
@@ -1022,5 +1057,11 @@ module TangDdrInitProbe #(
         o_tx          : normal_uart_tx                                            ,
         o_frame_index : uart_frame_index                                          ,
     );
-    assign o_uart_tx = if ARRAY_TIMELINE != 0 ? timeline_uart_tx : normal_uart_tx;
+    assign o_uart_tx = if RUN_CONTROLLER == 5 && controller_started_sync[1] ?
+        linux_uart_tx
+    : if ARRAY_TIMELINE != 0 ?
+        timeline_uart_tx
+    :
+        normal_uart_tx
+    ;
 }

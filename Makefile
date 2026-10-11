@@ -146,7 +146,21 @@ ddr-word-probe-test: veryl-build ddr-full-probe-test
 	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_word_probe.sv
 	sim/obj_ddr_word_probe/tb_ddr_word_probe
 
-.PHONY: ddr-cpu-access-test
+.PHONY: tang-boot-test ddr-cpu-access-test
+tang-boot-test: veryl-build
+	bash scripts/build_tang_boot.sh
+	riscv-none-elf-gcc -march=rv32ima_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+	    -Wl,-Ttext=0x80000000,-e,_start,--build-id=none tests/tang_boot_payload.S -o sim/tang_boot_payload.elf
+	riscv-none-elf-objcopy -O binary sim/tang_boot_payload.elf sim/tang_boot_payload.bin
+	verilator --cc --exe --build -Wno-fatal --top-module rv32ima_DdrLinuxSoc \
+	    -Mdir sim/obj_tang_boot -o tang_boot \
+	    $(RTL) target/ram.sv target/uart.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_linux_soc.sv \
+	    $(CURDIR)/tb/tb_tang_boot.cpp
+	sim/obj_tang_boot/tang_boot
+	sim/obj_tang_boot/tang_boot 234
+	sim/obj_tang_boot/tang_boot 246
+
 ddr-cpu-access-test: veryl-build
 	CPU_PROGRAM=access bash scripts/build_ddr_cpu.sh
 	verilator --binary --timing -Wno-fatal --top-module tb_ddr_cpu_access \
@@ -168,7 +182,7 @@ ddr-cpu-probe-test: veryl-build
 	    tb/tb_ddr_cpu_probe.sv
 	sim/obj_ddr_cpu_probe/ddr_cpu_probe
 
-ddr-controller-probe-test: veryl-build ddr-word-probe-test ddr-cpu-port-test ddr-cpu-probe-test ddr-cpu-access-test
+ddr-controller-probe-test: veryl-build ddr-word-probe-test ddr-cpu-port-test ddr-cpu-probe-test ddr-cpu-access-test tang-boot-test
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_controller_probe \
 	    -Mdir sim/obj_ddr_controller_probe -o tb_ddr_controller_probe \
 	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_controller_probe.sv tb/tb_ddr_controller_probe.sv

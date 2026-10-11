@@ -182,6 +182,10 @@ module Uart #(
                                 fifo[wptr[FIFO_PW - 2:0]] = rx_sr;
                                 wptr                      = wptr + 1;
                             }
+                            // Rearm at the stop-bit midpoint. Waiting through
+                            // its end accumulates a tick of start detection
+                            // latency for each back-to-back character.
+                            rx_bits = 0;
                         } else {
                             rx_sr = {rx_in, rx_sr[7:1]};
                         }

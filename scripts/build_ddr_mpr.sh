@@ -3,7 +3,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${DDR_CPU_ACCESS:-0}" == 1 ]]; then
+if [[ "${LINUX_BOOT:-0}" == 1 ]]; then
+    name=linux_boot
+    top=rv32ima_TangLinuxTop
+elif [[ "${DDR_CPU_ACCESS:-0}" == 1 ]]; then
     name=ddr_cpu_access
     top=rv32ima_TangDdrCpuAccessTop
 elif [[ "${DDR_CPU:-0}" == 1 ]]; then
@@ -122,6 +125,12 @@ export DDR_MPR_NAME="$name" DDR_MPR_TOP="$top"
 out="$root/sim/fpga/$name"
 gowin="${GOWIN_HOME:-/opt/gowin/IDE}"
 mkdir -p "$out"
+if [[ "$name" == linux_boot ]]; then
+    test -s sim/tang_boot.hex
+    mkdir -p "$out/sim"
+    cp sim/tang_boot.hex "$out/sim/tang_boot.hex"
+    sha256sum sim/tang_boot.hex > "$out/firmware.sha256"
+fi
 if [[ "$name" == ddr_cpu* ]]; then
     test -s "sim/$name.hex"
     mkdir -p "$out/sim"
@@ -130,7 +139,10 @@ if [[ "$name" == ddr_cpu* ]]; then
 fi
 veryl build > "$out/veryl.log" 2>&1
 cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/ddr_probe_uart.cst > "$out/$name.cst"
-if [[ "$name" == ddr_cpu* ]]; then
+if [[ "$name" == linux_boot ]]; then
+    cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/lcd_soc_uart.cst > "$out/$name.cst"
+    cat fpga/tang_primer_20k/linux.sdc fpga/tang_primer_20k/ddr_phy_startup.sdc > "$out/$name.sdc"
+elif [[ "$name" == ddr_cpu* ]]; then
     cat fpga/tang_primer_20k/ddr_cpu_probe.sdc > "$out/$name.sdc"
 elif [[ "$name" == ddr_word || "$name" == ddr_full* ]]; then
     cat fpga/tang_primer_20k/ddr_word_probe.sdc > "$out/$name.sdc"

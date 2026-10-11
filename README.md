@@ -7,7 +7,7 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
 
 ## 実装ステータス
 
-更新日: 2026-10-06。Linuxはシミュレーション上で起動済み。Tang Primer 20K実機では
+更新日: 2026-10-11。Linuxはシミュレーション上で起動済み。Tang Primer 20K実機では
 ベアメタルのLCD矩形表示と、独立したDDR3診断まで確認済みであり、Linux実機起動は未達である。
 DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致した。
 追加したmixed patternでは校正窓の不足を発見し、3 wordへ拡張した324 MHz版と396 MHz版で
@@ -26,6 +26,7 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | DDR burst controller | 単体試験・独立診断で実機確認済み | 要求とrefreshの仲裁、応答保持、timeout/reset。32箇所への書込みと100 ms保持後の読戻し |
 | DDR wordポート・CDC | CPU接続を含め実機確認済み | 27 MHz要求→99 MHz controllerでの読書き。範囲外拒否はCPU例外として実機確認。timeout/reset・応答保持はモデル検証 |
 | CPUからDDR3への接続 | 全容量・部分アクセス・命令実行を実機確認済み | 全128 MiBのmixed/反転値とDDR命令実行。全16 byte位置、非整列、容量末尾、範囲外例外、LR/SC・全AMOの追加診断は独立書込み3回成功 |
+| Linux用SoC・UARTブートROM | 短いプログラムの実機転送・実行を確認済み | CRC付きImage/DTB転送、DDR命令実行、起動引数、1 MHzタイマ、UART/PLIC。Linux Imageの実機起動は検証中 |
 | Linux実機起動・LCD bootlog・GUI | 未実装 | カーネル転送、実機ブート、framebuffer/DMA、fbcon、GUIを順に追加する |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
@@ -38,7 +39,9 @@ DDRの測定条件、bitstream SHA256、再現手順は
 校正窓の不足を修正し、独立診断で2種類のpatternによる全容量一致と繰返し起動を確認した。
 CPUアクセス例外とfetch待ち中の要求保持を追加し、Coreとwordポートの結合試験も通過した。
 PHYを含む回路のタイミングを満たし、CPUによる全容量走査とDDR上の命令実行も実機で成功した。
-CPU経由の部分書込み・境界アクセス・LR/SC・AMOも実機で確認した。次はLinux実機起動へ進む。
+CPU経由の部分書込み・境界アクセス・LR/SC・AMOも実機で確認した。
+Linux用SoCとCRC付きUARTブートROMを追加し、短いプログラムの転送・実行は実機で成功した。
+Linux Imageによる起動検証を進めている。構成と再現手順は[UARTブート](docs/tang-uart-boot.md)を参照する。
 以下は実装順序と完了条件であり、日程の確約ではない。
 
 | 順序 | 次の成果 | 完了条件 |
@@ -49,7 +52,8 @@ CPU経由の部分書込み・境界アクセス・LR/SC・AMOも実機で確認
 | 4 | LCDブートログ | DDR上のframebuffer、LCD DMA・FIFO、fbconを実装し、連続スクロールでも表示が欠落しないことを確認する |
 | 5 | Linux GUI | Linuxユーザプロセスから`/dev/fb0`へ描画し、UART入力に応答する |
 
-継続中のPRはDDR controllerとCPU接続を扱う。詳細な設計条件と段階別の検証方針は
+DDR controllerとCPU接続はPR #6でマージ済み。継続中の変更はLinux用SoCとUARTブートを扱う。
+詳細な設計条件と段階別の検証方針は
 [Tang Primer 20KのLinux/LCD計画](docs/tang-linux-lcd.md)を参照する。
 各段階の検証完了時に、このステータス表と関連する検証記録を更新する。
 

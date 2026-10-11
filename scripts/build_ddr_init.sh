@@ -7,7 +7,7 @@ out="$root/sim/fpga/ddr_init"
 gowin="${GOWIN_HOME:-/opt/gowin/IDE}"
 mkdir -p "$out"
 veryl build > "$out/veryl.log" 2>&1
-cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/ddr_probe_uart.cst > "$out/ddr_init.cst"
+cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/lcd_soc_uart.cst > "$out/ddr_init.cst"
 cd "$out"
 env QT_QPA_PLATFORM=offscreen \
     LD_LIBRARY_PATH="/opt/gowin-runtime/usr/lib/x86_64-linux-gnu:/usr/lib/x86_64-linux-gnu:$gowin/lib" \

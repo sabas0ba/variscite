@@ -1,0 +1,101 @@
+/* Stop-and-wait UART loader. No allocation, library calls or writable globals. */
+#include <stdint.h>
+
+#define IMAGE_BASE 0x80000000u
+#define IMAGE_LIMIT 0x02000000u
+#define DTB_BASE 0x87e00000u
+#define DTB_LIMIT 0x00010000u
+#define MAGIC 0x314c4256u /* "VBL1", little endian */
+#define MAX_PAYLOAD 256u
+#define UART ((volatile uint32_t *)0x10000000u)
+
+extern void boot_jump(void) __attribute__((noreturn));
+
+static void put_byte(uint8_t c)
+{
+    while (!(UART[5] & 0x20u)) {}
+    UART[0] = c;
+}
+
+static uint8_t get_byte(void)
+{
+    while (!(UART[5] & 1u)) {}
+    return UART[0];
+}
+
+static uint32_t get_word(void)
+{
+    uint32_t word = 0;
+    for (unsigned i = 0; i < 32; i += 8)
+        word |= (uint32_t)get_byte() << i;
+    return word;
+}
+
+static uint32_t crc_byte(uint32_t crc, uint8_t byte)
+{
+    crc ^= byte;
+    for (unsigned i = 0; i < 8; ++i)
+        crc = (crc >> 1) ^ (0xedb88320u & (0u - (crc & 1u)));
+    return crc;
+}
+
+static uint32_t crc_word(uint32_t crc, uint32_t word)
+{
+    for (unsigned i = 0; i < 32; i += 8)
+        crc = crc_byte(crc, word >> i);
+    return crc;
+}
+
+static uint32_t memory_crc(uint32_t address, uint32_t length)
+{
+    const volatile uint8_t *data = (const volatile uint8_t *)address;
+    uint32_t crc = ~0u;
+    while (length--) crc = crc_byte(crc, *data++);
+    return ~crc;
+}
+
+static int within(uint32_t address, uint32_t length, uint32_t base, uint32_t size)
+{
+    return address >= base && address - base < size && length <= size - (address - base);
+}
+
+void boot_main(void)
+{
+    /* Word alignment also permits reading the 16-byte boot manifest. */
+    uint32_t buffer[MAX_PAYLOAD / 4];
+    uint8_t *bytes = (uint8_t *)buffer;
+    put_byte('V'); put_byte('B'); put_byte('L'); put_byte('1'); put_byte('\n');
+    for (;;) {
+        uint32_t sync = 0;
+        while (sync != MAGIC) sync = (sync >> 8) | ((uint32_t)get_byte() << 24);
+        uint32_t command = get_word();
+        uint32_t address = get_word();
+        uint32_t length = get_word();
+        uint32_t expected_crc = get_word();
+        if (!length || length > MAX_PAYLOAD) { put_byte('E'); continue; }
+        uint32_t crc = crc_word(crc_word(crc_word(crc_word(~0u, MAGIC), command), address), length);
+        for (uint32_t i = 0; i < length; ++i) {
+            bytes[i] = get_byte();
+            crc = crc_byte(crc, bytes[i]);
+        }
+        if (~crc != expected_crc) { put_byte('E'); continue; }
+        if (command == 'W' &&
+            (within(address, length, IMAGE_BASE, IMAGE_LIMIT) ||
+             within(address, length, DTB_BASE, DTB_LIMIT))) {
+            volatile uint8_t *dest = (volatile uint8_t *)address;
+            for (uint32_t i = 0; i < length; ++i) dest[i] = bytes[i];
+            put_byte('K');
+        } else if (command == 'B' && address == IMAGE_BASE && length == 16 &&
+                   buffer[0] && buffer[0] <= IMAGE_LIMIT &&
+                   buffer[1] >= 40 && buffer[1] <= DTB_LIMIT &&
+                   *(volatile uint32_t *)DTB_BASE == 0xedfe0dd0u &&
+                   memory_crc(IMAGE_BASE, buffer[0]) == buffer[2] &&
+                   memory_crc(DTB_BASE, buffer[1]) == buffer[3]) {
+            put_byte('K');
+            while (!(UART[5] & 0x40u)) {} /* Drain the final ACK before Linux. */
+            boot_jump();
+        } else {
+            put_byte('E');
+        }
+    }
+}
