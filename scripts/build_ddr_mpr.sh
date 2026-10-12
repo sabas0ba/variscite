@@ -3,7 +3,10 @@
 set -euo pipefail
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
-if [[ "${LINUX_LCD:-0}" == 1 ]]; then
+if [[ "${LINUX_STANDALONE:-0}" == 1 ]]; then
+    name=linux_standalone
+    top=rv32ima_TangLinuxStandaloneTop
+elif [[ "${LINUX_LCD:-0}" == 1 ]]; then
     name=linux_lcd
     top=rv32ima_TangLinuxLcdTop
 elif [[ "${LINUX_BOOT:-0}" == 1 ]]; then
@@ -128,9 +131,10 @@ export DDR_MPR_NAME="$name" DDR_MPR_TOP="$top"
 out="$root/sim/fpga/$name"
 gowin="${GOWIN_HOME:-/opt/gowin/IDE}"
 mkdir -p "$out"
-if [[ "$name" == linux_boot || "$name" == linux_lcd ]]; then
+if [[ "$name" == linux_boot || "$name" == linux_lcd || "$name" == linux_standalone ]]; then
     rom=tang_boot
-    if [[ "$name" == linux_lcd ]]; then rom=tang_boot_lcd; fi
+    if [[ "$name" == linux_lcd || "$name" == linux_standalone ]]; then rom=tang_boot_lcd; fi
+    if [[ "$name" == linux_standalone ]]; then rom=tang_boot_standalone; fi
     test -s "sim/$rom.hex"
     mkdir -p "$out/sim"
     cp "sim/$rom.hex" "$out/sim/$rom.hex"
@@ -144,13 +148,18 @@ if [[ "$name" == ddr_cpu* ]]; then
 fi
 veryl build > "$out/veryl.log" 2>&1
 cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/ddr_probe_uart.cst > "$out/$name.cst"
-if [[ "$name" == linux_boot || "$name" == linux_lcd ]]; then
+if [[ "$name" == linux_boot || "$name" == linux_lcd || "$name" == linux_standalone ]]; then
     cat fpga/tang_primer_20k/ddr_phy_check.cst fpga/tang_primer_20k/lcd_soc_uart.cst > "$out/$name.cst"
     cat fpga/tang_primer_20k/linux.sdc fpga/tang_primer_20k/ddr_phy_startup.sdc > "$out/$name.sdc"
-    if [[ "$name" == linux_lcd ]]; then
+    if [[ "$name" == linux_lcd || "$name" == linux_standalone ]]; then
         # i_clk is already assigned by the DDR constraints.
         sed '/"i_clk"/d' fpga/tang_primer_20k/lcd_probe.cst >> "$out/$name.cst"
         cat fpga/tang_primer_20k/linux_lcd.sdc >> "$out/$name.sdc"
+    fi
+    if [[ "$name" == linux_standalone ]]; then
+        cat fpga/tang_primer_20k/usb.cst >> "$out/$name.cst"
+        cat fpga/tang_primer_20k/sd.cst >> "$out/$name.cst"
+        cat fpga/tang_primer_20k/usb.sdc >> "$out/$name.sdc"
     fi
 elif [[ "$name" == ddr_cpu* ]]; then
     cat fpga/tang_primer_20k/ddr_cpu_probe.sdc > "$out/$name.sdc"
@@ -184,12 +193,13 @@ test -s "impl/pnr/$name.fs"
 grep -Eq '^[[:space:]]*DLL[[:space:]]*\| 1/4' "$report"
 grep -Eq '^[[:space:]]*DQS[[:space:]]*\| 2/9' "$report"
 pll_count=1
-if [[ "$name" == linux_lcd ]]; then pll_count=2; fi
+if [[ "$name" == linux_lcd || "$name" == linux_standalone ]]; then pll_count=2; fi
+if [[ "$name" == linux_standalone ]]; then pll_count=3; fi
 grep -Eq "^[[:space:]]*rPLL[[:space:]]*\\| $pll_count/4" "$report"
 grep -Eq '^ddr_dq\[0\][[:space:]]*\|.*G5/5.*SSTL15.*INTERNAL.*1.5' "$report"
 grep -Eq '^ddr_clk_p[[:space:]]*\|.*J1,J3/5.*SSTL15D.*1.5' "$report"
 grep -Eq '^o_uart_tx[[:space:]]*\|.*M11/2.*LVCMOS33.*3.3' "$report"
-if [[ "$name" == linux_lcd ]]; then
+if [[ "$name" == linux_lcd || "$name" == linux_standalone ]]; then
     grep -Eq '^lcd_dclk[[:space:]]*\|.*R9/3.*LVCMOS33.*3.3' "$report"
     grep -Eq '^lcd_r\[2\][[:space:]]*\|.*N9/3.*LVCMOS33.*3.3' "$report"
     grep -A2 '<td>pixel</td>' "$timing" | grep '<td>30.303</td>' > /dev/null

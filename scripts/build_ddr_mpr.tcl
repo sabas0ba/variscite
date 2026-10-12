@@ -8,6 +8,9 @@ foreach source {ddr_cpu_port ddr_cpu_probe ddr_cpu_top ddr_cpu_access_top ddr_li
     add_file -type verilog [file join $root target tang_primer_20k ${source}.sv]
 }
 add_file -type verilog [file join $root target power_on_reset.sv]
+foreach source {usb_clock usb_ulpi_input usb_ulpi_link usb_host_transaction usb_host_mmio sd_spi_mmio linux_standalone_top} {
+    add_file -type verilog [file join $root target tang_primer_20k ${source}.sv]
+}
 add_file -type verilog [file join $root target tang_primer_20k ddr_clock.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr_phy_startup.sv]
 add_file -type verilog [file join $root target tang_primer_20k ddr3_startup.sv]
@@ -68,7 +71,7 @@ add_file -type sdc [file join $out "$::env(DDR_MPR_NAME).sdc"]
 set_option -top_module $::env(DDR_MPR_TOP)
 set_option -verilog_std sysv2017
 set_option -output_base_name $::env(DDR_MPR_NAME)
-if {$::env(DDR_MPR_NAME) eq "linux_lcd"} {
+if {$::env(DDR_MPR_NAME) eq "linux_lcd" || $::env(DDR_MPR_NAME) eq "linux_standalone"} {
     # LCD R[2] uses N9, shared with SSPI. Keep JTAG available for SRAM loading.
     set_option -use_sspi_as_gpio 1
 }

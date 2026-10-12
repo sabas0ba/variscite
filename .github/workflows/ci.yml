@@ -105,6 +105,9 @@ jobs:
       - name: DDR LCD scanout
         run: make ddr-display-test tang-lcd-boot-test
 
+      - name: Standalone boot and USB input
+        run: make usb-host-test usb-hid-test sd-spi-test sd-boot-test tang-sd-boot-test
+
       - name: Upload logs
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

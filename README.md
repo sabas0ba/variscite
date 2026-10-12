@@ -33,6 +33,8 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | Linux用SoC・UARTブートROM | Linux Imageの実機転送・起動を確認済み | CRC付きImage/DTB転送、128 MiB DDR、1 MHzタイマ、UART/PLIC。115200 consoleでユーザ空間へ到達 |
 | DDR→LCD読み出し | 実機統合・状態確認済み | CPU/表示仲裁、read cache、DMA、非同期FIFO、RGB565出力。全画素と欠落復帰はモデル検証。実機でLinux起動・GUI操作後のDDR error／underflowなし |
 | LCD bootlog・GUI | 実機プロセス・操作確認済み | framebuffer予約、simplefb/fbcon登録、UART操作の色選択・矩形移動・終了／再起動。画像内容はシミュレーション照合、パネル目視は未確認 |
+| microSD単独起動 | 実装・CPU込みモデル検証済み | FAT16/FAT32/exFATからTANGBOOT.VBLを読取り、CRC検証後に起動。実カード・電源投入からの起動は未確認 |
+| USBキーボード・マウス | 実装・モデル検証済み、実機調査中 | FS/LS ULPIホスト、ハブ、boot HID。実機PHYレジスタ読戻しを調査中。Linux HCD/evdev・hotplugは未実装 |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
 DDRの測定条件、bitstream SHA256、再現手順は
@@ -59,7 +61,11 @@ DDRからLCDへの読み出し回路、fbcon、簡易GUIを接続し、結合シ
 | 3（実機確認済み） | Linux実機起動 | UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、`/init`とUARTシェルへ到達する |
 | 4（実機のfbcon・状態確認済み） | LCDブートログ | DDR framebufferとDMA・FIFOを接続。起動とGUI操作後までunderflowなし。パネルの表示内容は目視確認が残る |
 | 5（実機操作確認済み） | Linux GUI | Linuxユーザプロセスから`/dev/fb0`へ描画し、UART入力による色変更・移動・終了を確認 |
-| 6 | 描画性能・画面所有 | 全画面描画の待ち時間を短縮し、fbconとの排他制御と部分更新を検討する |
+| 6（部分更新はモデル検証済み） | 描画性能・画面所有 | 部分更新による移動・消去・色変更を検証。実機の応答時間とfbconとの画面所有を確認する |
+| 7（開発中） | PCなしの起動と入力 | microSD起動、GUI自動起動、USBキーボード操作、SPI flashからの電源投入起動を実機で確認する |
+
+単独起動とUSB入力の構成、制約、検証範囲は
+[Tang単独起動・USB入力](docs/tang-usb-host.md)を参照する。
 
 DDR controllerとCPU接続はPR #6でマージ済み。継続中の変更はLinux用SoC、UARTブート、DDR表示経路を扱う。
 詳細な設計条件と段階別の検証方針は

@@ -9,7 +9,7 @@ param(
     [string]$ExpectedText='',
     [string]$ConsoleCommand='',
     [string]$CommandExpectedText='',
-    [ValidateSet('Uart','Lcd')][string]$Platform='Uart',
+    [ValidateSet('Uart','Lcd','Standalone')][string]$Platform='Uart',
     [switch]$KeepRunning
 )
 Set-StrictMode -Version Latest
@@ -22,6 +22,7 @@ if ($ConsoleCommand -match '[\r\n\x00-\x1f\x7f-\uffff]') { throw 'ConsoleCommand
 $root=Split-Path -Parent $PSScriptRoot
 $bitstream=Join-Path $root 'sim/fpga/linux_boot/impl/pnr/linux_boot.fs'
 if ($Platform -eq 'Lcd') { $bitstream=Join-Path $root 'sim/fpga/linux_lcd/impl/pnr/linux_lcd.fs' }
+if ($Platform -eq 'Standalone') { $bitstream=Join-Path $root 'sim/fpga/linux_standalone/impl/pnr/linux_standalone.fs' }
 $lcd=Join-Path $root 'sim/fpga/lcd_soc/soc.fs'
 $knownLcd='40bac365ce8f971d240ac5aa6a2e4c69c1fff5579c6dbbb2afe4f97662b9eb0a'
 if (-not $KeepRunning -and (Get-FileHash $lcd -Algorithm SHA256).Hash.ToLowerInvariant() -ne $knownLcd) {
@@ -92,7 +93,23 @@ try {
         $length=[BitConverter]::ToUInt32($wire,$offset+12)
         $serial.Write($wire,$offset,20+$length)
         $waitSeconds=if ([BitConverter]::ToUInt32($wire,$offset+4) -eq 66) { 600 } else { 10 }
-        $reply=Read-ByteUntil ($timer.Elapsed.TotalSeconds+$waitSeconds)
+        $replyDeadline=$timer.Elapsed.TotalSeconds+$waitSeconds
+        $reply=Read-ByteUntil $replyDeadline
+        if ($Platform -eq 'Standalone' -and $offset -eq 0 -and $reply -eq 83) {
+            # Flash completion can outlast the ROM's UART selection window.
+            # The queued first packet remains valid after the SD fallback banner.
+            $notice='S'
+            while (-not $notice.EndsWith("`n") -and $notice.Length -lt 64) {
+                $notice += [char](Read-ByteUntil $replyDeadline)
+            }
+            if ($notice -ne "SD unavailable`n" -and $notice -ne "SD failed`n") {
+                throw "Boot ROM selected another boot source: $($notice.Trim())"
+            }
+            $fallback=''
+            for ($n=0; $n -lt 5; $n++) { $fallback += [char](Read-ByteUntil $replyDeadline) }
+            if ($fallback -ne "VBL1`n") { throw 'Invalid SD fallback banner' }
+            $reply=Read-ByteUntil $replyDeadline
+        }
         if ($reply -ne 75) { throw "Boot ROM rejected packet at package offset $offset (reply $reply)" }
         $offset+=20+$length
         if ($offset -ge $nextReport) {

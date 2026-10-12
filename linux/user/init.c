@@ -26,6 +26,10 @@ static int eq(const char *a, const char *b) {
 void _start(void) {
     put_str("\n=== rv32ima_veryl: userspace is alive (FDPIC, NOMMU) ===\n"
             "commands: donut  mandel  help  poweroff  reboot\n");
+#ifdef WITH_USB
+    put_str("Starting LCD GUI\n");
+    spawn(fbui_argv[0], fbui_argv, empty_envp);
+#endif
 
     for (;;) {
         put_str("veryl$ ");

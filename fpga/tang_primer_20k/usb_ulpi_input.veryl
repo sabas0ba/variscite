@@ -1,0 +1,18 @@
+/// Capture PHY SDR outputs with the PLL's 157.5-degree delayed sample clock.
+/// The link consumes this snapshot on the following rising edge. Raw DIR must
+/// still disable the physical output buffers without waiting for this sample.
+module UsbUlpiInput (
+    i_clk : input  clock   ,
+    i_dir : input  logic   ,
+    i_nxt : input  logic   ,
+    i_data: input  logic<8>,
+    o_dir : output logic   ,
+    o_nxt : output logic   ,
+    o_data: output logic<8>,
+) {
+    always_ff {
+        o_dir  = i_dir;
+        o_nxt  = i_nxt;
+        o_data = i_data;
+    }
+}

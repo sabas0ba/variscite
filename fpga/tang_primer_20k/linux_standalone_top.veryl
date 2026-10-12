@@ -1,0 +1,169 @@
+/// Linux + LCD platform with direct Dock peripherals (UART recovery retained).
+module TangLinuxStandaloneTop (
+    i_clk      : input  'reference clock        ,
+    i_uart_rx  : input  'reference logic        ,
+    o_uart_tx  : output 'reference logic        ,
+    usb_clk    : input  'phy       clock        ,
+    usb_dir    : input  'usb       logic        ,
+    usb_nxt    : input  'usb       logic        ,
+    usb_stp    : output 'usb       logic        ,
+    usb_reset_n: output 'async     logic        ,
+    usb_data   : inout  'usb       tri logic<8> ,
+    sd_cs_n    : output 'reference logic        ,
+    sd_sclk    : output 'reference logic        ,
+    sd_mosi    : output 'reference logic        ,
+    sd_miso    : input  'reference logic        ,
+    lcd_dclk   : output 'pixel     clock        ,
+    lcd_hs     : output 'pixel     logic        ,
+    lcd_vs     : output 'pixel     logic        ,
+    lcd_de     : output 'pixel     logic        ,
+    lcd_r      : output 'pixel     logic    <5> ,
+    lcd_g      : output 'pixel     logic    <6> ,
+    lcd_b      : output 'pixel     logic    <5> ,
+    ddr_dq     : inout  'async     tri logic<16>,
+    ddr_dqs_p  : inout  'async     tri logic<2> ,
+    ddr_dqs_n  : inout  'async     tri logic<2> ,
+    ddr_dm     : output 'fast      logic    <2> ,
+    ddr_addr   : output 'fast      logic    <14>,
+    ddr_bank   : output 'fast      logic    <3> ,
+    ddr_ras_n  : output 'fast      logic        ,
+    ddr_cas_n  : output 'fast      logic        ,
+    ddr_we_n   : output 'fast      logic        ,
+    ddr_cs_n   : output 'fast      logic        ,
+    ddr_cke    : output 'fast      logic        ,
+    ddr_odt    : output 'fast      logic        ,
+    ddr_reset_n: output 'ctrl      logic        ,
+    ddr_clk_p  : output 'fast      logic        ,
+    ddr_clk_n  : output 'fast      logic        ,
+) {
+    var io_sel      : 'reference logic               ;
+    var io_addr     : 'reference logic           <32>;
+    var io_wdata    : 'reference logic           <32>;
+    var io_wstrb    : 'reference logic           <4> ;
+    var io_rdata    : 'reference logic           <32>;
+    var usb_rdata   : 'reference logic           <32>;
+    var sd_rdata    : 'reference logic           <32>;
+    var io_reset    : 'async     reset_async_high    ;
+    var usb_in      : 'usb       logic           <8> ;
+    var usb_out     : 'usb       logic           <8> ;
+    var pin_dir_d   : 'usb       logic               ;
+    var sampled_dir : 'usb       logic               ;
+    var sampled_nxt : 'usb       logic               ;
+    var sampled_data: 'usb       logic           <8> ;
+    var link_clk    : 'usb       clock               ;
+    var sample_clk  : 'usb       clock               ;
+    var link_locked : 'async     logic               ;
+    var link_reset  : 'async     reset_async_high    ;
+    inst usb_clock: TangUsbClock (
+        i_clk       : usb_clk    ,
+        o_clk       : link_clk   ,
+        o_sample_clk: sample_clk ,
+        o_locked    : link_locked,
+    );
+    assign link_reset  = (io_reset || !link_locked) as reset_async_high;
+    assign usb_reset_n = !io_reset;
+    // Release immediately on raw DIR; reacquire only at a rising edge after
+    // the sampled return turnaround. Do not route the phase-shifted sample
+    // combinationally to OEN, which would shorten the output setup budget.
+    always_ff (link_clk) {
+        pin_dir_d = sampled_dir;
+    }
+    inst usb_input: UsbUlpiInput (
+        i_clk : sample_clk  ,
+        i_dir : usb_dir     ,
+        i_nxt : usb_nxt     ,
+        i_data: usb_in      ,
+        o_dir : sampled_dir ,
+        o_nxt : sampled_nxt ,
+        o_data: sampled_data,
+    );
+    assign io_rdata = if io_addr[31:8] == 24'h114000 ? sd_rdata : usb_rdata;
+    unsafe (cdc) {
+        inst sd: SdSpiMmio (
+            i_clk                                         ,
+            i_reset: io_reset                             ,
+            i_sel  : io_sel && io_addr[31:8] == 24'h114000,
+            i_addr : io_addr[7:0]                         ,
+            i_wdata: io_wdata                             ,
+            i_wstrb: io_wstrb                             ,
+            o_rdata: sd_rdata                             ,
+            o_cs_n : sd_cs_n                              ,
+            o_sclk : sd_sclk                              ,
+            o_mosi : sd_mosi                              ,
+            i_miso : sd_miso                              ,
+        );
+    }
+    unsafe (cdc) {
+        for n in 0..8 :usb_io {
+            inst buffer: $sv::IOBUF (
+                I  : usb_out[n]                      ,
+                OEN: pin_dir_d || usb_dir || io_reset,
+                O  : usb_in[n]                       ,
+                IO : usb_data[n]                     ,
+            );
+        }
+    }
+    inst usb_host: UsbHostMmio (
+        i_cpu_clk: i_clk                                ,
+        i_usb_clk: link_clk                             ,
+        i_reset  : link_reset                           ,
+        i_sel    : io_sel && io_addr[31:8] == 24'h113000,
+        i_addr   : io_addr[7:0]                         ,
+        i_wdata  : io_wdata                             ,
+        i_wstrb  : io_wstrb                             ,
+        o_rdata  : usb_rdata                            ,
+        i_dir    : sampled_dir                          ,
+        i_nxt    : sampled_nxt                          ,
+        i_data   : sampled_data                         ,
+        o_data   : usb_out                              ,
+        o_drive  : _                                    ,
+        o_stp    : usb_stp                              ,
+    );
+    inst probe: TangDdrInitProbe #(
+        CPU_ROM_INIT   : "sim/tang_boot_standalone.hex",
+        CPU_ROM_WORDS  : 2048                          ,
+        READ_TAPS      : 5'd6                          ,
+        READ_DECREASE  : 1                             ,
+        WITH_LCD       : 1                             ,
+        WITH_IO        : 1                             ,
+        RUN_CONTROLLER : 5                             ,
+        ARRAY_TRAIN    : 1                             ,
+        RUN_ARRAY      : 1                             ,
+        ARRAY_ASSEMBLE : 1                             ,
+        ARRAY_TIMELINE : 0                             ,
+        ARRAY_READ_HOLD: 0                             ,
+        DLL_QUARTER    : 0                             ,
+        ARRAY_READ_SEL : 6'h24                         ,
+        PHY_STARTUP    : 1                             ,
+    ) (
+        i_clk                             ,
+        i_uart_rx                         ,
+        o_uart_tx                         ,
+        i_io_rdata : io_rdata             ,
+        o_io_sel   : io_sel               ,
+        o_io_addr  : io_addr              ,
+        o_io_wdata : io_wdata             ,
+        o_io_wstrb : io_wstrb             ,
+        o_io_reset : io_reset             ,
+        lcd_dclk                          ,
+        lcd_hs                            ,
+        lcd_vs                            ,
+        lcd_de                            ,
+        lcd_rgb    : {lcd_r, lcd_g, lcd_b},
+        ddr_dq                            ,
+        ddr_dqs_p                         ,
+        ddr_dqs_n                         ,
+        ddr_dm                            ,
+        ddr_addr                          ,
+        ddr_bank                          ,
+        ddr_ras_n                         ,
+        ddr_cas_n                         ,
+        ddr_we_n                          ,
+        ddr_cs_n                          ,
+        ddr_cke                           ,
+        ddr_odt                           ,
+        ddr_reset_n                       ,
+        ddr_clk_p                         ,
+        ddr_clk_n                         ,
+    );
+}

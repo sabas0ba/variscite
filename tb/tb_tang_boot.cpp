@@ -18,6 +18,9 @@ using BootDut = Vrv32ima_DdrLinuxSoc;
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+#ifdef SD_BOOT
+#include "sd_card_model.hpp"
+#endif
 
 using Bytes = std::vector<uint8_t>;
 static void check(bool ok, const char *message) { if (!ok) throw std::runtime_error(message); }
@@ -45,6 +48,9 @@ static Bytes packet(char command, uint32_t address, const Bytes &data) {
 class Bench {
 public:
     BootDut dut;
+#ifdef SD_BOOT
+    SdCardModel card;
+#endif
     std::unordered_map<uint32_t, std::array<uint8_t,16>> memory;
     std::deque<uint8_t> received;
     uint64_t ticks=0, transactions=0;
@@ -63,6 +69,9 @@ public:
         dut.i_mem_clk=mem_rise;
         dut.i_cpu_clk=ticks%4<2;
         dut.eval();
+#ifdef SD_BOOT
+        dut.sd_miso=card.step(dut.sd_cs_n,dut.sd_sclk,dut.sd_mosi);
+#endif
         if (cpu_rise && !dut.i_reset) sample_tx();
         if (mem_rise) {
             if (dut.i_reset) {
@@ -155,6 +164,36 @@ int main(int argc, char **argv) {
             b.dut.i_display_error=3;
         }
         std::cout << "Boot banner received\n";
+#ifdef SD_BOOT
+        {
+            std::ifstream source("sim/tang_boot_lcd_payload.bin",std::ios::binary);
+            check(bool(source),"missing SD payload");
+            Bytes image((std::istreambuf_iterator<char>(source)),{});
+            Bytes dtb(40,0); dtb[0]=0xd0; dtb[1]=0x0d; dtb[2]=0xfe; dtb[3]=0xed;
+            auto append=[&](const Bytes &record) { b.card.file.insert(b.card.file.end(),record.begin(),record.end()); };
+            for(size_t n=0;n<image.size();n+=256)
+                append(packet('W',0x80000000+n,Bytes(image.begin()+n,image.begin()+std::min(n+256,image.size()))));
+            append(packet('W',0x87e00000,dtb));
+            Bytes manifest;
+            word(manifest,image.size()); word(manifest,dtb.size()); word(manifest,crc32(image)); word(manifest,crc32(dtb));
+            append(packet('B',0x80000000,manifest));
+            bool corrupt=argc>=4 && std::string(argv[3])=="bad-crc";
+            bool bad_sector=argc>=4 && std::string(argv[3])=="bad-sector";
+            b.card.corrupt_sector_crc=bad_sector;
+            if(corrupt) b.card.file[20]^=1;
+            if(bad_sector) b.expect("SD unavailable\nVBL1\n");
+            else b.expect("SD boot\n");
+            if(corrupt) b.expect("SD failed\nVBL1\n");
+            else if(!bad_sector) {
+                b.expect("SD verified\n");
+                for(unsigned n=0;!b.dut.o_shutdown && n<1000000;n++) b.step();
+                check(b.dut.o_shutdown && b.dut.o_exit_code==0x5555,"SD payload entry/DDR failure");
+                check(b.card.reads>=3,"SD boot bypassed boot/root/data sector reads");
+                std::cout << "SD boot PASS: CPU, ROM, SPI CMD/CRC, FAT, VBL, Linux entry ABI\n";
+                return 0;
+            }
+        }
+#endif
         Bytes data{0xaa,0x55,0xcc,0x33};
         auto damaged=packet('W',0x80000000,data); damaged.back()^=1;
         b.send(damaged); b.expect("E");

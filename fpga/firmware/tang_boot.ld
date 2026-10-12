@@ -4,6 +4,6 @@ SECTIONS {
     .text : { *(.text.init) *(.text .text.*) *(.rodata .rodata.*) }
     .data : { *(.data .data.*) }
     .bss : { *(.bss .bss.*) *(COMMON) }
-    ASSERT(SIZEOF(.text) <= 4096, "boot ROM exceeds 4 KiB")
+    ASSERT(SIZEOF(.text) <= ROM_BYTES, "boot ROM exceeds configured size")
     ASSERT(SIZEOF(.data) == 0 && SIZEOF(.bss) == 0, "boot ROM requires writable globals")
 }

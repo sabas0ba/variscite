@@ -1,0 +1,35 @@
+/// Deskew the PHY's 60 MHz clock through a PLL and global clock network.
+module TangUsbClock (
+    i_clk       : input  'phy   clock,
+    o_clk       : output 'usb   clock,
+    o_sample_clk: output 'usb   clock,
+    o_locked    : output 'async logic,
+) {
+    unsafe (cdc) {
+        inst pll: $sv::rPLL #(
+            FCLKIN   : "60"      ,
+            IDIV_SEL : 4         ,
+            FBDIV_SEL: 4         ,
+            ODIV_SEL : 16        ,
+            CLKFB_SEL: "internal",
+            PSDA_SEL : "0111"    ,
+            DEVICE   : "GW2A-18C",
+        ) (
+            CLKIN   : i_clk       ,
+            CLKOUT  : o_clk       ,
+            LOCK    : o_locked    ,
+            RESET   : 1'b0        ,
+            RESET_P : 1'b0        ,
+            CLKFB   : 1'b0        ,
+            FBDSEL  : 6'b0        ,
+            IDSEL   : 6'b0        ,
+            ODSEL   : 6'b0        ,
+            PSDA    : 4'b0        ,
+            DUTYDA  : 4'b0        ,
+            FDLY    : 4'b0        ,
+            CLKOUTP : o_sample_clk,
+            CLKOUTD : _           ,
+            CLKOUTD3: _           ,
+        );
+    }
+}

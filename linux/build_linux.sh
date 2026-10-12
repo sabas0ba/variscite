@@ -17,6 +17,10 @@ out="${LINUX_OUT:-$root/sim/linux}"
 mkdir -p "$out"
 out="$(cd "$out" && pwd)"
 case "${WITH_LCD:-0}" in 0|1) ;; *) echo 'WITH_LCD must be 0 or 1' >&2; exit 2 ;; esac
+case "${WITH_USB:-0}" in 0|1) ;; *) echo 'WITH_USB must be 0 or 1' >&2; exit 2 ;; esac
+if [[ "${WITH_USB:-0}" == 1 && "${WITH_LCD:-0}" != 1 ]]; then
+    echo 'WITH_USB requires WITH_LCD=1' >&2; exit 2
+fi
 
 # --- 1. userspace (must exist before the kernel builds the initramfs) ----
 # Bare-metal ld has no -pie: link at a non-zero base without relaxation (which
@@ -34,6 +38,7 @@ CFLAGS_USER=(
     -I"$root/linux/user"
 )
 if [[ "${WITH_LCD:-0}" == 1 ]]; then CFLAGS_USER+=(-DWITH_LCD=1); fi
+if [[ "${WITH_USB:-0}" == 1 ]]; then CFLAGS_USER+=(-DWITH_USB=1); fi
 
 build_user() { # <name> <source...>
     local name="$1"
@@ -70,7 +75,11 @@ file /bin/donut $out/donut 0755 0 0
 file /bin/mandelbrot $out/mandelbrot 0755 0 0
 EOF
 if [[ "${WITH_LCD:-0}" == 1 ]]; then
-    build_user fbui "$root/linux/user/fbui.c"
+    usb_sources=()
+    if [[ "${WITH_USB:-0}" == 1 ]]; then
+        usb_sources=("$root/linux/user/usb_host.c" "$root/linux/user/usb_hid.c")
+    fi
+    build_user fbui "$root/linux/user/fbui.c" "${usb_sources[@]}"
     printf 'nod /dev/fb0 0600 0 0 c 29 0\nfile /bin/fbui %s/fbui 0755 0 0\n' "$out" >> "$out/initramfs.desc"
 fi
 
