@@ -106,6 +106,10 @@ void _start(void) {
     put_str("fbui: drawing; commands w/a/s/d, r/g/b, q, followed by Enter\n");
 #ifdef WITH_USB
     int devices = usbh_hid_init(&usb);
+    if (usb.last_init_error) {
+        put_str("fbui: USB initialization error "); put_uint((unsigned)-usb.last_init_error);
+        put_str("; attempts "); put_uint(usb.init_attempts); put_str("\n");
+    }
     put_str("fbui: USB HID endpoints "); put_uint(devices > 0 ? (unsigned)devices : 0); put_str("\n");
     int console = (int)sys4(SYS_openat, -100, (long)"/dev/console", 0x800, 0);
     if (console < 0) fail("fbui: cannot open console\n");

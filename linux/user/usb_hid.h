@@ -10,6 +10,8 @@ struct usbh_hid_endpoint {
 struct usbh_hid {
     struct usbh_hid_endpoint endpoint[USBH_HID_MAX];
     unsigned count, next_address, root_speed;
+    unsigned init_attempts;
+    int last_init_error; /* Retained after recovery for startup diagnostics. */
 };
 struct usbh_input {
     unsigned protocol;

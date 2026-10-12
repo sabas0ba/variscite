@@ -24,9 +24,19 @@ SDブートROMのCPU込み試験、FAT16/FAT32/exFATの読取り試験、USBリ�
 実機でUSB PHYの識別値 `24 04 06 00` とscratchの `A5` 読戻しが成功し、
 full-speed接続とHID入力endpoint 1個の列挙を確認した。
 396/99 MHzのHID診断ではLCD状態が `0x1`（有効、DDR error/underflowなし）だった。
-USB/SD統合構成でのLinuxからGUIまでの通し起動は実機検証中である。
+USB/SD統合構成でもUART転送からLinux、fbcon、GUI自動起動まで到達し、
+USB列挙、UARTでの色変更・移動・終了・再起動を実機確認した。
+操作後もLCD状態は正常だった。再試行処理を追加した最終イメージでは、初回のGUI自動起動で
+入力endpoint 1個を列挙した（この試行では再試行エラーなし）。
 USBキーボードの実キー入力、実カードからのLinux起動、
 電源投入からの単独起動は未確認である。
+
+最終確認のSHA256は、bitstreamが
+`5ffb6b60240c3e4929693bf2341dfc616a154fb4b65a853951a9327219bb07ed`、
+`TANGBOOT.VBL` が `875def024786e8906bb2a583f2e4f4e204d358df96cf837d084dc3a39e078aec`。
+UART起動結果は `logs/board/20261012-200813-LinuxBoot-result.json`、
+GUI操作結果は `logs/board/20261012-200205-LinuxLcdGui-result.json` に保存した
+（ログはgit管理外）。
 
 ## microSDからの読取り
 
@@ -61,6 +71,14 @@ high-speed転送、汎用report descriptor解析、hotplugは未実装。
 実装していない。GUIはUSB入力とUART入力を併用し、矢印/WASDで矩形移動、R/G/Bで
 色変更、Escで終了する。マウス処理はモデル試験のみで、実機確認は未実施。
 描画は変更範囲だけを更新し、USB SOFはCPUの描画処理と独立して生成する。
+起動時のLINK/TIMEOUT/CRC/NAKによる列挙失敗は、100 ms後にバスリセットから
+最大3回まで再試行する。descriptor/protocolのエラーは再試行しない。
+UARTログに失敗コードと試行回数を残す。モデル試験では途中まで登録されたendpointと
+アドレス割当の初期化、再試行上限、恒久エラーの即時返却も検証する。
+
+操作応答の高速化は未完了。今回のUSB統合構成では、GUI開始からreadyまで約81〜145秒、
+UARTによる色変更約30秒、矩形移動約10秒、終了約21秒だった。
+部分描画への変更で以前の全面再描画より短縮しているが、対話用途には改善が必要である。
 
 ## レジスタ
 

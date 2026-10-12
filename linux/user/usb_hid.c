@@ -169,12 +169,22 @@ static int enumerate(struct usbh_hid *host, unsigned speed, unsigned depth)
 int usbh_hid_init(struct usbh_hid *host)
 {
     host->count=0; host->next_address=1; host->root_speed=0;
-    if(usbh_identity()!=0x55484231) return -USBH_LINK;
-    int rc=usbh_root_reset(&host->root_speed);
-    if(rc<0) return rc;
-    rc=enumerate(host,host->root_speed,0);
-    if(rc<0) { host->count=0; return rc; }
-    return (int)host->count;
+    host->init_attempts=0; host->last_init_error=0;
+    if(usbh_identity()!=0x55484231) return host->last_init_error=-USBH_LINK;
+    for(unsigned attempt=0;attempt<3;attempt++) {
+        host->count=0; host->next_address=1; host->root_speed=0;
+        host->init_attempts=attempt+1;
+        int rc=usbh_root_reset(&host->root_speed);
+        if(!rc) rc=enumerate(host,host->root_speed,0);
+        if(!rc) return (int)host->count;
+        host->count=0; host->last_init_error=rc;
+        if(attempt==2 || (rc!=-USBH_LINK && rc!=-USBH_TIMEOUT &&
+                         rc!=-USBH_CRC && rc!=-USBH_NAK)) return rc;
+        /* A transient startup failure requires a fresh bus reset/address map.
+         * Descriptor/protocol errors stay fatal; absent devices stay bounded. */
+        usbh_delay(100000);
+    }
+    return host->last_init_error;
 }
 
 int usbh_hid_poll(struct usbh_hid *host, struct usbh_input *input)

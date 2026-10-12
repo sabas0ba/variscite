@@ -34,12 +34,14 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | DDR→LCD読み出し | 実機統合・状態確認済み | CPU/表示仲裁、read cache、DMA、非同期FIFO、RGB565出力。全画素と欠落復帰はモデル検証。実機でLinux起動・GUI操作後のDDR error／underflowなし |
 | LCD bootlog・GUI | 実機プロセス・操作確認済み | framebuffer予約、simplefb/fbcon登録、UART操作の色選択・矩形移動・終了／再起動。画像内容はシミュレーション照合、パネル目視は未確認 |
 | microSD単独起動 | 実装・CPU込みモデル検証済み | FAT16/FAT32/exFATからTANGBOOT.VBLを読取り、CRC検証後に起動。実カード・電源投入からの起動は未確認 |
-| USBキーボード・マウス | PHY読書き・HID列挙を実機確認 | FS/LS ULPIホスト、ハブ、boot HID。入力endpoint 1個の列挙を確認、実キー入力は未確認。Linux HCD/evdev・hotplugは未実装 |
+| USBキーボード・マウス | PHY読書き・LinuxからのHID列挙を実機確認 | FS/LS ULPIホスト、ハブ、boot HID。初回GUI自動起動で入力endpoint 1個を列挙、実キー入力は未確認。Linux HCD/evdev・hotplugは未実装 |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
 DDRの測定条件、bitstream SHA256、再現手順は
 [DDRアレイ診断の検証記録](docs/ddr-multi-pattern.md)と
 [CPU/controllerの検証記録](docs/tang-linux-lcd.md#cpu診断プラットフォーム)にまとめる。
+USB統合構成のGUIは、色変更約30秒・矩形移動約10秒と応答が遅く、高速化が残る。
+単独起動とUSB入力の検証範囲・制約は[専用文書](docs/tang-usb-host.md)を参照する。
 
 ## ロードマップ
 
