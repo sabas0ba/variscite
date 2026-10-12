@@ -51,6 +51,8 @@ module UsbUlpiLink (
     assign o_drive = owned;
     var next_data  : logic<8>;
     var data_enable: logic   ;
+    let last_byte  : logic    = (state == State::command && kind == 0 && length == 0)
+        || (state == State::transmit && o_index == length) || state == State::write_data;
     // Keep PHY control signals on the register enable, outside the DATA mux.
     always_comb {
         next_data   = 0;
@@ -83,8 +85,12 @@ module UsbUlpiLink (
     always_ff {
         if_reset {
             o_data = 0;
-        } else if data_enable {
-            o_data = next_data;
+            o_stp  = 0;
+        } else {
+            o_stp = owned && i_nxt && last_byte;
+            if data_enable {
+                o_data = next_data;
+            }
         }
     }
     // USB3317 table 6.1 / figure 6.7: STP reports the byte consumed in the
@@ -98,7 +104,6 @@ module UsbUlpiLink (
             value        = 0;
             length       = 0;
             timeout      = 0;
-            o_stp        = 0;
             o_index      = 0;
             o_done       = 0;
             o_error      = 0;
@@ -113,7 +118,6 @@ module UsbUlpiLink (
             dir_d   = i_dir;
             o_done  = 0;
             o_error = 0;
-            o_stp   = 0;
             // Keep the source-synchronous input path out of the packet CRC
             // and response decoder. Metadata and bytes advance together.
             o_rx_valid   = receive && i_nxt;
@@ -164,12 +168,8 @@ module UsbUlpiLink (
                         :
                             State::transmit
                         ;
-                        if kind == 0 {
-                            if length == 0 {
-                                o_stp = 1;
-                            } else {
-                                o_index = 1;
-                            }
+                        if kind == 0 && length != 0 {
+                            o_index = 1;
                         }
                     }
                 }
@@ -182,7 +182,6 @@ module UsbUlpiLink (
                         o_index = o_index + 1;
                         if o_index == length {
                             state = State::stop;
-                            o_stp = 1;
                         }
                     }
                 }
@@ -193,7 +192,6 @@ module UsbUlpiLink (
                         state   = State::finish;
                     } else if owned && i_nxt {
                         state = State::stop;
-                        o_stp = 1;
                     }
                 }
                 State::read_data: {

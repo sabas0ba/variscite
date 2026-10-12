@@ -71,8 +71,8 @@ module Core #(
     var csr_mcause  : logic<32>;
     var csr_mtval   : logic<32>;
 
-    /// pmpcfg packs four entries per word.
-    const PMP_CFG_WORDS: u32 = PMP_ENTRIES / 4;
+    /// pmpcfg packs four entries per word; unused final bytes remain zero.
+    const PMP_CFG_WORDS: u32 = (PMP_ENTRIES + 3) / 4;
 
     var csr_pmpcfg : logic<32> [PMP_CFG_WORDS];
     var csr_pmpaddr: logic<32> [PMP_ENTRIES]  ;
@@ -1143,12 +1143,10 @@ module Core #(
                                     // ignore writes until reset. Words that do not
                                     // exist match no iteration, so the write is
                                     // dropped.
-                                    for w in 0..PMP_CFG_WORDS {
-                                        if {30'h0, csr_addr[1:0]} == w {
-                                            for j in 0..4 {
-                                                if !csr_pmpcfg[w][8 * j + 7] {
-                                                    csr_pmpcfg[w][8 * j+:8] = csr_wv[8 * j+:8] & 8'h9f;
-                                                }
+                                    for i in 0..PMP_ENTRIES {
+                                        if {30'h0, csr_addr[1:0]} == i / 4 {
+                                            if !csr_pmpcfg[i / 4][8 * (i % 4) + 7] {
+                                                csr_pmpcfg[i / 4][8 * (i % 4)+:8] = csr_wv[8 * (i % 4)+:8] & 8'h9f;
                                             }
                                         }
                                     }

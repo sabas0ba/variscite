@@ -36,6 +36,7 @@ module tb_tang_cached_boot #(parameter int WITH_IO=0, WITH_SD=0) (
         assign sd_mosi=1;
     end
     rv32ima_DdrLinuxSoc #(.WITH_LCD(1), .WITH_IO(WITH_IO), .ROM_WORDS(WITH_SD?2048:1024),
+        .PMP_ENTRIES(WITH_SD?2:4),
         .ROM_INIT(WITH_SD?"sim/tang_boot_standalone.hex":"sim/tang_boot_lcd.hex")) cpu (
         .i_cpu_clk, .i_mem_clk, .i_reset, .i_enable, .i_uart_rx,
         .o_uart_tx, .o_shutdown, .o_exit_code, .o_display_enable, .i_display_error,

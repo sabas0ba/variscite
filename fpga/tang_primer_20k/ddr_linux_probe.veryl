@@ -1,9 +1,10 @@
 /// Linux boot platform connected to the DDR burst controller.
 module DdrLinuxProbe #(
-    param ROM_INIT : string = "sim/tang_boot.hex",
-    param ROM_WORDS: u32    = 1024               ,
-    param WITH_LCD : u32    = 0                  ,
-    param WITH_IO  : u32    = 0                  ,
+    param ROM_INIT   : string = "sim/tang_boot.hex",
+    param ROM_WORDS  : u32    = 1024               ,
+    param WITH_LCD   : u32    = 0                  ,
+    param WITH_IO    : u32    = 0                  ,
+    param PMP_ENTRIES: u32    = 4                  ,
 ) (
     i_uart_rx   : input  'cpu   logic                    ,
     o_uart_tx   : output 'cpu   logic                    ,
@@ -84,10 +85,11 @@ module DdrLinuxProbe #(
     assign o_failure = 0;
     assign cpu_found = o_actual == 32'h5555;
     inst cpu_platform: DdrLinuxSoc #(
-        ROM_INIT : ROM_INIT ,
-        ROM_WORDS: ROM_WORDS,
-        WITH_LCD : WITH_LCD ,
-        WITH_IO  : WITH_IO  ,
+        ROM_INIT   : ROM_INIT   ,
+        ROM_WORDS  : ROM_WORDS  ,
+        WITH_LCD   : WITH_LCD   ,
+        WITH_IO    : WITH_IO    ,
+        PMP_ENTRIES: PMP_ENTRIES,
     ) (
         i_cpu_clk                       ,
         i_io_rdata                      ,

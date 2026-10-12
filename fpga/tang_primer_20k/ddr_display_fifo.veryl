@@ -38,9 +38,10 @@ module DdrDisplayFifo #(
     var pixel_release: 'pixel logic           <2>;
     let mem_reset    : 'mem   reset_async_high    = (!mem_release[1]) as reset_async_high;
     let pixel_reset  : 'pixel reset_async_high    = (!pixel_release[1]) as reset_async_high;
-    let full         : 'mem   logic               = write_gray == {~read_sync2[8:7], read_sync2[6:0]};
+    var full         : 'mem   logic              ;
     let empty        : 'pixel logic               = read_gray == write_sync2;
     let next_write   : 'mem   logic           <9> = (write_binary + 9'd1) as 9;
+    let next_gray    : 'mem   logic           <9> = next_write ^ (next_write >> 1);
     let next_read    : 'pixel logic           <9> = (read_binary + 9'd1) as 9;
     let read_xor1    : 'mem   logic           <9> = read_sync2 ^ (read_sync2 >> 1);
     let read_xor2    : 'mem   logic           <9> = read_xor1 ^ (read_xor1 >> 2);
@@ -71,12 +72,17 @@ module DdrDisplayFifo #(
                 write_gray   = 0;
                 read_sync1   = 0;
                 read_sync2   = 0;
+                full         = 0;
             } else {
                 read_sync1 = read_gray;
                 read_sync2 = read_sync1;
+                // Predict occupancy after the accepted write. Registering full
+                // removes the synchronized pointer comparison from upstream
+                // request paths without adding a cycle between stream beats.
+                full = (if i_valid && o_ready ? next_gray : write_gray) == {~read_sync2[8:7], read_sync2[6:0]};
                 if i_valid && o_ready {
                     write_binary = next_write;
-                    write_gray   = next_write ^ (next_write >> 1);
+                    write_gray   = next_gray;
                 }
             }
         }

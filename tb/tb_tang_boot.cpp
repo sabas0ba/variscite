@@ -58,6 +58,7 @@ public:
     static constexpr unsigned bit_cycles=240;
     unsigned host_bit_cycles=240;
     unsigned response_budget=3000000;
+    unsigned memory_delay=0;
     void step() {
         bool mem_rise=!(ticks&1), cpu_rise=ticks%4==0;
         bool req=mem_rise && dut.o_req_valid && dut.i_req_ready;
@@ -92,7 +93,7 @@ public:
                         dut.i_rsp_data[i]=value;
                     }
                     dut.i_rsp_error=inject_error;
-                    pending=3+transactions%7;
+                    pending=3+transactions%7+memory_delay;
                 }
                 dut.i_req_ready=!pending && !dut.i_rsp_valid && ticks%7==0;
             }
@@ -146,6 +147,8 @@ int main(int argc, char **argv) {
         check(crc32(Bytes{'1','2','3','4','5','6','7','8','9'})==0xcbf43926u, "CRC reference");
         Bench b;
         if (argc>=2) b.host_bit_cycles=std::stoul(argv[1]);
+        if (argc>=5) b.memory_delay=std::stoul(argv[4]);
+        check(b.memory_delay<=200,"memory delay out of range");
         bool lcd=argc>=3 && std::string(argv[2])=="lcd";
         if(lcd) b.response_budget=200000000;
         b.reset(); b.cycles(1000);
@@ -153,7 +156,11 @@ int main(int argc, char **argv) {
         b.dut.i_enable=1;
         b.expect("VBL1\n");
         if(lcd) {
+#ifdef SD_BOOT
+            check(!b.dut.o_display_enable, "standalone scanout competed with image loading");
+#else
             check(b.dut.o_display_enable, "LCD ROM did not enable scanout");
+#endif
             const uint16_t colors[8]={0xffff,0xffe0,0x07ff,0x07e0,0xf81f,0xf800,0x001f,0};
             for(unsigned pixel=0;pixel<800*480;++pixel) {
                 uint32_t address=0x07c00000+pixel*2;
@@ -186,6 +193,7 @@ int main(int argc, char **argv) {
             if(corrupt) b.expect("SD failed\nVBL1\n");
             else if(!bad_sector) {
                 b.expect("SD verified\n");
+                check(b.dut.o_display_enable,"verified SD image did not enable scanout");
                 for(unsigned n=0;!b.dut.o_shutdown && n<1000000;n++) b.step();
                 check(b.dut.o_shutdown && b.dut.o_exit_code==0x5555,"SD payload entry/DDR failure");
                 check(b.card.reads>=3,"SD boot bypassed boot/root/data sector reads");

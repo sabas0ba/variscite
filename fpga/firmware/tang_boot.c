@@ -105,7 +105,9 @@ void boot_main(void)
                 for (unsigned x = 0; x < 50; ++x)
                     *fb++ = colors[bar] | ((uint32_t)colors[bar] << 16);
         __asm__ volatile ("fence iorw, iorw" ::: "memory");
-        *(volatile uint32_t *)0x11200000u = 1;
+        /* Standalone loading must not compete with continuous LCD DMA for
+         * the CPU's DDR stack while receiving a back-to-back UART packet. */
+        if (!WITH_SD) *(volatile uint32_t *)0x11200000u = 1;
     }
     message("VBL1\n");
 #if WITH_SD
@@ -149,6 +151,10 @@ void boot_main(void)
                    *(volatile uint32_t *)DTB_BASE == 0xedfe0dd0u &&
                    memory_crc(IMAGE_BASE, buffer[0]) == buffer[2] &&
                    memory_crc(DTB_BASE, buffer[1]) == buffer[3]) {
+            if (WITH_SD && WITH_LCD) {
+                __asm__ volatile ("fence iorw, iorw" ::: "memory");
+                *(volatile uint32_t *)0x11200000u = 1;
+            }
             if (source.file) message("SD verified\n");
             else put_byte('K');
             while (!(UART[5] & 0x40u)) {} /* Drain the final ACK before Linux. */

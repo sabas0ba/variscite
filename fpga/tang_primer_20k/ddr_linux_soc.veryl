@@ -1,12 +1,13 @@
 /// Linux platform behind the trained DDR PHY: ROM, UART, CLINT/PLIC and DDR.
 /// Both clocks and the memory backend share reset; enable follows PHY training.
 module DdrLinuxSoc #(
-    param ROM_INIT : string = "sim/tang_boot.hex",
-    param ROM_WORDS: u32    = 1024               ,
-    param CLK_HZ   : u32    = 27_000_000         ,
-    param UART_DIV : u32    = 15                 ,
-    param WITH_LCD : u32    = 0                  ,
-    param WITH_IO  : u32    = 0                  ,
+    param ROM_INIT   : string = "sim/tang_boot.hex",
+    param ROM_WORDS  : u32    = 1024               ,
+    param CLK_HZ     : u32    = 27_000_000         ,
+    param UART_DIV   : u32    = 15                 ,
+    param WITH_LCD   : u32    = 0                  ,
+    param WITH_IO    : u32    = 0                  ,
+    param PMP_ENTRIES: u32    = 4                  ,
 ) (
     i_cpu_clk       : input  'cpu   clock                    ,
     i_mem_clk       : input  'mem   clock                    ,
@@ -92,56 +93,13 @@ module DdrLinuxSoc #(
     assign o_io_addr  = addr;
     assign o_io_wdata = wdata;
     assign o_io_wstrb = wstrb;
-    if WITH_IO != 0 :io_pipeline {
-        enum BusState: logic<2> {
-            idle,
-            request,
-            response,
-        }
-        var bus_state: 'cpu BusState;
-        assign valid      = bus_state == BusState::request;
-        assign core_ready = bus_state == BusState::response;
-        // Cut the CPU protection/decode path before the larger peripheral mux.
-        // The request and response each remain stable for their handshake.
-        always_ff (i_cpu_clk, cpu_reset) {
-            if_reset {
-                bus_state  = BusState::idle;
-                addr       = 0;
-                wdata      = 0;
-                wstrb      = 0;
-                core_rdata = 0;
-                core_error = 0;
-            } else {
-                case bus_state {
-                    BusState::idle: {
-                        if core_valid {
-                            addr      = core_addr;
-                            wdata     = core_wdata;
-                            wstrb     = core_wstrb;
-                            bus_state = BusState::request;
-                        }
-                    }
-                    BusState::request: {
-                        if ready {
-                            core_rdata = rdata;
-                            core_error = error;
-                            bus_state  = BusState::response;
-                        }
-                    }
-                    BusState::response: bus_state = BusState::idle;
-                    default           : bus_state = BusState::idle;
-                }
-            }
-        }
-    } else :direct_bus {
-        assign valid      = core_valid;
-        assign addr       = core_addr;
-        assign wdata      = core_wdata;
-        assign wstrb      = core_wstrb;
-        assign core_ready = ready;
-        assign core_rdata = rdata;
-        assign core_error = error;
-    }
+    assign valid      = core_valid;
+    assign addr       = core_addr;
+    assign wdata      = core_wdata;
+    assign wstrb      = core_wstrb;
+    assign core_ready = ready;
+    assign core_rdata = rdata;
+    assign core_error = error;
     always_ff (i_cpu_clk, cpu_reset) {
         if_reset {
             local_ready      = 0;
@@ -199,7 +157,7 @@ module DdrLinuxSoc #(
         o_irq  : uart_irq               ,
     );
     inst soc: Soc #(
-        PMP_ENTRIES: 4,
+        PMP_ENTRIES: PMP_ENTRIES,
     ) (
         i_clk         : i_cpu_clk ,
         i_rst         : cpu_reset ,

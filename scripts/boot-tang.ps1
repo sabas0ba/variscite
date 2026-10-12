@@ -6,6 +6,7 @@ param(
     [Parameter(Mandatory=$true)][string]$Port,
     [Parameter(Mandatory=$true)][string]$Package,
     [ValidateRange(1,3600)][int]$CaptureSeconds=120,
+    [ValidateRange(0,100)][int]$ByteDelayMilliseconds=0,
     [string]$ExpectedText='',
     [string]$ConsoleCommand='',
     [string]$CommandExpectedText='',
@@ -91,7 +92,15 @@ try {
     $nextReport=65536
     while ($offset -lt $wire.Length) {
         $length=[BitConverter]::ToUInt32($wire,$offset+12)
-        $serial.Write($wire,$offset,20+$length)
+        if ($ByteDelayMilliseconds -eq 0) {
+            $serial.Write($wire,$offset,20+$length)
+        } else {
+            # Diagnostic pacing distinguishes RX overrun from a stopped CPU.
+            for ($byteOffset=0; $byteOffset -lt 20+$length; $byteOffset++) {
+                $serial.Write($wire,$offset+$byteOffset,1)
+                [System.Threading.Thread]::Sleep($ByteDelayMilliseconds)
+            }
+        }
         $waitSeconds=if ([BitConverter]::ToUInt32($wire,$offset+4) -eq 66) { 600 } else { 10 }
         $replyDeadline=$timer.Elapsed.TotalSeconds+$waitSeconds
         $reply=Read-ByteUntil $replyDeadline
@@ -160,6 +169,7 @@ try {
         elapsed_seconds=[Math]::Round($timer.Elapsed.TotalSeconds,3)
         bitstream_sha256=(Get-FileHash $bitstream -Algorithm SHA256).Hash
         package_sha256=(Get-FileHash $Package -Algorithm SHA256).Hash
+        byte_delay_ms=$ByteDelayMilliseconds
     }
     $result | ConvertTo-Json | Tee-Object -FilePath "$prefix-result.json"
     if (-not $KeepRunning) {

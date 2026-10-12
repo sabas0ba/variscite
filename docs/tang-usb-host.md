@@ -6,6 +6,14 @@
 VerylによるSD SPIとUSB ULPIホストを追加する。CPUは27 MHz、DDRは396/99 MHz、
 LCDは33 MHz、USBはPHYの60 MHz入力を専用PLLに通して使用する。
 USB PLLはT15のクロック入力に対応する `PLL_R[0]` に配置する。
+単独起動構成のPMPは2エントリ。固定Linuxの `arch/riscv/kernel/head.S` は
+M-mode起動時にエントリ0を全メモリ許可へ設定する。基準のLinux構成は4エントリを維持し、
+単独起動構成ではUSB/SD追加後の回路規模を抑えるために2エントリを使用する。
+この構成のGowin配置配線結果はLogic 15,189/20,736、Register 5,883/16,173、
+BSRAM 8/46で、setup/hold違反は0件。324/81 MHzの診断ではLCD underflowが
+発生したため、396/99 MHzを使用する。
+CPUバスは直接接続する。表示FIFOの満杯フラグは次の書込み位置から先行計算して
+レジスタに保持し、連続転送の間隔を保ったまま読出し要求の組合せ経路を短縮する。
 PHYのDIR/NXT/DATAはPLLの157.5度位相出力で同時に保持し、次のリンククロック立上りへ渡す。
 実機でturnaroundの値を読んでいた問題に対する修正であり、PHYの制御信号と
 DATAに1.5 ns/3.5 nsの異なる出力遅延を与えたテストを追加している。
@@ -13,9 +21,11 @@ DATAに1.5 ns/3.5 nsの異なる出力遅延を与えたテストを追加して
 
 SDブートROMのCPU込み試験、FAT16/FAT32/exFATの読取り試験、USBリンク・
 トランザクション・非同期MMIO・HID・ハブのモデル試験は通過した。
-実機では追加MMIOへアクセスでき、内部トレースでUSB PHYが識別値 `24 04 06 00` を
-返すことを確認した。PHYの応答とMMIOへ返す保持値が一致しない問題を調査中である。
-USBキーボード入力、実カードからのLinux起動、
+実機でUSB PHYの識別値 `24 04 06 00` とscratchの `A5` 読戻しが成功し、
+full-speed接続とHID入力endpoint 1個の列挙を確認した。
+396/99 MHzのHID診断ではLCD状態が `0x1`（有効、DDR error/underflowなし）だった。
+USB/SD統合構成でのLinuxからGUIまでの通し起動は実機検証中である。
+USBキーボードの実キー入力、実カードからのLinux起動、
 電源投入からの単独起動は未確認である。
 
 ## microSDからの読取り
@@ -34,6 +44,8 @@ FAT16/FAT32/exFAT、512 byteセクタ、MBRの基本パーティションまた�
 ROMは最初の250 msにUART入力があればUART転送を選択する。それ以外はSDを試し、
 ファイル・セクタ・転送内容の検証に失敗するとUARTへ戻る。VBLパケットCRCに加えて、
 Image/DTB全体のCRCとDTB magicを検証してから実行する。
+単独起動ROMでは、LCDのDDR読出しをImage/DTB検証後に開始する。
+UART/SDからのロード中はframebufferを初期化するだけで、表示用DMAとの競合を避ける。
 カードの準備と実機起動の手順は、実カード検証完了後に確定する。
 
 ## USB入力
@@ -53,8 +65,8 @@ high-speed転送、汎用report descriptor解析、hotplugは未実装。
 ## レジスタ
 
 USBベースは `0x11300000`、SDベースは `0x11400000`、窓は各256 byte。
-CPUからの要求は登録された外部バスを通り、USBは要求/応答toggleと保持データで
-60 MHz領域へ渡す。転送中はTXバッファを書き換えない。
+USBはCPUからの要求を要求/応答toggleと保持データで60 MHz領域へ渡す。
+転送中はTXバッファを書き換えない。
 
 | USB offset | 内容 |
 | --- | --- |
@@ -87,14 +99,22 @@ speedはFS=1、LS=2、ハブ経由LS=3。
 固定された開発コンテナ内で以下を実行する。
 
 ```sh
-make usb-host-test usb-hid-test sd-spi-test sd-boot-test tang-sd-boot-test
+make usb-host-test usb-hid-test sd-spi-test sd-boot-test tang-sd-boot-test pmp-two-test
 make linux-standalone-build
 scripts/build_usb_probe.sh
 USB_HID_PROBE=1 scripts/build_usb_probe.sh
 ```
 
 CPU込みSD試験は正常起動、VBL CRC不一致、SDセクタCRC不一致とUART復帰を検証する。
+PMPの2エントリ試験は、未実装の設定byte/アドレスレジスタが0を返すこと、
+U-modeの書込み禁止とM-modeの書込み許可、ロック後の設定保持を検証する。
+UART復帰はDDR応答を200メモリクロック遅らせ、ホストのbit間隔を234 CPUクロック
+（27 MHzで約115200 baud）とした条件でも検証する。
 合成用RTLはVeryl、外部PHY/カードモデルと境界条件の検証はSV/C++/Cを使用する。
+
+`scripts/boot-tang.ps1 -ByteDelayMilliseconds 1` は、UART受信の取りこぼしを
+切り分けるための低速診断用オプションである。通常値は0。
+`scripts/uart-term.ps1 -Port COM4 -MaxSeconds 300` で再書込みせずUARTを採取できる。
 
 ## 参照資料
 

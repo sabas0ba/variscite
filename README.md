@@ -34,7 +34,7 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | DDR→LCD読み出し | 実機統合・状態確認済み | CPU/表示仲裁、read cache、DMA、非同期FIFO、RGB565出力。全画素と欠落復帰はモデル検証。実機でLinux起動・GUI操作後のDDR error／underflowなし |
 | LCD bootlog・GUI | 実機プロセス・操作確認済み | framebuffer予約、simplefb/fbcon登録、UART操作の色選択・矩形移動・終了／再起動。画像内容はシミュレーション照合、パネル目視は未確認 |
 | microSD単独起動 | 実装・CPU込みモデル検証済み | FAT16/FAT32/exFATからTANGBOOT.VBLを読取り、CRC検証後に起動。実カード・電源投入からの起動は未確認 |
-| USBキーボード・マウス | 実装・モデル検証済み、実機調査中 | FS/LS ULPIホスト、ハブ、boot HID。実機PHYレジスタ読戻しを調査中。Linux HCD/evdev・hotplugは未実装 |
+| USBキーボード・マウス | PHY読書き・HID列挙を実機確認 | FS/LS ULPIホスト、ハブ、boot HID。入力endpoint 1個の列挙を確認、実キー入力は未確認。Linux HCD/evdev・hotplugは未実装 |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
 DDRの測定条件、bitstream SHA256、再現手順は
@@ -524,8 +524,10 @@ yosys `synth_gowin` 後のセル数 (Tang トップ、逐次除算器):
 特権仕様は PMP エントリ数を実装依存とし、未実装エントリは 0 読み出しを要求する。
 `PMP_ENTRIES` は配列の大きさそのものを変え、CSR の読み書きは比較による選択にして
 あるため、存在しないエントリはどのループにも一致せず、読み出しは 0、書き込みは
-捨てられる。シミュレーションと `make all` は既定の 16 で動くので、`tests/pmp_test.S`
-を含む全テストは変わらない。
+捨てられる。設定レジスタはエントリ数を4で割った切上げ数だけ実装し、末尾の未実装
+byteは0を保持する。既定のシミュレーションは16エントリで動き、`tests/pmp_test.S`
+で保護動作を検証する。単独起動構成の2エントリは `make pmp-two-test` で未実装CSR・
+設定byteとアクセス保護を検証する。この試験も `make all` に含む。
 
 上限を超えるエントリを「配列に残したまま書き込みだけ禁止する」実装も試したが、
 定数畳み込みされた 12 エントリが abc9 のマッピングを崩し、LUT が 13724 から 19690 に

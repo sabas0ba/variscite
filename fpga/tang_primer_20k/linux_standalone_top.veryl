@@ -120,6 +120,7 @@ module TangLinuxStandaloneTop (
         o_stp    : usb_stp                              ,
     );
     inst probe: TangDdrInitProbe #(
+        CPU_PMP_ENTRIES: 2                             ,
         CPU_ROM_INIT   : "sim/tang_boot_standalone.hex",
         CPU_ROM_WORDS  : 2048                          ,
         READ_TAPS      : 5'd6                          ,

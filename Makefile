@@ -15,7 +15,7 @@ all: lint veryl-test plic-multi-test core-bus-error-test linux-console-test tb i
      cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test \
      ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test \
      ddr-burst-controller-test ddr-controller-probe-test ddr-display-test tang-lcd-boot-test \
-     usb-host-test usb-hid-test sd-spi-test sd-boot-test tang-sd-boot-test
+     usb-host-test usb-hid-test sd-spi-test sd-boot-test tang-sd-boot-test pmp-two-test
 
 lint:
 	@test -z "$$(find src fpga -type f \( -name '*.sv' -o -name '*.v' \))" || \
@@ -86,6 +86,20 @@ run-isa:
 	scripts/run_all_isa.sh
 
 DIRECTED_TESTS := coverage_boost irq_test umode_test pmp_test clint_plic_test
+
+# Explicit top is required for parameter overrides; veryl test uses multiple tops.
+.PHONY: pmp-two-test
+pmp-two-test: veryl-build
+	mkdir -p sim
+	verilator --cc --exe --build -O2 --top-module rv32ima_Soc -GPMP_ENTRIES=2 \
+	    -Mdir sim/obj_pmp_two -o pmp_two $(RTL) tb/tb_core.cpp
+	$(RISCV_PREFIX)gcc -march=rv32g -mabi=ilp32 -static -mcmodel=medany \
+	    -fvisibility=hidden -nostdlib -nostartfiles \
+	    -Ithird_party/riscv-tests/env/p -Ithird_party/riscv-tests/isa/macros/scalar \
+	    -Tthird_party/riscv-tests/env/p/link.ld tests/pmp_two_test.S -o sim/pmp_two_test.elf
+	$(RISCV_PREFIX)objcopy -O binary sim/pmp_two_test.elf sim/pmp_two_test.bin
+	sim/obj_pmp_two/pmp_two +bin=sim/pmp_two_test.bin \
+	    +tohost=$$($(RISCV_PREFIX)nm sim/pmp_two_test.elf | awk '$$3 == "tohost" { print $$1 }')
 
 # clint_plic_test runs with a divided mtime tick so that the CLINT counter is
 # exercised on both the ticking and the idle cycle.
@@ -241,6 +255,7 @@ tang-sd-boot-test: veryl-build
 	sim/obj_tang_sd_boot/tang_sd_boot 240 lcd
 	sim/obj_tang_sd_boot/tang_sd_boot 240 lcd bad-crc
 	sim/obj_tang_sd_boot/tang_sd_boot 240 lcd bad-sector
+	sim/obj_tang_sd_boot/tang_sd_boot 234 lcd bad-sector 200
 
 sd-boot-test:
 	mkdir -p sim

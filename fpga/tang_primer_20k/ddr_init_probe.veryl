@@ -125,6 +125,7 @@ module TangDdrInitProbe #(
     param RUN_CONTROLLER  : u32       = 0                ,
     param WITH_LCD        : u32       = 0                ,
     param WITH_IO         : u32       = 0                ,
+    param CPU_PMP_ENTRIES : u32       = 4                ,
     param RUN_READ_SWEEP  : u32       = 0                ,
     param RUN_MPR         : u32       = 0                ,
     param RUN_MPR_DELAY   : u32       = 0                ,
@@ -691,10 +692,11 @@ module TangDdrInitProbe #(
     if RUN_CONTROLLER == 5 :linux_mode {
         unsafe (cdc) {
             inst linux_probe: DdrLinuxProbe #(
-                ROM_INIT : CPU_ROM_INIT ,
-                ROM_WORDS: CPU_ROM_WORDS,
-                WITH_LCD : WITH_LCD     ,
-                WITH_IO  : WITH_IO      ,
+                ROM_INIT   : CPU_ROM_INIT   ,
+                ROM_WORDS  : CPU_ROM_WORDS  ,
+                WITH_LCD   : WITH_LCD       ,
+                WITH_IO    : WITH_IO        ,
+                PMP_ENTRIES: CPU_PMP_ENTRIES,
             ) (
                 i_pixel_clk  : pixel_clk                      ,
                 lcd_hs                                        ,

@@ -21,6 +21,7 @@ static void hex(unsigned value)
 void boot_main(void)
 {
     text("USB probe: identity="); hex(usbh_identity()); text("\n");
+    text("LCD status="); hex(*(volatile uint32_t *)0x11200000u); text("\n");
     usbh_delay(100000);
     for (unsigned address=0;address<4;address++) {
         unsigned value=0;
@@ -43,7 +44,16 @@ void boot_main(void)
     for (;;) {
         rc=usbh_hid_init(&host);
         text("HID endpoints="); hex(host.count); text(" rc="); hex((unsigned)rc); text("\n");
-        if(rc>0) break;
+        if(rc>0) {
+            for(unsigned n=0;n<host.count;n++) {
+                text("HID device="); hex(host.endpoint[n].address);
+                text(" endpoint="); hex(host.endpoint[n].endpoint);
+                text(" speed="); hex(host.endpoint[n].speed);
+                text(" protocol="); hex(host.endpoint[n].protocol); text("\n");
+            }
+            text("LCD status="); hex(*(volatile uint32_t *)0x11200000u); text("\n");
+            break;
+        }
         usbh_delay(3000000);
     }
     for (;;) {
