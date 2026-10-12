@@ -11,7 +11,7 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
         run-isa cov-test coverage cov-check cosim linux-build linux-boot \
         fpga-fw fpga-sim por-test lcd-test fpga-lcd fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
-all: lint veryl-test plic-multi-test core-bus-error-test tb isa-build run-isa cov-test cov-check \
+all: lint veryl-test plic-multi-test core-bus-error-test linux-console-test tb isa-build run-isa cov-test cov-check \
      cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test \
      ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test \
      ddr-burst-controller-test ddr-controller-probe-test
@@ -515,7 +515,11 @@ fpga-arty-prog:
 linux-build:
 	linux/build_linux.sh
 
-linux-boot: tb-fast
+.PHONY: linux-console-test
+linux-console-test:
+	python3 tests/test_linux_console_test.py
+
+linux-boot: tb-fast linux-console-test
 	scripts/run_linux.sh --batch
 
 clean:

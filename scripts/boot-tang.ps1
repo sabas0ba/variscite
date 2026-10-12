@@ -7,10 +7,17 @@ param(
     [Parameter(Mandatory=$true)][string]$Package,
     [ValidateRange(1,3600)][int]$CaptureSeconds=120,
     [string]$ExpectedText='',
+    [string]$ConsoleCommand='',
+    [string]$CommandExpectedText='',
     [switch]$KeepRunning
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference='Stop'
+if ($ConsoleCommand -and (-not $ExpectedText -or -not $CommandExpectedText)) {
+    throw 'ConsoleCommand requires ExpectedText (ready marker) and CommandExpectedText'
+}
+if ($CommandExpectedText -and -not $ConsoleCommand) { throw 'CommandExpectedText requires ConsoleCommand' }
+if ($ConsoleCommand -match '[\r\n\x00-\x1f\x7f-\uffff]') { throw 'ConsoleCommand must be one printable ASCII line' }
 $root=Split-Path -Parent $PSScriptRoot
 $bitstream=Join-Path $root 'sim/fpga/linux_boot/impl/pnr/linux_boot.fs'
 $lcd=Join-Path $root 'sim/fpga/lcd_soc/soc.fs'
@@ -45,6 +52,7 @@ $capture=[System.IO.File]::Open("$prefix-uart.bin",[System.IO.FileMode]::Create,
 $failure=$null
 $uploaded=$false
 $matched=$false
+$commandMatched=$false
 $previousPath=$env:PATH
 $timer=[System.Diagnostics.Stopwatch]::StartNew()
 function Read-ByteUntil([double]$Deadline) {
@@ -105,10 +113,21 @@ try {
             $line=''
             $capture.Flush()
         }
-        if ($ExpectedText -and $output.Contains($ExpectedText)) { $matched=$true; break }
+        if (-not $matched -and $ExpectedText -and $output.Contains($ExpectedText)) {
+            $matched=$true
+            if (-not $ConsoleCommand) { break }
+            $serial.Write($ConsoleCommand+"`n")
+            Write-Host "Console command sent: $ConsoleCommand"
+            $output=''
+            $deadline=$timer.Elapsed.TotalSeconds+$CaptureSeconds
+        } elseif ($matched -and $ConsoleCommand -and $output.Contains($CommandExpectedText)) {
+            $commandMatched=$true
+            break
+        }
     }
     if ($line) { Write-Host $line }
     if ($ExpectedText -and -not $matched) { throw "Expected UART text not seen: $ExpectedText" }
+    if ($ConsoleCommand -and -not $commandMatched) { throw "Expected command response not seen: $CommandExpectedText" }
 } catch {
     $failure=$_.Exception.Message
 } finally {
@@ -118,6 +137,7 @@ try {
     $env:PATH=$previousPath
     $result=[ordered]@{
         uploaded=$uploaded; expected=$ExpectedText; matched=$matched; error=$failure
+        console_command=$ConsoleCommand; command_expected=$CommandExpectedText; command_matched=$commandMatched
         elapsed_seconds=[Math]::Round($timer.Elapsed.TotalSeconds,3)
         bitstream_sha256=(Get-FileHash $bitstream -Algorithm SHA256).Hash
         package_sha256=(Get-FileHash $Package -Algorithm SHA256).Hash

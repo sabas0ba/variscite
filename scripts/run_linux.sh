@@ -2,8 +2,7 @@
 # Boot Linux on the Verilator model.
 #
 # usage: run_linux.sh [--batch] [extra plusargs...]
-#   --batch  drive the console from a script instead of the terminal:
-#            echo a line, then power the machine off
+#   --batch  wait for the shell and verify mandel/donut/poweroff responses
 #
 # Artifacts from linux/build_linux.sh are expected under sim/linux/.
 set -euo pipefail
@@ -40,15 +39,7 @@ args=(
 )
 
 if [[ "$batch" -eq 1 ]]; then
-    (
-        sleep 25
-        printf 'mandel\n'
-        sleep 60
-        printf 'donut\n'
-        sleep 180
-        printf 'poweroff\n'
-        sleep 60
-    ) | "$sim" "${args[@]}" "$@"
+    python3 "$root/scripts/linux_console_test.py" "$sim" "${args[@]}" "$@"
 else
     "$sim" "${args[@]}" "$@"
 fi

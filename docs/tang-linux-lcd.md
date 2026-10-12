@@ -10,9 +10,10 @@
 RTL は DDR3 制御、LCD 読み出し、基板トップまで Veryl で実装する。
 
 現在の実機はオンチップ RAM 32 KiB とベアメタルの矩形表示で動作している。
-Linux はシミュレータ上で起動済みである。実機のCPU診断回路ではDDR3の全容量走査と命令実行が
-成功した。Linux用SoCとUARTブートROMを追加し、短いプログラムの転送とDDRからの実行は
-実機で確認した。最新の構成・結果は[UARTブート](tang-uart-boot.md)を参照する。
+実機のCPU診断回路ではDDR3の全容量走査と命令実行が成功した。Linux用SoCとUARTブートROMを
+追加し、2026-10-12に実機でLinuxの`/init`、UARTシェルと`help`応答、別プロセスによる
+donut 24 frameのUART描画を確認した。
+最新の構成・結果は[UARTブート](tang-uart-boot.md)を参照する。
 Linux用フレームバッファは未実装である。以下にはDDR検証段階の記録を残す。
 
 ## DDR基礎実装の範囲 (PR #5)

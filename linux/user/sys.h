@@ -13,7 +13,6 @@ typedef int ssize_t_;
 #define SYS_read 63
 #define SYS_write 64
 #define SYS_exit 93
-#define SYS_wait4 260
 #define SYS_execve 221
 #define SYS_clone 220
 #define SYS_reboot 142
@@ -68,10 +67,6 @@ static inline ssize_t_ sys_read(int fd, void *buf, size_t_ n) {
 static inline void sys_exit(int code) {
     sys1(SYS_exit, code);
     __builtin_unreachable();
-}
-
-static inline long sys_wait4(int pid, int *status, int options) {
-    return sys4(SYS_wait4, pid, (long)status, options, 0);
 }
 
 static inline long sys_execve(const char *path, char *const argv[],

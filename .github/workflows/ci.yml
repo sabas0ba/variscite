@@ -78,6 +78,7 @@ jobs:
         run: |
           make veryl-test
           make plic-multi-test
+          make linux-console-test
 
       - name: Build the simulator
         run: make tb

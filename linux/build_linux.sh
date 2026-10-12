@@ -6,7 +6,7 @@
 #   - riscv-none-elf- bare-metal toolchain in PATH (kernel is freestanding)
 #   - flex/bison on the host
 #
-# Outputs under <repo>/sim/linux/: init, Image, rv32ima_veryl.dtb
+# Outputs under <repo>/sim/linux/: userspace, Image, kernel.config, both DTBs.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
@@ -93,6 +93,9 @@ scripts/config --file .config \
     --enable  BLK_DEV_INITRD \
     --set-str INITRAMFS_SOURCE "$out/initramfs.desc" \
     --set-str CMDLINE "earlycon console=ttyS0,1000000 panic=-1" \
+    --disable CMDLINE_FORCE \
+    --disable CMDLINE_EXTEND \
+    --enable  CMDLINE_FALLBACK \
     --enable  HZ_100 \
     --disable HZ_250 \
     --disable VIRTIO_MMIO \
@@ -109,6 +112,12 @@ grep -q '^CONFIG_ARCH_RV32I=y' .config
 grep -q '^CONFIG_RISCV_M_MODE=y' .config
 ! grep -q '^CONFIG_MMU=y' .config
 grep -q '^CONFIG_BINFMT_ELF_FDPIC=y' .config
+# nommu_virt_defconfig forces its built-in command line. Honor DTB bootargs
+# instead: the simulator uses 1 Mbps, Tang uses 115200 with a 27 MHz UART.
+grep -q '^CONFIG_CMDLINE_FALLBACK=y' .config
+grep -q '^# CONFIG_CMDLINE_FORCE is not set$' .config
+grep -q '^# CONFIG_CMDLINE_EXTEND is not set$' .config
+cp .config "$out/kernel.config"
 
 # --- 3. build ------------------------------------------------------------
 make ARCH=riscv CROSS_COMPILE="$CROSS" -j"$JOBS" Image
@@ -120,6 +129,8 @@ if [[ ! -x scripts/dtc/dtc ]]; then
 fi
 scripts/dtc/dtc -I dts -O dtb -o "$out/rv32ima_veryl.dtb" \
     "$root/linux/rv32ima_veryl.dts"
+scripts/dtc/dtc -I dts -O dtb -o "$out/tang_primer_20k.dtb" \
+    "$root/linux/tang_primer_20k.dts"
 
 echo "artifacts:"
 ls -la "$out"
