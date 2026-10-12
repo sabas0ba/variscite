@@ -1,10 +1,16 @@
 /// Linux boot platform connected to the DDR burst controller.
 module DdrLinuxProbe #(
     param ROM_INIT: string = "sim/tang_boot.hex",
+    param WITH_LCD: u32    = 0                  ,
 ) (
     i_uart_rx   : input  'cpu   logic                ,
     o_uart_tx   : output 'cpu   logic                ,
     i_cpu_clk   : input  'cpu   clock                ,
+    i_pixel_clk : input  'pixel clock                ,
+    lcd_hs      : output 'pixel logic                ,
+    lcd_vs      : output 'pixel logic                ,
+    lcd_de      : output 'pixel logic                ,
+    lcd_rgb     : output 'pixel logic           <16> ,
     i_clk       : input  'mem   clock                ,
     i_reset     : input  'async reset_async_high     ,
     i_enable    : input  'mem   logic                ,
@@ -27,18 +33,29 @@ module DdrLinuxProbe #(
     o_dqs_enable : output 'mem logic<4>  ,
     o_dqs_pattern: output 'mem logic<8>  ,
 ) {
-    var req_valid: 'mem logic     ;
-    var req_ready: 'mem logic     ;
-    var req_addr : 'mem logic<27> ;
-    var req_data : 'mem logic<128>;
-    var req_strb : 'mem logic<16> ;
-    var rsp_valid: 'mem logic     ;
-    var rsp_ready: 'mem logic     ;
-    var rsp_data : 'mem logic<128>;
-    var rsp_error: 'mem logic     ;
-    var mem_reset: 'mem reset     ;
-    var cpu_done : 'cpu logic     ;
-    var cpu_found: 'cpu logic     ;
+    var req_valid     : 'mem logic     ;
+    var req_ready     : 'mem logic     ;
+    var req_addr      : 'mem logic<27> ;
+    var req_data      : 'mem logic<128>;
+    var req_strb      : 'mem logic<16> ;
+    var rsp_valid     : 'mem logic     ;
+    var rsp_ready     : 'mem logic     ;
+    var rsp_data      : 'mem logic<128>;
+    var rsp_error     : 'mem logic     ;
+    var mem_reset     : 'mem reset     ;
+    var cpu_done      : 'cpu logic     ;
+    var cpu_found     : 'cpu logic     ;
+    var cpu_req_valid : 'mem logic     ;
+    var cpu_req_ready : 'mem logic     ;
+    var cpu_req_addr  : 'mem logic<27> ;
+    var cpu_req_data  : 'mem logic<128>;
+    var cpu_req_strb  : 'mem logic<16> ;
+    var cpu_rsp_valid : 'mem logic     ;
+    var cpu_rsp_ready : 'mem logic     ;
+    var cpu_rsp_data  : 'mem logic<128>;
+    var cpu_rsp_error : 'mem logic     ;
+    var display_enable: 'cpu logic     ;
+    var display_error : 'cpu logic<2>  ;
     #[sv("async_reg = \"true\"")]
     var done_sync: 'mem logic<3>;
     #[sv("async_reg = \"true\"")]
@@ -61,25 +78,161 @@ module DdrLinuxProbe #(
     assign cpu_found = o_actual == 32'h5555;
     inst cpu_platform: DdrLinuxSoc #(
         ROM_INIT: ROM_INIT,
+        WITH_LCD: WITH_LCD,
     ) (
-        i_cpu_clk             ,
-        i_mem_clk  : i_clk    ,
-        i_reset               ,
-        i_enable              ,
-        o_shutdown : cpu_done ,
-        o_exit_code: o_actual ,
-        i_uart_rx             ,
-        o_uart_tx             ,
-        o_req_valid: req_valid,
-        i_req_ready: req_ready,
-        o_req_addr : req_addr ,
-        o_req_wdata: req_data ,
-        o_req_wstrb: req_strb ,
-        i_rsp_valid: rsp_valid,
-        o_rsp_ready: rsp_ready,
-        i_rsp_data : rsp_data ,
-        i_rsp_error: rsp_error,
+        i_cpu_clk                       ,
+        i_mem_clk       : i_clk         ,
+        i_reset                         ,
+        i_enable                        ,
+        o_shutdown      : cpu_done      ,
+        o_exit_code     : o_actual      ,
+        o_display_enable: display_enable,
+        i_display_error : display_error ,
+        i_uart_rx                       ,
+        o_uart_tx                       ,
+        o_req_valid     : cpu_req_valid ,
+        i_req_ready     : cpu_req_ready ,
+        o_req_addr      : cpu_req_addr  ,
+        o_req_wdata     : cpu_req_data  ,
+        o_req_wstrb     : cpu_req_strb  ,
+        i_rsp_valid     : cpu_rsp_valid ,
+        o_rsp_ready     : cpu_rsp_ready ,
+        i_rsp_data      : cpu_rsp_data  ,
+        i_rsp_error     : cpu_rsp_error ,
     );
+    if WITH_LCD != 0 :display_mode {
+        var display_valid: 'mem   logic    ;
+        var display_ready: 'mem   logic    ;
+        var display_addr : 'mem   logic<27>;
+        var urgent       : 'mem   logic    ;
+        var memory_error : 'mem   logic    ;
+        var underflows   : 'pixel logic<32>;
+        // Reduce a sticky counter in its source domain before synchronizing.
+        var pixel_error: 'pixel logic;
+        #[sv("async_reg = \"true\"")]
+        var enable_sync: 'mem logic<2>;
+        #[sv("async_reg = \"true\"")]
+        var memory_sync: 'cpu logic<2>;
+        #[sv("async_reg = \"true\"")]
+        var pixel_sync: 'cpu logic<2>;
+        unsafe (cdc) {
+            always_ff (i_clk, i_reset) {
+                if_reset {
+                    enable_sync = 0;
+                } else {
+                    enable_sync = {enable_sync[0], display_enable};
+                }
+            }
+            always_ff (i_pixel_clk, i_reset) {
+                if_reset {
+                    pixel_error = 0;
+                } else {
+                    pixel_error = underflows != 0;
+                }
+            }
+            always_ff (i_cpu_clk, i_reset) {
+                if_reset {
+                    memory_sync = 0;
+                    pixel_sync  = 0;
+                } else {
+                    memory_sync = {memory_sync[0], memory_error};
+                    pixel_sync  = {pixel_sync[0], pixel_error};
+                }
+            }
+        }
+        assign display_error = {pixel_sync[1], memory_sync[1]};
+        var client_ready: 'mem logic<2>      ;
+        var client_valid: 'mem logic<2>      ;
+        var client_error: 'mem logic<2>      ;
+        var client_data : 'mem logic<128> [2];
+        var cached_valid: 'mem logic         ;
+        var cached_addr : 'mem logic<27>     ;
+        var cached_data : 'mem logic<128>    ;
+        var cached_strb : 'mem logic<16>     ;
+        var cached_ready: 'mem logic         ;
+        inst read_cache: DdrBurstReadCache (
+            i_clk                           ,
+            i_rst          : mem_reset      ,
+            i_req_valid    : cpu_req_valid  ,
+            o_req_ready    : cpu_req_ready  ,
+            i_req_addr     : cpu_req_addr   ,
+            i_req_data     : cpu_req_data   ,
+            i_req_strb     : cpu_req_strb   ,
+            o_rsp_valid    : cpu_rsp_valid  ,
+            i_rsp_ready    : cpu_rsp_ready  ,
+            o_rsp_data     : cpu_rsp_data   ,
+            o_rsp_error    : cpu_rsp_error  ,
+            o_mem_valid    : cached_valid   ,
+            i_mem_ready    : client_ready[0],
+            o_mem_addr     : cached_addr    ,
+            o_mem_data     : cached_data    ,
+            o_mem_strb     : cached_strb    ,
+            i_mem_rsp_valid: client_valid[0],
+            o_mem_rsp_ready: cached_ready   ,
+            i_mem_rsp_data : client_data[0] ,
+            i_mem_rsp_error: client_error[0],
+        );
+        inst scanout: DdrLcdStream (
+            i_mem_clk     : i_clk                     ,
+            i_pixel_clk                               ,
+            i_reset                                   ,
+            i_enable      : enable_sync[1] && i_enable,
+            o_req_valid   : display_valid             ,
+            i_req_ready   : client_ready[1]           ,
+            o_req_addr    : display_addr              ,
+            i_rsp_valid   : client_valid[1]           ,
+            o_rsp_ready   : display_ready             ,
+            i_rsp_data    : client_data[1]            ,
+            i_rsp_error   : client_error[1]           ,
+            o_urgent      : urgent                    ,
+            o_level       : _                         ,
+            o_memory_error: memory_error              ,
+            o_frame       : _                         ,
+            o_hs          : lcd_hs                    ,
+            o_vs          : lcd_vs                    ,
+            o_de          : lcd_de                    ,
+            o_rgb         : lcd_rgb                   ,
+            o_underflows  : underflows                ,
+        );
+        inst arbiter: DdrBurstArbiter (
+            i_clk                                          ,
+            i_rst           : mem_reset                    ,
+            i_req_valid     : {display_valid, cached_valid},
+            o_req_ready     : client_ready                 ,
+            i_req_addr      : '{cached_addr, display_addr},
+            i_req_data      : '{cached_data, 128'b0},
+            i_req_strb      : '{cached_strb, 16'b0},
+            o_rsp_valid     : client_valid                 ,
+            i_rsp_ready     : {display_ready, cached_ready},
+            o_rsp_data      : client_data                  ,
+            o_rsp_error     : client_error                 ,
+            i_display_urgent: urgent                       ,
+            o_mem_valid     : req_valid                    ,
+            i_mem_ready     : req_ready                    ,
+            o_mem_addr      : req_addr                     ,
+            o_mem_data      : req_data                     ,
+            o_mem_strb      : req_strb                     ,
+            i_mem_rsp_valid : rsp_valid                    ,
+            o_mem_rsp_ready : rsp_ready                    ,
+            i_mem_rsp_data  : rsp_data                     ,
+            i_mem_rsp_error : rsp_error                    ,
+        );
+    } else :no_display {
+        assign req_valid     = cpu_req_valid;
+        assign cpu_req_ready = req_ready;
+        assign req_addr      = cpu_req_addr;
+        assign req_data      = cpu_req_data;
+        assign req_strb      = cpu_req_strb;
+        assign cpu_rsp_valid = rsp_valid;
+        assign rsp_ready     = cpu_rsp_ready;
+        assign cpu_rsp_data  = rsp_data;
+        assign cpu_rsp_error = rsp_error;
+        assign display_error = 0;
+        assign lcd_hs        = 1;
+        assign lcd_vs        = 1;
+        assign lcd_de        = 0;
+        assign lcd_rgb       = 0;
+    }
     inst controller: DdrBurstController (
         i_clk                   ,
         i_rst        : mem_reset,

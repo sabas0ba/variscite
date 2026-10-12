@@ -65,8 +65,16 @@ module DdrLcdStream #(
     var hs          : 'pixel logic     ;
     var vs          : 'pixel logic     ;
     var de          : 'pixel logic     ;
-    assign o_urgent = i_enable && o_level <: 9'd224;
-    assign o_frame  = frame_start && !pixel_reset;
+    // Keep Gray decode / occupancy comparison out of the request arbitration
+    // path. The 224-burst threshold includes ample margin for this one cycle.
+    always_ff (i_mem_clk, mem_reset) {
+        if_reset {
+            o_urgent = 0;
+        } else {
+            o_urgent = i_enable && o_level <: 9'd224;
+        }
+    }
+    assign o_frame = frame_start && !pixel_reset;
     always_ff (i_mem_clk, mem_reset) {
         if_reset {
             o_memory_error = 0;

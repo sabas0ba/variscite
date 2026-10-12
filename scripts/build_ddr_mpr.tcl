@@ -4,7 +4,7 @@ set_device -name GW2A-18C GW2A-LV18PG256C8/I7
 foreach source {rv_pkg alu core clint plic soc ram uart} {
     add_file -type verilog [file join $root target ${source}.sv]
 }
-foreach source {ddr_cpu_port ddr_cpu_probe ddr_cpu_top ddr_cpu_access_top ddr_linux_soc ddr_linux_probe linux_top} {
+foreach source {ddr_cpu_port ddr_cpu_probe ddr_cpu_top ddr_cpu_access_top ddr_linux_soc ddr_linux_probe linux_top linux_lcd_top lcd_clock lcd_timing ddr_lcd_stream ddr_lcd_pixels ddr_display_fifo ddr_frame_reader ddr_burst_arbiter ddr_burst_read_cache} {
     add_file -type verilog [file join $root target tang_primer_20k ${source}.sv]
 }
 add_file -type verilog [file join $root target power_on_reset.sv]
@@ -68,5 +68,9 @@ add_file -type sdc [file join $out "$::env(DDR_MPR_NAME).sdc"]
 set_option -top_module $::env(DDR_MPR_TOP)
 set_option -verilog_std sysv2017
 set_option -output_base_name $::env(DDR_MPR_NAME)
+if {$::env(DDR_MPR_NAME) eq "linux_lcd"} {
+    # LCD R[2] uses N9, shared with SSPI. Keep JTAG available for SRAM loading.
+    set_option -use_sspi_as_gpio 1
+}
 run syn
 run pnr

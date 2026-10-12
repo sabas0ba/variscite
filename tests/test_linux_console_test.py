@@ -20,9 +20,10 @@ print("reboot: Power down\n[tb] SYSCON poweroff", flush=True)
 
 
 class LinuxConsoleTest(unittest.TestCase):
-    def run_console(self, source):
+    def run_console(self, source, lcd_gui=False):
         return subprocess.run(
-            [sys.executable, str(DRIVER), sys.executable, "-c", source],
+            [sys.executable, str(DRIVER)] + (["--lcd-gui"] if lcd_gui else []) +
+            [sys.executable, "-c", source],
             stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=10,
         )
 
@@ -33,6 +34,28 @@ class LinuxConsoleTest(unittest.TestCase):
 
     def test_clean_exit_without_boot_is_failure(self):
         result = self.run_console("print('[tb] SYSCON poweroff')")
+        self.assertNotEqual(result.returncode, 0)
+
+    def test_gui_input_and_child_exit(self):
+        gui = '''
+assert input() == "gui"
+print("fbui: drawing\\nfbui: ready", flush=True)
+assert input() == "g"
+print("fbui: updated", flush=True)
+assert input() == "d"
+print("fbui: updated", flush=True)
+assert input() == "q"
+print("fbui: done\\nveryl$ ", end="", flush=True)
+'''
+        source = CONSOLE.replace('assert input() == "mandel"', gui + 'assert input() == "mandel"')
+        result = self.run_console(source, lcd_gui=True)
+        self.assertEqual(result.returncode, 0, result.stdout)
+        self.assertIn(b"framebuffer GUI startup", result.stdout)
+
+    def test_gui_failed_before_ready(self):
+        source = CONSOLE.split('assert input() == "mandel"')[0]
+        source += 'assert input() == "gui"\nprint("fbui: framebuffer query failed")\n'
+        result = self.run_console(source, lcd_gui=True)
         self.assertNotEqual(result.returncode, 0)
 
     def test_missing_application_completion_is_failure(self):

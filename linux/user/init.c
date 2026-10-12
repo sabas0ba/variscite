@@ -10,6 +10,9 @@ static char buf[128];
 
 static char *const donut_argv[] = {"/bin/donut", 0};
 static char *const mandel_argv[] = {"/bin/mandelbrot", 0};
+#ifdef WITH_LCD
+static char *const fbui_argv[] = {"/bin/fbui", 0};
+#endif
 static char *const empty_envp[] = {0};
 
 static int eq(const char *a, const char *b) {
@@ -36,11 +39,26 @@ void _start(void) {
             spawn(donut_argv[0], donut_argv, empty_envp);
         } else if (eq(buf, "mandel") || eq(buf, "mandelbrot")) {
             spawn(mandel_argv[0], mandel_argv, empty_envp);
-        } else if (eq(buf, "help")) {
+        }
+#ifdef WITH_LCD
+        else if (eq(buf, "gui")) {
+            spawn(fbui_argv[0], fbui_argv, empty_envp);
+        }
+        else if (eq(buf, "lcdstat")) {
+            /* Tang LCD build only: the FPGA exposes sticky scanout errors. */
+            unsigned status = *(volatile unsigned *)0x11200000u;
+            put_str(status == 1 ? "LCD scanout status: OK\n" : "LCD scanout status: ERROR\n");
+        }
+#endif
+        else if (eq(buf, "help")) {
             put_str("donut     spinning torus, fixed point\n"
                     "mandel    Mandelbrot set, fixed point\n"
                     "poweroff  shut the machine down\n"
                     "reboot    restart the machine\n");
+#ifdef WITH_LCD
+            put_str("lcdstat   Tang DDR scanout status\n");
+            put_str("gui       framebuffer UI; UART input\n");
+#endif
         } else if (eq(buf, "poweroff") || eq(buf, "p")) {
             sys_reboot(RB_POWER_OFF);
         } else if (eq(buf, "reboot") || eq(buf, "r")) {

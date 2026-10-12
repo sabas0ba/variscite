@@ -35,6 +35,11 @@ module TangDdrFullSlowTop (
     ) (
         i_clk            ,
         i_uart_rx  : 1'b1,
+        lcd_dclk   : _   ,
+        lcd_hs     : _   ,
+        lcd_vs     : _   ,
+        lcd_de     : _   ,
+        lcd_rgb    : _   ,
         o_uart_tx        ,
         ddr_dq           ,
         ddr_dqs_p        ,

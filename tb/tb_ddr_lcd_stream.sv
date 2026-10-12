@@ -1,6 +1,6 @@
 // End-to-end scanout with the real controller and independent clock edges.
 // SV models external DDR lane returns and checks each physical LCD pixel.
-module tb_ddr_lcd_stream;
+module tb_ddr_lcd_stream #(parameter bit CACHE=0);
     localparam logic [26:0] BASE=27'h7c00000;
     logic mem_clk=0, pixel_clk=0, rst=1, enable=0;
     always #5 mem_clk=~mem_clk;
@@ -24,11 +24,29 @@ module tb_ddr_lcd_stream;
     wire [13:0] addr;
     logic [127:0] read_data=0, returning_data;
     logic [1:0] read_valid=0;
-    assign req_addr[0]=0;
+    wire cpu_valid, cpu_rsp_ready, cpu_rsp_valid, cpu_rsp_error;
+    wire [127:0] cpu_rsp_data;
+    if (CACHE) begin : cached_cpu
+        rv32ima_DdrBurstReadCache cache (
+            .i_clk(mem_clk),.i_rst(rst),.i_req_valid(enable),.o_req_ready(),
+            .i_req_addr(27'b0),.i_req_data(128'b0),.i_req_strb(16'b0),
+            .o_rsp_valid(cpu_rsp_valid),.i_rsp_ready(1'b1),.o_rsp_data(cpu_rsp_data),.o_rsp_error(cpu_rsp_error),
+            .o_mem_valid(cpu_valid),.i_mem_ready(req_ready[0]),.o_mem_addr(req_addr[0]),
+            .o_mem_data(req_data[0]),.o_mem_strb(req_strb[0]),.i_mem_rsp_valid(rsp_valid[0]),
+            .o_mem_rsp_ready(cpu_rsp_ready),.i_mem_rsp_data(rsp_data[0]),.i_mem_rsp_error(rsp_error[0])
+        );
+    end else begin : uncached_cpu
+        assign req_addr[0]=0;
+        assign req_data[0]=0;
+        assign req_strb[0]=0;
+        assign cpu_valid=enable;
+        assign cpu_rsp_ready=1;
+        assign cpu_rsp_valid=rsp_valid[0];
+        assign cpu_rsp_data=rsp_data[0];
+        assign cpu_rsp_error=rsp_error[0];
+    end
     assign req_addr[1]=dma_addr;
-    assign req_data[0]=0;
     assign req_data[1]=0;
-    assign req_strb[0]=0;
     assign req_strb[1]=0;
     rv32ima_DdrLcdStream display_path (
         .i_mem_clk(mem_clk),.i_pixel_clk(pixel_clk),.i_reset(rst),.i_enable(enable),
@@ -38,9 +56,9 @@ module tb_ddr_lcd_stream;
         .o_frame(frame),.o_hs(hs),.o_vs(vs),.o_de(de),.o_rgb(rgb),.o_underflows(underflows)
     );
     rv32ima_DdrBurstArbiter arbiter (
-        .i_clk(mem_clk),.i_rst(rst),.i_req_valid({dma_valid,enable}),.o_req_ready(req_ready),
+        .i_clk(mem_clk),.i_rst(rst),.i_req_valid({dma_valid,cpu_valid}),.o_req_ready(req_ready),
         .i_req_addr(req_addr),.i_req_data(req_data),.i_req_strb(req_strb),
-        .o_rsp_valid(rsp_valid),.i_rsp_ready({dma_ready,1'b1}),.o_rsp_data(rsp_data),.o_rsp_error(rsp_error),
+        .o_rsp_valid(rsp_valid),.i_rsp_ready({dma_ready,cpu_rsp_ready}),.o_rsp_data(rsp_data),.o_rsp_error(rsp_error),
         .i_display_urgent(urgent),.o_mem_valid(mem_valid),.i_mem_ready(mem_ready),
         .o_mem_addr(mem_addr),.o_mem_data(mem_data),.o_mem_strb(mem_strb),
         .i_mem_rsp_valid(mem_rsp_valid),.o_mem_rsp_ready(mem_rsp_ready),
@@ -69,8 +87,8 @@ module tb_ddr_lcd_stream;
                 if(dma_addr!==BASE+27'(dma_burst*16)) $fatal(1,"continuous frame address");
                 dma_burst=(dma_burst+1)%48000;
             end
-            if(rsp_valid[0]) begin
-                if(rsp_error[0] || rsp_data[0]!==pattern(0)) $fatal(1,"CPU response");
+            if(cpu_rsp_valid) begin
+                if(cpu_rsp_error || cpu_rsp_data!==pattern(0)) $fatal(1,"CPU response");
                 cpu_responses++;
             end
             if(mem_valid&&mem_ready) begin

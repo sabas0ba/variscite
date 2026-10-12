@@ -3,6 +3,8 @@
 DDR検証済みの経路をLinux用SoCへ接続する。合成対象は`DdrLinuxSoc`、
 `DdrLinuxProbe`、`TangLinuxTop`を含めVerylで記述する。
 この文書の実装仕様と、末尾の実測結果を区別する。
+LCD統合版の`TangLinuxLcdTop`、fbcon、GUI、追加の制御レジスタと実測結果は
+[DDR表示経路](tang-ddr-display.md)を参照する。本書の過去の実機記録はUART専用版の結果である。
 
 ## SoC構成
 
@@ -27,6 +29,7 @@ Linux 6.12の`drivers/tty/serial/8250/8250_of.c`は後者2項目から`tx_loadsz
 THRE通知ごとの書込みを1 byteに制限する。`ns16850`の既定値は128 byteの一括送信であり、
 このRTLには適合しない。受信FIFOの深さと送信能力は対称ではなく、完全な16550の機能実装でもない。
 `0x87e00000..0x87ffffff`の2 MiBはDTBとブート時のスタック用に予約する。
+現行実機DTSは、別途`0x87c00000`から1 MiBをframebuffer用の`no-map`領域として予約する。
 初期SPは`0x87fff000`。Linuxへの移行時は割込みを無効化し、`fence`と`fence.i`の後に
 `a0=0`、`a1=0x87e00000`、PC=`0x80000000`でM-mode実行を開始する。
 
@@ -130,7 +133,7 @@ ROM使用量1,036/4,096 byte、LUT 12,197、ALU 1,378、register 4,117、setup/h
 `make all`は成功し、命令試験76件、Spike照合77件が通過した。カバレッジ未到達は
 line 4 / branch 1 / expression 13で既存基準内。新規転送試験はホスト側240/234/246
 cycle/bitの3設定すべて成功した。これらはboot ROMの結合試験であり、Linuxの実機結果は
-以下に別途記録する。LCD bootlogとGUIは未実装である。
+以下に別途記録する。この時点の試験にはLCD bootlogとGUIを含まない。
 
 UART変更後の既存Linuxシミュレーションも`/init`、Mandelbrot、donut 24 frame、SYSCON poweroffまで
 成功した（853,919,151 cycle、300,378,013 retire）。これはLinux用UART/DDRの実機試験とは別の回帰である。

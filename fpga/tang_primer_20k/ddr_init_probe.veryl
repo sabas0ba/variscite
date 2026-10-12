@@ -122,6 +122,7 @@ module TangDdrStatusUart #(
 module TangDdrInitProbe #(
     param CPU_ROM_INIT    : string    = "sim/ddr_cpu.hex",
     param RUN_CONTROLLER  : u32       = 0                ,
+    param WITH_LCD        : u32       = 0                ,
     param RUN_READ_SWEEP  : u32       = 0                ,
     param RUN_MPR         : u32       = 0                ,
     param RUN_MPR_DELAY   : u32       = 0                ,
@@ -161,6 +162,11 @@ module TangDdrInitProbe #(
     i_uart_rx  : input  'reference logic        ,
     i_clk      : input  'reference clock        ,
     o_uart_tx  : output 'reference logic        ,
+    lcd_dclk   : output 'pixel     clock        ,
+    lcd_hs     : output 'pixel     logic        ,
+    lcd_vs     : output 'pixel     logic        ,
+    lcd_de     : output 'pixel     logic        ,
+    lcd_rgb    : output 'pixel     logic    <16>,
     ddr_dq     : inout  'async     tri logic<16>,
     ddr_dqs_p  : inout  'async     tri logic<2> ,
     ddr_dqs_n  : inout  'async     tri logic<2> ,
@@ -177,6 +183,27 @@ module TangDdrInitProbe #(
     ddr_clk_p  : output 'fast      logic        ,
     ddr_clk_n  : output 'fast      logic        ,
 ) {
+    var pixel_clk   : 'pixel clock;
+    var pixel_locked: 'async logic;
+    if WITH_LCD != 0 && RUN_CONTROLLER == 5 :lcd_clock_mode {
+        inst clock_gen: TangLcdClock (
+            i_clk                 ,
+            o_clk   : pixel_clk   ,
+            o_locked: pixel_locked,
+        );
+    } else :no_lcd_clock {
+        unsafe (cdc) {
+            assign pixel_clk    = i_clk;
+        }
+        assign pixel_locked = 1;
+    }
+    assign lcd_dclk = pixel_clk;
+    if RUN_CONTROLLER != 5 :no_lcd_output {
+        assign lcd_hs  = 1;
+        assign lcd_vs  = 1;
+        assign lcd_de  = 0;
+        assign lcd_rgb = 0;
+    }
     var por                    : 'reference logic                    ;
     var fast_clk               : 'fast      clock                    ;
     var ctrl_clk               : 'ctrl      clock                    ;
@@ -438,7 +465,7 @@ module TangDdrInitProbe #(
     }
     unsafe (cdc) {
         assign ref_reset = por as reset;
-        assign phy_reset = (por
+        assign phy_reset = (por || !pixel_locked
             || (if PHY_STARTUP != 0 ? startup_phy_reset : !pll_locked || !dll_locked)) as reset_async_high;
         always_ff (i_clk, ref_reset) {
             if_reset {
@@ -653,7 +680,13 @@ module TangDdrInitProbe #(
         unsafe (cdc) {
             inst linux_probe: DdrLinuxProbe #(
                 ROM_INIT: CPU_ROM_INIT,
+                WITH_LCD: WITH_LCD    ,
             ) (
+                i_pixel_clk  : pixel_clk                      ,
+                lcd_hs                                        ,
+                lcd_vs                                        ,
+                lcd_de                                        ,
+                lcd_rgb                                       ,
                 i_uart_rx                                     ,
                 o_uart_tx    : linux_uart_tx                  ,
                 o_failure    : word_failure                   ,

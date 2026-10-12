@@ -10,6 +10,19 @@ _start:
     lw t1, 0(a1)
     li t2, 0xedfe0dd0
     bne t1, t2, fail
+#ifdef WITH_LCD
+    /* Error inputs are injected by the harness; enable comes from the ROM. */
+    li t0, 0x11200000
+    lw t1, 0(t0)
+    li t2, 7
+    bne t1, t2, fail
+    sw zero, 0(t0) /* Enable cannot be cleared without common reset. */
+    sh zero, 2(t0)
+    li t3, -1
+    sb t3, 1(t0) /* Upper byte must not change control/status. */
+    lw t1, 0(t0)
+    bne t1, t2, fail
+#endif
     li t0, 0x1100bff8
     lw t1, 0(t0)
     li t2, 100

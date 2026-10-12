@@ -9,19 +9,21 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
 
 更新日: 2026-10-12。Tang Primer 20K実機でLinuxの`/init`とUARTシェルへの到達、
 `help`への応答と、別プロセスでのdonut 24 frameの完了を確認した。LCDはベアメタルの矩形表示まで
-動作しており、Linuxとの接続は未実装である。DDRからLCDへ読み出すVeryl回路を追加し、
-CPUとの仲裁からRGB565出力までの連続3 frameをシミュレーションで検証した。
+動作している。Linux用のDDR表示回路・fbcon・簡易GUIを実装し、GUIの色変更・移動・終了と
+framebufferの内容をシミュレーションで検証した。LCD統合版も実機でLinuxシェルへ到達し、
+fbcon登録、GUIの描画完了・色変更・移動・終了、操作後の表示errorなしをUARTと状態レジスタで確認した。
+パネルの見た目は、この検証では目視確認していない。
 DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致した。
 追加したmixed patternでは校正窓の不足を発見し、3 wordへ拡張した324 MHz版と396 MHz版で
 全容量・両極性の一致を確認した。mixed patternは396 MHzで独立書込み3回、324 MHzで2回、
 修正後の従来patternも396 MHzで1回成功した。CPU診断回路では全容量走査とDDR命令実行も
-成功している。Linux用SoCへCPU・DDR・UARTを接続済みであり、LCD統合が次段階である。
+成功している。Linux用SoCへCPU・DDR・UART・LCDを接続済みである。
 
 | 項目 | 状態 | 確認済みの範囲・残る作業 |
 | --- | --- | --- |
 | RV32IMAコア・CLINT/PLIC・PMP | シミュレーション検証済み | 命令試験、Spike照合、例外・割り込み・アクセス制御 |
 | Linux・ユーザランド | 実機起動・UARTシェル・ユーザアプリ確認済み | NOMMU / M-mode Linux、`/init`、`help`応答、donut 24 frame。Mandelbrotとpoweroffはシミュレーションで検証 |
-| Tangの基本SoC・800×480 LCD | 実機動作確認済み | オンチップRAM 32 KiB、ベアメタルの矩形表示。Linuxによる描画は未実装 |
+| Tangの基本SoC・800×480 LCD | 実機動作確認済み | オンチップRAM 32 KiB、ベアメタルの矩形表示。Linux構成は別ターゲット |
 | DDR3 PHY・初期化・読出しtraining | 独立診断で実機確認済み | Veryl実装。GOWINによる配置配線とlane別の拍位置校正 |
 | DDR3保持・部分書込み・アドレス | 限定範囲で実機確認済み | 約127 ms保持、16 byte位置のDM選択、23アドレスbitと容量末尾 |
 | DDR全128 MiB走査 | 独立診断で実機確認済み | 3 word校正窓でmixed pattern／反転値が396/99 MHzで3回、324/81 MHzで2回一致。アドレスXOR／反転値も修正後の396/99 MHz版で一致 |
@@ -29,8 +31,8 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | DDR wordポート・CDC | CPU接続を含め実機確認済み | 27 MHz要求→99 MHz controllerでの読書き。範囲外拒否はCPU例外として実機確認。timeout/reset・応答保持はモデル検証 |
 | CPUからDDR3への接続 | 全容量・部分アクセス・命令実行を実機確認済み | 全128 MiBのmixed/反転値とDDR命令実行。全16 byte位置、非整列、容量末尾、範囲外例外、LR/SC・全AMOの追加診断は独立書込み3回成功 |
 | Linux用SoC・UARTブートROM | Linux Imageの実機転送・起動を確認済み | CRC付きImage/DTB転送、128 MiB DDR、1 MHzタイマ、UART/PLIC。115200 consoleでユーザ空間へ到達 |
-| DDR→LCD読み出し | シミュレーション・単体合成で検証済み | CPU/表示仲裁、DMA、非同期FIFO、RGB565出力。800×480連続3 frameと欠落後の復帰を検証。基板トップへの接続・配置配線・実機試験は未実施 |
-| LCD bootlog・GUI | 未実装 | framebuffer予約・実機統合、fbcon、GUIが残る |
+| DDR→LCD読み出し | 実機統合・状態確認済み | CPU/表示仲裁、read cache、DMA、非同期FIFO、RGB565出力。全画素と欠落復帰はモデル検証。実機でLinux起動・GUI操作後のDDR error／underflowなし |
+| LCD bootlog・GUI | 実機プロセス・操作確認済み | framebuffer予約、simplefb/fbcon登録、UART操作の色選択・矩形移動・終了／再起動。画像内容はシミュレーション照合、パネル目視は未確認 |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
 DDRの測定条件、bitstream SHA256、再現手順は
@@ -44,8 +46,9 @@ CPUアクセス例外とfetch待ち中の要求保持を追加し、Coreとword�
 PHYを含む回路のタイミングを満たし、CPUによる全容量走査とDDR上の命令実行も実機で成功した。
 CPU経由の部分書込み・境界アクセス・LR/SC・AMOも実機で確認した。
 Linux用SoCとCRC付きUARTブートROMを追加し、実機でLinuxの`/init`とUARTシェルが動作した。
-DDRからLCDへの読み出し回路は結合シミュレーションと単体合成を通過した。次は基板トップへの接続と
-実機検証を行う。構成と再現手順は[UARTブート](docs/tang-uart-boot.md)と
+DDRからLCDへの読み出し回路、fbcon、簡易GUIを接続し、結合シミュレーションを通過した。
+実機でもLinuxシェルとGUI操作を確認した。描画性能と画面所有の改善、パネルの目視確認が残る。
+構成と再現手順は[UARTブート](docs/tang-uart-boot.md)と
 [DDR表示経路](docs/tang-ddr-display.md)を参照する。
 以下は実装順序と完了条件であり、日程の確約ではない。
 
@@ -54,8 +57,9 @@ DDRからLCDへの読み出し回路は結合シミュレーションと単体�
 | 1（単独検証済み） | DDR controller | 任意の読書き要求とrefreshを仲裁し、応答待ち中のrefresh期限、timeout、resetを検証する |
 | 2（診断回路で検証済み） | CPUとDDR3の接続 | CDC、可変レイテンシ、byte strobe、境界アクセスを接続し、実機で全容量走査と継続アクセスを通す |
 | 3（実機確認済み） | Linux実機起動 | UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、`/init`とUARTシェルへ到達する |
-| 4（表示経路のモデル検証済み） | LCDブートログ | DDR上のframebufferと検証済みDMA・FIFOを実機へ接続し、fbconによる連続スクロールでも表示が欠落しないことを確認する |
-| 5 | Linux GUI | Linuxユーザプロセスから`/dev/fb0`へ描画し、UART入力に応答する |
+| 4（実機のfbcon・状態確認済み） | LCDブートログ | DDR framebufferとDMA・FIFOを接続。起動とGUI操作後までunderflowなし。パネルの表示内容は目視確認が残る |
+| 5（実機操作確認済み） | Linux GUI | Linuxユーザプロセスから`/dev/fb0`へ描画し、UART入力による色変更・移動・終了を確認 |
+| 6 | 描画性能・画面所有 | 全画面描画の待ち時間を短縮し、fbconとの排他制御と部分更新を検討する |
 
 DDR controllerとCPU接続はPR #6でマージ済み。継続中の変更はLinux用SoC、UARTブート、DDR表示経路を扱う。
 詳細な設計条件と段階別の検証方針は
@@ -692,7 +696,7 @@ GOWIN専用コンテナを使う。Veryl製PHY・初期化・受信trainingと�
 [refresh保持、byte mask、アドレスbitと容量末尾](docs/ddr-multi-pattern.md)の試験は
 それぞれ実機3回で成功している。CPUからDDR3への接続とLinuxのUART起動も実機確認済みである。
 
-- LCD 描画はカラーバーと単一矩形のみ。フレームバッファと文字描画は未実装。
+- 基本LCD SoCの描画はカラーバーと単一矩形。Linux LCD版はDDR framebuffer・fbcon・簡易GUIを別途実装している（検証状況は冒頭参照）。
 - 基本SoCとLCD SoCは外部 DRAM に接続していないため、RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
   Linux は載らず、ベアメタル専用である
 - Tang の PMP は 4 エントリである (上記)。ベアメタルのファームウェアは M-mode のみで

@@ -19,6 +19,17 @@
         reg = <0x80000000 0x08000000>;
     };
 
+    reserved-memory {
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+        // Exclude video RAM from System RAM resources as well as allocation.
+        framebuffer@87c00000 {
+            reg = <0x87c00000 0x00100000>;
+            no-map;
+        };
+    };
+
     cpus {
         #address-cells = <1>;
         #size-cells = <0>;

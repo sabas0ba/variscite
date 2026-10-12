@@ -1,0 +1,20 @@
+/include/ "tang_primer_20k.dts"
+
+/ {
+    chosen {
+        #address-cells = <1>;
+        #size-cells = <1>;
+        ranges;
+        // UART remains /dev/console; kernel messages also reach fbcon.
+        bootargs = "earlycon console=tty0 console=ttyS0,115200 fbcon=nodefer panic=-1";
+        framebuffer@87c00000 {
+            compatible = "simple-framebuffer";
+            reg = <0x87c00000 0x000bb800>;
+            width = <800>;
+            height = <480>;
+            stride = <1600>;
+            format = "r5g6b5";
+            status = "okay";
+        };
+    };
+};

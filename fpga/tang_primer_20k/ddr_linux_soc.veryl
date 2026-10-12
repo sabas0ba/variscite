@@ -4,24 +4,27 @@ module DdrLinuxSoc #(
     param ROM_INIT: string = "sim/tang_boot.hex",
     param CLK_HZ  : u32    = 27_000_000         ,
     param UART_DIV: u32    = 15                 ,
+    param WITH_LCD: u32    = 0                  ,
 ) (
-    i_cpu_clk  : input  'cpu   clock                ,
-    i_mem_clk  : input  'mem   clock                ,
-    i_reset    : input  'async reset_async_high     ,
-    i_enable   : input  'mem   logic                ,
-    i_uart_rx  : input  'cpu   logic                ,
-    o_uart_tx  : output 'cpu   logic                ,
-    o_shutdown : output 'cpu   logic                ,
-    o_exit_code: output 'cpu   logic           <32> ,
-    o_req_valid: output 'mem   logic                ,
-    i_req_ready: input  'mem   logic                ,
-    o_req_addr : output 'mem   logic           <27> ,
-    o_req_wdata: output 'mem   logic           <128>,
-    o_req_wstrb: output 'mem   logic           <16> ,
-    i_rsp_valid: input  'mem   logic                ,
-    o_rsp_ready: output 'mem   logic                ,
-    i_rsp_data : input  'mem   logic           <128>,
-    i_rsp_error: input  'mem   logic                ,
+    i_cpu_clk       : input  'cpu   clock                ,
+    i_mem_clk       : input  'mem   clock                ,
+    i_reset         : input  'async reset_async_high     ,
+    i_enable        : input  'mem   logic                ,
+    i_uart_rx       : input  'cpu   logic                ,
+    o_uart_tx       : output 'cpu   logic                ,
+    o_shutdown      : output 'cpu   logic                ,
+    o_exit_code     : output 'cpu   logic           <32> ,
+    o_display_enable: output 'cpu   logic                ,
+    i_display_error : input  'cpu   logic           <2>  ,
+    o_req_valid     : output 'mem   logic                ,
+    i_req_ready     : input  'mem   logic                ,
+    o_req_addr      : output 'mem   logic           <27> ,
+    o_req_wdata     : output 'mem   logic           <128>,
+    o_req_wstrb     : output 'mem   logic           <16> ,
+    i_rsp_valid     : input  'mem   logic                ,
+    o_rsp_ready     : output 'mem   logic                ,
+    i_rsp_data      : input  'mem   logic           <128>,
+    i_rsp_error     : input  'mem   logic                ,
 ) {
     #[sv("async_reg = \"true\"")]
     var enable_sync: 'cpu logic<2>;
@@ -64,21 +67,34 @@ module DdrLinuxSoc #(
     let rom_hit    : 'cpu logic     = addr[31:12] == 20'h00001;
     let uart_hit   : 'cpu logic     = addr[31:5] == 27'h0800000;
     let syscon_hit : 'cpu logic     = addr == 32'h11100000;
-    let local_hit  : 'cpu logic     = rom_hit || uart_hit || syscon_hit;
+    let display_hit: 'cpu logic     = WITH_LCD != 0 && addr == 32'h11200000;
+    let local_hit  : 'cpu logic     = rom_hit || uart_hit || syscon_hit || display_hit;
     let local_start: 'cpu logic     = valid && local_hit && !local_ready;
     let ready      : 'cpu logic     = if local_hit ? local_ready : ddr_ready;
     let error      : 'cpu logic     = if local_hit ? rom_hit && wstrb != 0 : ddr_error;
     let rdata      : 'cpu logic<32> = if rom_hit ? rom_data : if local_hit ? held_data : ddr_data;
     always_ff (i_cpu_clk, cpu_reset) {
         if_reset {
-            local_ready = 0;
-            held_data   = 0;
-            o_shutdown  = 0;
-            o_exit_code = 0;
+            local_ready      = 0;
+            held_data        = 0;
+            o_shutdown       = 0;
+            o_exit_code      = 0;
+            o_display_enable = 0;
         } else {
             local_ready = local_start;
             if local_start {
-                held_data = if uart_hit ? uart_data : o_exit_code;
+                held_data = if uart_hit ?
+                    uart_data
+                : if display_hit ?
+                    {29'b0, i_display_error, o_display_enable}
+                :
+                    o_exit_code
+                ;
+                // Enable is sticky until common reset; software initializes the
+                // complete framebuffer before setting bit 0. Other bits are RO.
+                if display_hit && wstrb[0] && wdata[0] {
+                    o_display_enable = 1;
+                }
                 if syscon_hit && wstrb == 4'hf && !o_shutdown {
                     o_exit_code = wdata;
                     o_shutdown  = 1;

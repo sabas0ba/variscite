@@ -9,6 +9,7 @@ param(
     [string]$ExpectedText='',
     [string]$ConsoleCommand='',
     [string]$CommandExpectedText='',
+    [ValidateSet('Uart','Lcd')][string]$Platform='Uart',
     [switch]$KeepRunning
 )
 Set-StrictMode -Version Latest
@@ -20,6 +21,7 @@ if ($CommandExpectedText -and -not $ConsoleCommand) { throw 'CommandExpectedText
 if ($ConsoleCommand -match '[\r\n\x00-\x1f\x7f-\uffff]') { throw 'ConsoleCommand must be one printable ASCII line' }
 $root=Split-Path -Parent $PSScriptRoot
 $bitstream=Join-Path $root 'sim/fpga/linux_boot/impl/pnr/linux_boot.fs'
+if ($Platform -eq 'Lcd') { $bitstream=Join-Path $root 'sim/fpga/linux_lcd/impl/pnr/linux_lcd.fs' }
 $lcd=Join-Path $root 'sim/fpga/lcd_soc/soc.fs'
 $knownLcd='40bac365ce8f971d240ac5aa6a2e4c69c1fff5579c6dbbb2afe4f97662b9eb0a'
 if (-not $KeepRunning -and (Get-FileHash $lcd -Algorithm SHA256).Hash.ToLowerInvariant() -ne $knownLcd) {

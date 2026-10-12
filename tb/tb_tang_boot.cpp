@@ -1,6 +1,12 @@
 // Standalone top for ROM/clock parameters and a sparse, delayed DDR backend.
 // Runs the real CPU and bit-level UART; no memory-port or ROM instruction bypass.
+#ifdef CACHED_BOOT
+#include "Vtb_tang_cached_boot.h"
+using BootDut = Vtb_tang_cached_boot;
+#else
 #include "Vrv32ima_DdrLinuxSoc.h"
+using BootDut = Vrv32ima_DdrLinuxSoc;
+#endif
 #include "verilated.h"
 #include <algorithm>
 #include <array>
@@ -38,13 +44,14 @@ static Bytes packet(char command, uint32_t address, const Bytes &data) {
 
 class Bench {
 public:
-    Vrv32ima_DdrLinuxSoc dut;
+    BootDut dut;
     std::unordered_map<uint32_t, std::array<uint8_t,16>> memory;
     std::deque<uint8_t> received;
     uint64_t ticks=0, transactions=0;
     bool inject_error=false;
     static constexpr unsigned bit_cycles=240;
     unsigned host_bit_cycles=240;
+    unsigned response_budget=3000000;
     void step() {
         bool mem_rise=!(ticks&1), cpu_rise=ticks%4==0;
         bool req=mem_rise && dut.o_req_valid && dut.i_req_ready;
@@ -82,12 +89,13 @@ public:
             }
         }
         dut.eval(); ++ticks;
-        check(ticks<100000000, "simulation timeout");
+        check(ticks<600000000, "simulation timeout");
     }
     void cycles(unsigned n) { for (unsigned i=0;i<n*4;++i) step(); }
     void reset() {
-        dut.i_reset=1; dut.i_enable=0; dut.i_uart_rx=1;
+        dut.i_reset=1; dut.i_enable=0; dut.i_uart_rx=1; dut.i_display_error=0;
         cycles(12); dut.i_reset=0;
+        check(!dut.o_display_enable, "display enable survived reset");
         received.clear(); tx_state=0; previous_tx=1;
     }
     void send(const Bytes &data) {
@@ -98,7 +106,7 @@ public:
         }
     }
     uint8_t get() {
-        for (unsigned i=0; received.empty() && i<3000000; ++i) step();
+        for (unsigned i=0; received.empty() && i<response_budget; ++i) step();
         if (received.empty()) {
             std::cerr << "ticks=" << ticks << " requests=" << transactions
                       << " shutdown=" << unsigned(dut.o_shutdown) << " code=" << std::hex << dut.o_exit_code << '\n';
@@ -128,11 +136,24 @@ int main(int argc, char **argv) {
     try {
         check(crc32(Bytes{'1','2','3','4','5','6','7','8','9'})==0xcbf43926u, "CRC reference");
         Bench b;
-        if (argc==2) b.host_bit_cycles=std::stoul(argv[1]);
+        if (argc>=2) b.host_bit_cycles=std::stoul(argv[1]);
+        bool lcd=argc>=3 && std::string(argv[2])=="lcd";
+        if(lcd) b.response_budget=200000000;
         b.reset(); b.cycles(1000);
         check(b.transactions==0 && b.received.empty(), "CPU ran before training");
         b.dut.i_enable=1;
         b.expect("VBL1\n");
+        if(lcd) {
+            check(b.dut.o_display_enable, "LCD ROM did not enable scanout");
+            const uint16_t colors[8]={0xffff,0xffe0,0x07ff,0x07e0,0xf81f,0xf800,0x001f,0};
+            for(unsigned pixel=0;pixel<800*480;++pixel) {
+                uint32_t address=0x07c00000+pixel*2;
+                const auto &bytes=b.memory.at(address&~15u);
+                unsigned lane=address&15;
+                check((bytes[lane]|(uint16_t(bytes[lane+1])<<8))==colors[(pixel%800)/100], "ROM framebuffer pattern");
+            }
+            b.dut.i_display_error=3;
+        }
         std::cout << "Boot banner received\n";
         Bytes data{0xaa,0x55,0xcc,0x33};
         auto damaged=packet('W',0x80000000,data); damaged.back()^=1;
@@ -143,7 +164,7 @@ int main(int argc, char **argv) {
         b.send(packet('W',0x87e0ffff,data)); b.expect("E");
         b.send(packet('W',0xfffffffcu,data)); b.expect("E");
         b.send(packet('?',0x80000000,data)); b.expect("E");
-        std::ifstream stream("sim/tang_boot_payload.bin",std::ios::binary);
+        std::ifstream stream(lcd ? "sim/tang_boot_lcd_payload.bin" : "sim/tang_boot_payload.bin",std::ios::binary);
         check(bool(stream), "missing payload");
         Bytes image((std::istreambuf_iterator<char>(stream)),{});
         Bytes dtb(40,0); dtb[0]=0xd0; dtb[1]=0x0d; dtb[2]=0xfe; dtb[3]=0xed;
@@ -162,6 +183,7 @@ int main(int argc, char **argv) {
         b.reset(); b.inject_error=true; b.dut.i_enable=1;
         for (unsigned i=0;!b.dut.o_shutdown && i<100000;++i) b.step();
         check(b.dut.o_shutdown && b.dut.o_exit_code==0xbad, "DDR error did not trap");
+        if(lcd) std::cout << "LCD boot PASS: complete RGB565 initialization, enable/status, masks, sticky enable, reset\n";
         std::cout << "Tang boot PASS: UART upload, CRC/range rejection, entry ABI, DDR, timer, PLIC, reset/error\n";
     } catch (const std::exception &error) {
         std::cerr << error.what() << '\n'; return 1;

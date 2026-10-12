@@ -8,6 +8,9 @@
 #define MAGIC 0x314c4256u /* "VBL1", little endian */
 #define MAX_PAYLOAD 256u
 #define UART ((volatile uint32_t *)0x10000000u)
+#ifndef WITH_LCD
+#define WITH_LCD 0
+#endif
 
 extern void boot_jump(void) __attribute__((noreturn));
 
@@ -64,6 +67,18 @@ void boot_main(void)
     /* Word alignment also permits reading the 16-byte boot manifest. */
     uint32_t buffer[MAX_PAYLOAD / 4];
     uint8_t *bytes = (uint8_t *)buffer;
+    if (WITH_LCD) {
+        static const uint16_t colors[8] = {
+            0xffff, 0xffe0, 0x07ff, 0x07e0, 0xf81f, 0xf800, 0x001f, 0
+        };
+        volatile uint32_t *fb = (volatile uint32_t *)0x87c00000u;
+        for (unsigned y = 0; y < 480; ++y)
+            for (unsigned bar = 0; bar < 8; ++bar)
+                for (unsigned x = 0; x < 50; ++x)
+                    *fb++ = colors[bar] | ((uint32_t)colors[bar] << 16);
+        __asm__ volatile ("fence iorw, iorw" ::: "memory");
+        *(volatile uint32_t *)0x11200000u = 1;
+    }
     put_byte('V'); put_byte('B'); put_byte('L'); put_byte('1'); put_byte('\n');
     for (;;) {
         uint32_t sync = 0;

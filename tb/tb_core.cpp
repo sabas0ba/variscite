@@ -31,6 +31,7 @@
 //   +trace=<path>     VCD waveform output (optional)
 //   +covfile=<path>   coverage output (default: coverage.dat)
 //   +progress=<n>     print progress to stderr every n cycles (0: off)
+//   +fb_capture=<prefix>  save Tang RGB565 RAM after fbui ready/updated markers
 
 #include <cstdint>
 #include <cstdio>
@@ -99,6 +100,9 @@ int main(int argc, char** argv) {
     const std::string conlog_path = plusarg_str("conlog");
     const std::string trace_path = plusarg_str("trace");
     const std::string cov_path = plusarg_str("covfile");
+    const std::string fb_capture = plusarg_str("fb_capture");
+    std::string uart_line;
+    unsigned fb_sequence = 0;
 
     if (bin_path.empty()) {
         std::fprintf(stderr, "usage: +bin=<path>|+kernel=<path> [+tohost=<hex>] "
@@ -118,6 +122,10 @@ int main(int argc, char** argv) {
     const uint32_t mem_size = static_cast<uint32_t>(plusarg_u64("ramsize_mb", 4)) << 20;
 
     std::vector<uint32_t> mem(mem_size / 4, 0);
+    if (!fb_capture.empty() && mem_size < 0x07cbb800u) {
+        std::fprintf(stderr, "error: framebuffer capture requires 128 MiB RAM\n");
+        return 2;
+    }
     std::vector<uint32_t> rom(kRomSize / 4, 0);
 
     if (!load_file(bin_path, mem.data(), mem_size, nullptr)) {
@@ -252,6 +260,30 @@ int main(int argc, char** argv) {
                     std::fputc(static_cast<char>(v), stdout);
                     std::fflush(stdout);
                     if (conlog) std::fputc(static_cast<char>(v), conlog);
+                    if (!fb_capture.empty()) {
+                        if (v == '\n') {
+                            if (uart_line == "fbui: ready" || uart_line == "fbui: updated") {
+                                std::vector<uint8_t> frame(800 * 480 * 2);
+                                for (size_t i = 0; i < frame.size(); ++i) {
+                                    uint32_t address = 0x07c00000u + i;
+                                    frame[i] = mem[address / 4] >> ((address % 4) * 8);
+                                }
+                                std::string path = fb_capture + "-" + std::to_string(fb_sequence++) + ".rgb565";
+                                std::FILE *output = std::fopen(path.c_str(), "wb");
+                                if (!output) { exit_code = 2; done = true; }
+                                else {
+                                    if (std::fwrite(frame.data(), 1, frame.size(), output) != frame.size()) {
+                                        exit_code = 2; done = true;
+                                    }
+                                    if (std::fclose(output)) { exit_code = 2; done = true; }
+                                }
+                            }
+                            uart_line.clear();
+                        } else if (v != '\r') {
+                            uart_line += static_cast<char>(v);
+                            if (uart_line.size() > 128) uart_line.erase(0, uart_line.size() - 128);
+                        }
+                    }
                 }
                 break;
             case 1:

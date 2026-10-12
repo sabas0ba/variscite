@@ -9,8 +9,11 @@ import time
 
 
 def main():
+    lcd_gui = len(sys.argv) > 1 and sys.argv[1] == "--lcd-gui"
+    if lcd_gui:
+        del sys.argv[1]
     if len(sys.argv) < 2:
-        raise SystemExit("usage: linux_console_test.py simulator [arguments...]")
+        raise SystemExit("usage: linux_console_test.py [--lcd-gui] simulator [arguments...]")
     # Each stage must produce its own marker followed by a shell prompt.
     # A fixed sleep can send input before /init is ready on a busy host.
     stages = [
@@ -19,6 +22,14 @@ def main():
         (b"donut: 24 frames rendered", b"veryl$ ", b"poweroff\n"),
         (b"reboot: Power down", b"[tb] SYSCON poweroff", None),
     ]
+    if lcd_gui:
+        stages[:1] = [
+            (b"userspace is alive", b"veryl$ ", b"gui\n"),
+            (b"fbui: drawing", b"fbui: ready", b"g\n"),
+            (b"fbui: updated", b"\n", b"d\n"),
+            (b"fbui: updated", b"\n", b"q\n"),
+            (b"fbui: done", b"veryl$ ", b"mandel\n"),
+        ]
     process = subprocess.Popen(
         sys.argv[1:], stdin=subprocess.PIPE, stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT, bufsize=0,
@@ -64,6 +75,8 @@ def main():
         if status or stage != len(stages):
             raise RuntimeError(f"Linux console failed: exit={status}, stages={stage}/{len(stages)}")
         print("[linux-console] PASS: /init, mandel, donut 24 frames, poweroff")
+        if lcd_gui:
+            print("[linux-console] PASS: framebuffer GUI startup, color, movement, child exit")
     finally:
         if process.poll() is None:
             process.terminate()
