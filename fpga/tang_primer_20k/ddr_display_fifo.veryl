@@ -1,0 +1,114 @@
+/// 256 burst dual-clock FIFO plus one read-side output register.
+/// Gray pointers cross through two synchronizer stages. Constrain the skew
+/// and maximum delay of each Gray bus to less than its source clock period.
+/// RAM is not reset; ownership pointers prevent access to invalid contents.
+/// Both domains require the same asynchronous reset. Release is synchronized
+/// separately, including when either clock was stopped during reset.
+module DdrDisplayFifo #(
+    param WIDTH: u32 = 128,
+) (
+    i_mem_clk  : input  'mem   clock                  ,
+    i_pixel_clk: input  'pixel clock                  ,
+    i_reset    : input  'async reset_async_high       ,
+    i_valid    : input  'mem   logic                  ,
+    o_ready    : output 'mem   logic                  ,
+    i_data     : input  'mem   logic           <WIDTH>,
+    /// RAM occupancy (excludes the prefetched read-side output register).
+    o_level: output 'mem   logic<9>    ,
+    o_valid: output 'pixel logic       ,
+    i_ready: input  'pixel logic       ,
+    o_data : output 'pixel logic<WIDTH>,
+) {
+    var memory      : 'mem   logic<WIDTH> [256];
+    var write_binary: 'mem   logic<9>          ;
+    var write_gray  : 'mem   logic<9>          ;
+    var read_binary : 'pixel logic<9>          ;
+    var read_gray   : 'pixel logic<9>          ;
+    #[sv("async_reg = \"true\"")]
+    var read_sync1: 'mem logic<9>;
+    #[sv("async_reg = \"true\"")]
+    var read_sync2: 'mem logic<9>;
+    #[sv("async_reg = \"true\"")]
+    var write_sync1: 'pixel logic<9>;
+    #[sv("async_reg = \"true\"")]
+    var write_sync2: 'pixel logic<9>;
+    #[sv("async_reg = \"true\"")]
+    var mem_release: 'mem logic<2>;
+    #[sv("async_reg = \"true\"")]
+    var pixel_release: 'pixel logic           <2>;
+    let mem_reset    : 'mem   reset_async_high    = (!mem_release[1]) as reset_async_high;
+    let pixel_reset  : 'pixel reset_async_high    = (!pixel_release[1]) as reset_async_high;
+    let full         : 'mem   logic               = write_gray == {~read_sync2[8:7], read_sync2[6:0]};
+    let empty        : 'pixel logic               = read_gray == write_sync2;
+    let next_write   : 'mem   logic           <9> = (write_binary + 9'd1) as 9;
+    let next_read    : 'pixel logic           <9> = (read_binary + 9'd1) as 9;
+    let read_xor1    : 'mem   logic           <9> = read_sync2 ^ (read_sync2 >> 1);
+    let read_xor2    : 'mem   logic           <9> = read_xor1 ^ (read_xor1 >> 2);
+    let read_xor4    : 'mem   logic           <9> = read_xor2 ^ (read_xor2 >> 4);
+    let read_decoded : 'mem   logic           <9> = read_xor4 ^ (read_xor4 >> 8);
+    assign o_level = write_binary - read_decoded;
+    assign o_ready = !mem_reset && !full;
+    let load: 'pixel logic = !pixel_reset && !empty && (!o_valid || i_ready);
+
+    unsafe (cdc) {
+        always_ff (i_mem_clk, i_reset) {
+            if_reset {
+                mem_release = 0;
+            } else {
+                mem_release = {mem_release[0], 1'b1};
+            }
+        }
+        always_ff (i_pixel_clk, i_reset) {
+            if_reset {
+                pixel_release = 0;
+            } else {
+                pixel_release = {pixel_release[0], 1'b1};
+            }
+        }
+        always_ff (i_mem_clk, mem_reset) {
+            if_reset {
+                write_binary = 0;
+                write_gray   = 0;
+                read_sync1   = 0;
+                read_sync2   = 0;
+            } else {
+                read_sync1 = read_gray;
+                read_sync2 = read_sync1;
+                if i_valid && o_ready {
+                    write_binary = next_write;
+                    write_gray   = next_write ^ (next_write >> 1);
+                }
+            }
+        }
+        always_ff (i_pixel_clk, pixel_reset) {
+            if_reset {
+                read_binary = 0;
+                read_gray   = 0;
+                write_sync1 = 0;
+                write_sync2 = 0;
+                o_valid     = 0;
+            } else {
+                write_sync1 = write_gray;
+                write_sync2 = write_sync1;
+                if load {
+                    read_binary = next_read;
+                    read_gray   = next_read ^ (next_read >> 1);
+                    o_valid     = 1;
+                } else if i_ready {
+                    o_valid = 0;
+                }
+            }
+        }
+        // Separate reset-free synchronous ports allow block RAM inference.
+        always_ff (i_mem_clk) {
+            if i_valid && o_ready {
+                memory[write_binary[7:0]] = i_data;
+            }
+        }
+        always_ff (i_pixel_clk) {
+            if load {
+                o_data = memory[read_binary[7:0]];
+            }
+        }
+    }
+}

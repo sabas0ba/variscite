@@ -14,7 +14,7 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
 all: lint veryl-test plic-multi-test core-bus-error-test linux-console-test tb isa-build run-isa cov-test cov-check \
      cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test \
      ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test \
-     ddr-burst-controller-test ddr-controller-probe-test
+     ddr-burst-controller-test ddr-controller-probe-test ddr-display-test
 
 lint:
 	@test -z "$$(find src fpga -type f \( -name '*.sv' -o -name '*.v' \))" || \
@@ -193,6 +193,46 @@ ddr-burst-controller-test: veryl-build
 	    -Mdir sim/obj_ddr_burst_controller -o tb_ddr_burst_controller \
 	    target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_burst_controller.sv
 	sim/obj_ddr_burst_controller/tb_ddr_burst_controller
+
+.PHONY: ddr-display-test
+ddr-display-test: veryl-build ddr-display-fifo-test ddr-lcd-pixels-test ddr-lcd-stream-test
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_display \
+	    -Mdir sim/obj_ddr_display -o tb_ddr_display \
+	    target/tang_primer_20k/ddr_burst_arbiter.sv target/tang_primer_20k/ddr_frame_reader.sv \
+	    target/tang_primer_20k/ddr_display_fifo.sv target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_display.sv
+	sim/obj_ddr_display/tb_ddr_display
+
+.PHONY: ddr-lcd-stream-test
+ddr-lcd-stream-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_lcd_stream \
+	    -Mdir sim/obj_ddr_lcd_stream -o tb_ddr_lcd_stream \
+	    target/tang_primer_20k/ddr_lcd_stream.sv target/tang_primer_20k/ddr_burst_arbiter.sv \
+	    target/tang_primer_20k/ddr_frame_reader.sv target/tang_primer_20k/ddr_display_fifo.sv \
+	    target/tang_primer_20k/ddr_lcd_pixels.sv target/tang_primer_20k/lcd_timing.sv \
+	    target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_lcd_stream.sv
+	sim/obj_ddr_lcd_stream/tb_ddr_lcd_stream
+
+.PHONY: ddr-lcd-pixels-test
+ddr-lcd-pixels-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_lcd_pixels \
+	    -Mdir sim/obj_ddr_lcd_pixels -o tb_ddr_lcd_pixels \
+	    target/tang_primer_20k/lcd_timing.sv target/tang_primer_20k/ddr_lcd_pixels.sv tb/tb_ddr_lcd_pixels.sv
+	sim/obj_ddr_lcd_pixels/tb_ddr_lcd_pixels
+
+.PHONY: ddr-display-fifo-test
+ddr-display-fifo-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_display_fifo \
+	    -Mdir sim/obj_ddr_display_fifo -o tb_ddr_display_fifo \
+	    target/tang_primer_20k/ddr_display_fifo.sv tb/tb_ddr_display_fifo.sv
+	sim/obj_ddr_display_fifo/tb_ddr_display_fifo
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_display_fifo -GMEM_HALF=19 -GPIXEL_HALF=5 \
+	    -Mdir sim/obj_ddr_display_fifo_slow -o tb_ddr_display_fifo \
+	    target/tang_primer_20k/ddr_display_fifo.sv tb/tb_ddr_display_fifo.sv
+	sim/obj_ddr_display_fifo_slow/tb_ddr_display_fifo
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_display_fifo -GMEM_HALF=7 -GPIXEL_HALF=11 \
+	    -Mdir sim/obj_ddr_display_fifo_phase -o tb_ddr_display_fifo \
+	    target/tang_primer_20k/ddr_display_fifo.sv tb/tb_ddr_display_fifo.sv
+	sim/obj_ddr_display_fifo_phase/tb_ddr_display_fifo
 
 .PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test ddr-timeline-test ddr-full-timeline-test ddr-status-uart-test
 

@@ -14,7 +14,10 @@ RTL は DDR3 制御、LCD 読み出し、基板トップまで Veryl で実装�
 追加し、2026-10-12に実機でLinuxの`/init`、UARTシェルと`help`応答、別プロセスによる
 donut 24 frameのUART描画を確認した。
 最新の構成・結果は[UARTブート](tang-uart-boot.md)を参照する。
-Linux用フレームバッファは未実装である。以下にはDDR検証段階の記録を残す。
+DDRからLCDへ連続読み出しする経路はVerylで実装し、CPUとの仲裁・非同期FIFO・RGB565出力まで
+結合シミュレーションと単体合成を通過した。[表示経路の検証記録](tang-ddr-display.md)を参照する。
+Linux用framebuffer予約、基板トップへの接続・配置配線・実機表示、fbconは未実装である。
+以下にはDDR検証段階の記録を残す。
 
 ## DDR基礎実装の範囲 (PR #5)
 
