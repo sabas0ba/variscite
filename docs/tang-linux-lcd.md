@@ -9,10 +9,19 @@
 ブートログを表示した後、Linux のユーザプロセスから GUI を描画する。
 RTL は DDR3 制御、LCD 読み出し、基板トップまで Veryl で実装する。
 
-現在の実機はオンチップ RAM 32 KiB とベアメタルの矩形表示で動作している。
-Linux はシミュレータ上で起動済みである。実機のCPU診断回路ではDDR3の全容量走査と命令実行が
-成功した。Linux用SoCへの統合、カーネル転送、Linux用フレームバッファは未実装である。
-DDR3は下記の診断回路で実機検証を進めている。
+従来のLCDデモはオンチップ RAM 32 KiB とベアメタルの矩形表示で動作する。
+実機のCPU診断回路ではDDR3の全容量走査と命令実行が成功した。Linux用SoCとUARTブートROMを
+追加し、2026-10-12に実機でLinuxの`/init`、UARTシェルと`help`応答、別プロセスによる
+donut 24 frameのUART描画を確認した。
+最新の構成・結果は[UARTブート](tang-uart-boot.md)を参照する。
+DDRからLCDへ連続読み出しする経路はVerylで実装し、CPUとの仲裁・非同期FIFO・RGB565出力まで
+結合シミュレーションを通過した。Linux用回路へ接続し、全体の配置配線でsetup/hold違反0を確認した。
+framebuffer予約、fbconと`/dev/fb0`へ描画する最小GUIも実装した。
+LCD統合版も実機でshellへ到達し、GUIの色変更・移動・終了／再起動と表示errorなしを確認した。
+2026-10-13に利用者が実機LCD上でブートログの文字を視認した。
+ブートログとGUIの画素内容はシミュレーションでも照合している。GUI画面の実機目視は未確認である。
+最新の試験範囲と実機結果は[表示経路の検証記録](tang-ddr-display.md)を参照する。
+以下にはDDR検証段階の記録を残す。
 
 ## DDR基礎実装の範囲 (PR #5)
 
@@ -68,6 +77,8 @@ git ignoreされた`logs/board/`、`sim/fpga/`に保存し、測定時のSHA256�
 | Coreを含むDDRアクセス | Core・ROM・CDC・controller・PHYを接続。全容量mixed/反転値・DDR命令実行と、部分書込み・境界・LR/SC・全AMOの実機試験が成功 |
 | 配置配線・実機再現性 | 記載した合格bitstreamはsetup/hold違反0。制約・SHA256・繰返し実行結果を記録。切替回路修正後もCPU全容量回帰が成功 |
 | 再現手順・自動試験・PR | 試験をmake/CIへ組込み、README・本書・Draft PR #6へ結果と未実装範囲を記録。CI結果待ちは行わない |
+
+以下はPR #6完了時点の作業順序である。現在の実装ステータスは冒頭とREADMEを参照する。
 
 1. DDR controllerの単体・独立実機検証は下記のとおり完了した。
    応答待ち中にもrefresh期限を守ること、timeoutやreset時の扱いを検証した。

@@ -3,3 +3,5 @@
 # parsing, yosys's script reader and `veryl fmt --check`, so the working tree
 # keeps LF on Windows too, regardless of the user's core.autocrlf.
 * text=auto eol=lf
+# Unified-diff context prefixes existing tabs and empty lines with a space.
+container/openfpgaloader/*.patch whitespace=-blank-at-eol,-space-before-tab

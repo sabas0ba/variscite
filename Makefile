@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 
 RISCV_PREFIX ?= riscv-none-elf-
+LINUX_SRC    ?= /opt/src/linux
 TESTS_DIR    := third_party/riscv-tests/isa
 SIM          := sim/tb_core
 TESTS        := $(shell scripts/list_tests.sh)
@@ -11,10 +12,11 @@ RTL          := target/rv_pkg.sv target/alu.sv target/core.sv target/clint.sv \
         run-isa cov-test coverage cov-check cosim linux-build linux-boot \
         fpga-fw fpga-sim por-test lcd-test fpga-lcd fpga-tang fpga-tang-prog fpga-arty fpga-arty-prog clean
 
-all: lint veryl-test plic-multi-test core-bus-error-test tb isa-build run-isa cov-test cov-check \
+all: lint veryl-test plic-multi-test core-bus-error-test linux-console-test tb isa-build run-isa cov-test cov-check \
      cosim fpga-sim por-test lcd-test lcd-mmio-test lcd-reset-test lcd-soc-test \
      ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-status-uart-test \
-     ddr-burst-controller-test ddr-controller-probe-test
+     ddr-burst-controller-test ddr-controller-probe-test ddr-display-test tang-lcd-boot-test \
+     usb-host-test usb-hid-test sd-spi-test sd-boot-test tang-sd-boot-test pmp-two-test
 
 lint:
 	@test -z "$$(find src fpga -type f \( -name '*.sv' -o -name '*.v' \))" || \
@@ -86,6 +88,20 @@ run-isa:
 
 DIRECTED_TESTS := coverage_boost irq_test umode_test pmp_test clint_plic_test
 
+# Explicit top is required for parameter overrides; veryl test uses multiple tops.
+.PHONY: pmp-two-test
+pmp-two-test: veryl-build
+	mkdir -p sim
+	verilator --cc --exe --build -O2 --top-module rv32ima_Soc -GPMP_ENTRIES=2 \
+	    -Mdir sim/obj_pmp_two -o pmp_two $(RTL) tb/tb_core.cpp
+	$(RISCV_PREFIX)gcc -march=rv32g -mabi=ilp32 -static -mcmodel=medany \
+	    -fvisibility=hidden -nostdlib -nostartfiles \
+	    -Ithird_party/riscv-tests/env/p -Ithird_party/riscv-tests/isa/macros/scalar \
+	    -Tthird_party/riscv-tests/env/p/link.ld tests/pmp_two_test.S -o sim/pmp_two_test.elf
+	$(RISCV_PREFIX)objcopy -O binary sim/pmp_two_test.elf sim/pmp_two_test.bin
+	sim/obj_pmp_two/pmp_two +bin=sim/pmp_two_test.bin \
+	    +tohost=$$($(RISCV_PREFIX)nm sim/pmp_two_test.elf | awk '$$3 == "tohost" { print $$1 }')
+
 # clint_plic_test runs with a divided mtime tick so that the CLINT counter is
 # exercised on both the ticking and the idle cycle.
 
@@ -146,7 +162,49 @@ ddr-word-probe-test: veryl-build ddr-full-probe-test
 	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_word_probe.sv tb/tb_ddr_word_probe.sv
 	sim/obj_ddr_word_probe/tb_ddr_word_probe
 
-.PHONY: ddr-cpu-access-test
+.PHONY: tang-boot-test ddr-cpu-access-test
+.PHONY: tang-lcd-boot-test
+tang-lcd-boot-test: veryl-build
+	WITH_LCD=1 bash scripts/build_tang_boot.sh
+	riscv-none-elf-gcc -DWITH_LCD=1 -march=rv32ima_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+	    -Wl,-Ttext=0x80000000,-e,_start,--build-id=none tests/tang_boot_payload.S -o sim/tang_boot_lcd_payload.elf
+	riscv-none-elf-objcopy -O binary sim/tang_boot_lcd_payload.elf sim/tang_boot_lcd_payload.bin
+	verilator --cc --exe --build -Wno-fatal --top-module rv32ima_DdrLinuxSoc \
+	    -GWITH_LCD=1 '-GROM_INIT="sim/tang_boot_lcd.hex"' \
+	    -Mdir sim/obj_tang_lcd_boot -o tang_lcd_boot \
+	    $(RTL) target/ram.sv target/uart.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_linux_soc.sv \
+	    $(CURDIR)/tb/tb_tang_boot.cpp
+	sim/obj_tang_lcd_boot/tang_lcd_boot 240 lcd
+	verilator --cc --exe --build -Wno-fatal --top-module tb_tang_cached_boot \
+	    -CFLAGS -DCACHED_BOOT -Mdir sim/obj_tang_cached_boot -o tang_cached_boot \
+	    $(RTL) target/ram.sv target/uart.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_linux_soc.sv \
+	    target/tang_primer_20k/ddr_burst_read_cache.sv tb/tb_tang_cached_boot.sv \
+	    $(CURDIR)/tb/tb_tang_boot.cpp
+	sim/obj_tang_cached_boot/tang_cached_boot 240 lcd
+	verilator --cc --exe --build -Wno-fatal --top-module tb_tang_cached_boot -GWITH_IO=1 \
+	    -CFLAGS -DCACHED_BOOT -Mdir sim/obj_tang_io_boot -o tang_io_boot \
+	    $(RTL) target/ram.sv target/uart.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_linux_soc.sv \
+	    target/tang_primer_20k/ddr_burst_read_cache.sv tb/tb_tang_cached_boot.sv \
+	    $(CURDIR)/tb/tb_tang_boot.cpp
+	sim/obj_tang_io_boot/tang_io_boot 240 lcd
+
+tang-boot-test: veryl-build
+	bash scripts/build_tang_boot.sh
+	riscv-none-elf-gcc -march=rv32ima_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+	    -Wl,-Ttext=0x80000000,-e,_start,--build-id=none tests/tang_boot_payload.S -o sim/tang_boot_payload.elf
+	riscv-none-elf-objcopy -O binary sim/tang_boot_payload.elf sim/tang_boot_payload.bin
+	verilator --cc --exe --build -Wno-fatal --top-module rv32ima_DdrLinuxSoc \
+	    -Mdir sim/obj_tang_boot -o tang_boot \
+	    $(RTL) target/ram.sv target/uart.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_linux_soc.sv \
+	    $(CURDIR)/tb/tb_tang_boot.cpp
+	sim/obj_tang_boot/tang_boot
+	sim/obj_tang_boot/tang_boot 234
+	sim/obj_tang_boot/tang_boot 246
+
 ddr-cpu-access-test: veryl-build
 	CPU_PROGRAM=access bash scripts/build_ddr_cpu.sh
 	verilator --binary --timing -Wno-fatal --top-module tb_ddr_cpu_access \
@@ -168,7 +226,7 @@ ddr-cpu-probe-test: veryl-build
 	    tb/tb_ddr_cpu_probe.sv
 	sim/obj_ddr_cpu_probe/ddr_cpu_probe
 
-ddr-controller-probe-test: veryl-build ddr-word-probe-test ddr-cpu-port-test ddr-cpu-probe-test ddr-cpu-access-test
+ddr-controller-probe-test: veryl-build ddr-word-probe-test ddr-cpu-port-test ddr-cpu-probe-test ddr-cpu-access-test tang-boot-test
 	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_controller_probe \
 	    -Mdir sim/obj_ddr_controller_probe -o tb_ddr_controller_probe \
 	    target/tang_primer_20k/ddr_burst_controller.sv target/tang_primer_20k/ddr_controller_probe.sv tb/tb_ddr_controller_probe.sv
@@ -179,6 +237,122 @@ ddr-burst-controller-test: veryl-build
 	    -Mdir sim/obj_ddr_burst_controller -o tb_ddr_burst_controller \
 	    target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_burst_controller.sv
 	sim/obj_ddr_burst_controller/tb_ddr_burst_controller
+
+.PHONY: ddr-display-test
+.PHONY: usb-ulpi-test usb-host-test usb-hid-test
+.PHONY: sd-boot-test sd-spi-test
+.PHONY: tang-sd-boot-test
+tang-sd-boot-test: veryl-build
+	WITH_SD=1 bash scripts/build_tang_boot.sh
+	riscv-none-elf-gcc -DWITH_LCD=1 -march=rv32ima_zicsr_zifencei -mabi=ilp32 -nostdlib -nostartfiles \
+	    -Wl,-Ttext=0x80000000,-e,_start,--build-id=none tests/tang_boot_payload.S -o sim/tang_boot_lcd_payload.elf
+	riscv-none-elf-objcopy -O binary sim/tang_boot_lcd_payload.elf sim/tang_boot_lcd_payload.bin
+	verilator --cc --exe --build -Wno-fatal --top-module tb_tang_cached_boot -GWITH_IO=1 -GWITH_SD=1 \
+	    -CFLAGS '-DCACHED_BOOT -DSD_BOOT' -Mdir sim/obj_tang_sd_boot -o tang_sd_boot \
+	    $(RTL) target/ram.sv target/uart.sv target/tang_primer_20k/ddr_word_cdc.sv \
+	    target/tang_primer_20k/ddr_word_port.sv target/tang_primer_20k/ddr_linux_soc.sv \
+	    target/tang_primer_20k/sd_spi_mmio.sv target/tang_primer_20k/ddr_burst_read_cache.sv \
+	    tb/tb_tang_cached_boot.sv $(CURDIR)/tb/tb_tang_boot.cpp
+	sim/obj_tang_sd_boot/tang_sd_boot 240 lcd
+	sim/obj_tang_sd_boot/tang_sd_boot 240 lcd bad-crc
+	sim/obj_tang_sd_boot/tang_sd_boot 240 lcd bad-sector
+	sim/obj_tang_sd_boot/tang_sd_boot 234 lcd bad-sector 200
+
+sd-boot-test:
+	mkdir -p sim
+	$(CC) -std=c11 -Wall -Wextra -Werror -Ifpga/firmware \
+	    fpga/firmware/sd_fat.c tests/sd_fat_test.c -o sim/sd_fat_test
+	sim/sd_fat_test
+
+sd-spi-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_sd_spi_mmio \
+	    -Mdir sim/obj_sd_spi_mmio -o tb_sd_spi_mmio \
+	    target/tang_primer_20k/sd_spi_mmio.sv tb/tb_sd_spi_mmio.sv
+	sim/obj_sd_spi_mmio/tb_sd_spi_mmio
+
+usb-hid-test:
+	mkdir -p sim
+	$(CC) -std=c11 -Wall -Wextra -Werror -Ilinux/user \
+	    linux/user/usb_hid.c tests/usb_hid_test.c -o sim/usb_hid_test
+	sim/usb_hid_test
+	$(CC) -std=c11 -Wall -Wextra -Werror -Ilinux/user \
+	    linux/user/usb_hid.c tests/usb_hub_test.c -o sim/usb_hub_test
+	sim/usb_hub_test
+
+usb-host-test: veryl-build usb-ulpi-test
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_usb_ulpi_input \
+	    -Mdir sim/obj_usb_ulpi_input -o tb_usb_ulpi_input \
+	    target/tang_primer_20k/usb_ulpi_input.sv target/tang_primer_20k/usb_ulpi_link.sv tb/tb_usb_ulpi_input.sv
+	sim/obj_usb_ulpi_input/tb_usb_ulpi_input
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_usb_host_transaction \
+	    -Mdir sim/obj_usb_host_transaction -o tb_usb_host_transaction \
+	    target/tang_primer_20k/usb_ulpi_link.sv target/tang_primer_20k/usb_host_transaction.sv \
+	    tb/tb_usb_host_transaction.sv
+	sim/obj_usb_host_transaction/tb_usb_host_transaction
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_usb_host_mmio \
+	    -Mdir sim/obj_usb_host_mmio -o tb_usb_host_mmio \
+	    target/tang_primer_20k/usb_ulpi_link.sv target/tang_primer_20k/usb_host_transaction.sv \
+	    target/tang_primer_20k/usb_host_mmio.sv tb/tb_usb_host_mmio.sv
+	sim/obj_usb_host_mmio/tb_usb_host_mmio
+
+usb-ulpi-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_usb_ulpi_link \
+	    -Mdir sim/obj_usb_ulpi_link -o tb_usb_ulpi_link \
+	    target/tang_primer_20k/usb_ulpi_link.sv tb/tb_usb_ulpi_link.sv
+	sim/obj_usb_ulpi_link/tb_usb_ulpi_link
+
+ddr-display-test: veryl-build ddr-display-fifo-test ddr-lcd-pixels-test ddr-lcd-stream-test ddr-burst-cache-test
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_display \
+	    -Mdir sim/obj_ddr_display -o tb_ddr_display \
+	    target/tang_primer_20k/ddr_burst_arbiter.sv target/tang_primer_20k/ddr_frame_reader.sv \
+	    target/tang_primer_20k/ddr_display_fifo.sv target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_display.sv
+	sim/obj_ddr_display/tb_ddr_display
+
+.PHONY: ddr-burst-cache-test
+ddr-burst-cache-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_burst_read_cache \
+	    -Mdir sim/obj_ddr_burst_read_cache -o tb_ddr_burst_read_cache \
+	    target/tang_primer_20k/ddr_burst_read_cache.sv tb/tb_ddr_burst_read_cache.sv
+	sim/obj_ddr_burst_read_cache/tb_ddr_burst_read_cache
+
+.PHONY: ddr-lcd-stream-test
+ddr-lcd-stream-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_lcd_stream \
+	    -Mdir sim/obj_ddr_lcd_stream -o tb_ddr_lcd_stream \
+	    target/tang_primer_20k/ddr_lcd_stream.sv target/tang_primer_20k/ddr_burst_arbiter.sv \
+	    target/tang_primer_20k/ddr_frame_reader.sv target/tang_primer_20k/ddr_display_fifo.sv \
+	    target/tang_primer_20k/ddr_lcd_pixels.sv target/tang_primer_20k/lcd_timing.sv \
+	    target/tang_primer_20k/ddr_burst_read_cache.sv target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_lcd_stream.sv
+	sim/obj_ddr_lcd_stream/tb_ddr_lcd_stream
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_lcd_stream -GCACHE=1 \
+	    -Mdir sim/obj_ddr_lcd_cached_stream -o tb_ddr_lcd_cached_stream \
+	    target/tang_primer_20k/ddr_lcd_stream.sv target/tang_primer_20k/ddr_burst_arbiter.sv \
+	    target/tang_primer_20k/ddr_frame_reader.sv target/tang_primer_20k/ddr_display_fifo.sv \
+	    target/tang_primer_20k/ddr_lcd_pixels.sv target/tang_primer_20k/lcd_timing.sv \
+	    target/tang_primer_20k/ddr_burst_read_cache.sv target/tang_primer_20k/ddr_burst_controller.sv tb/tb_ddr_lcd_stream.sv
+	sim/obj_ddr_lcd_cached_stream/tb_ddr_lcd_cached_stream
+
+.PHONY: ddr-lcd-pixels-test
+ddr-lcd-pixels-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_lcd_pixels \
+	    -Mdir sim/obj_ddr_lcd_pixels -o tb_ddr_lcd_pixels \
+	    target/tang_primer_20k/lcd_timing.sv target/tang_primer_20k/ddr_lcd_pixels.sv tb/tb_ddr_lcd_pixels.sv
+	sim/obj_ddr_lcd_pixels/tb_ddr_lcd_pixels
+
+.PHONY: ddr-display-fifo-test
+ddr-display-fifo-test: veryl-build
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_display_fifo \
+	    -Mdir sim/obj_ddr_display_fifo -o tb_ddr_display_fifo \
+	    target/tang_primer_20k/ddr_display_fifo.sv tb/tb_ddr_display_fifo.sv
+	sim/obj_ddr_display_fifo/tb_ddr_display_fifo
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_display_fifo -GMEM_HALF=19 -GPIXEL_HALF=5 \
+	    -Mdir sim/obj_ddr_display_fifo_slow -o tb_ddr_display_fifo \
+	    target/tang_primer_20k/ddr_display_fifo.sv tb/tb_ddr_display_fifo.sv
+	sim/obj_ddr_display_fifo_slow/tb_ddr_display_fifo
+	verilator --binary --timing --timescale 1ns/1ps --top-module tb_ddr_display_fifo -GMEM_HALF=7 -GPIXEL_HALF=11 \
+	    -Mdir sim/obj_ddr_display_fifo_phase -o tb_ddr_display_fifo \
+	    target/tang_primer_20k/ddr_display_fifo.sv tb/tb_ddr_display_fifo.sv
+	sim/obj_ddr_display_fifo_phase/tb_ddr_display_fifo
 
 .PHONY: ddr3-startup-test ddr-word-cdc-test ddr-read-gate-test ddr-mpr-test ddr-mpr-delay-test ddr-mpr-align-test ddr-array-test ddr-array-simple-test ddr-array-early-test ddr-array-gate-test ddr-array-early-scan-test ddr-array-same-test ddr-timeline-test ddr-full-timeline-test ddr-status-uart-test
 
@@ -501,7 +675,33 @@ fpga-arty-prog:
 linux-build:
 	linux/build_linux.sh
 
-linux-boot: tb-fast
+.PHONY: linux-lcd-build linux-lcd-boot
+.PHONY: linux-standalone-build
+linux-standalone-build:
+	WITH_SD=1 bash scripts/build_tang_boot.sh
+	WITH_LCD=1 WITH_USB=1 LINUX_OUT="$(CURDIR)/sim/linux-standalone" linux/build_linux.sh
+	python3 scripts/pack_tang_boot.py sim/linux-standalone/Image \
+	    sim/linux-standalone/tang_primer_20k_lcd.dtb sim/linux-standalone/TANGBOOT.VBL
+
+linux-lcd-build:
+	WITH_LCD=1 LINUX_OUT="$(CURDIR)/sim/linux-lcd-gui" linux/build_linux.sh
+
+linux-lcd-boot: tb-fast linux-console-test
+	mkdir -p logs/linux
+	rm -f $(foreach n,bootlog 0 1 2,logs/linux/fbui-$(n).rgb565 logs/linux/fbui-$(n).png) logs/linux/fbui-bootlog.txt
+	python3 scripts/linux_console_test.py --lcd-gui sim/tb_core_fast \
+	    +kernel=sim/linux-lcd-gui/Image +dtb=sim/linux-lcd-gui/tang_primer_20k_lcd.dtb \
+	    +ramsize_mb=128 +mtimediv=64 +timeout=8000000000 \
+	    +conlog=logs/linux/lcd-gui-console.log +fb_capture=logs/linux/fbui
+	python3 scripts/check_fbui_capture.py logs/linux/fbui
+	python3 scripts/check_bootlog_capture.py logs/linux/fbui-bootlog.rgb565 \
+	    "$(LINUX_SRC)/lib/fonts/font_8x16.c"
+
+.PHONY: linux-console-test
+linux-console-test:
+	python3 tests/test_linux_console_test.py
+
+linux-boot: tb-fast linux-console-test
 	scripts/run_linux.sh --batch
 
 clean:

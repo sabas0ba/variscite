@@ -1,0 +1,361 @@
+/// One FS/LS host transaction; USB3317 supplies NRZI, stuffing and EOP.
+/// Operations: IN=0, OUT=1, SETUP=2, SOF=3, PHY read=4, PHY write=5.
+/// Results: OK=1, NAK=2, STALL=3, CRC=4, timeout=5, PID=6, size=7, link=8.
+/// The caller owns endpoint toggles and retains TX bytes until completion.
+module UsbHostTransaction (
+    i_clk        : input  clock    ,
+    i_rst        : input  reset    ,
+    i_valid      : input  logic    ,
+    o_ready      : output logic    ,
+    i_operation  : input  logic<3> ,
+    i_token      : input  logic<11>,
+    i_toggle     : input  logic    ,
+    i_low_speed  : input  logic    ,
+    i_length     : input  logic<7> ,
+    i_phy_address: input  logic<6> ,
+    i_phy_value  : input  logic<8> ,
+    o_tx_index   : output logic<6> ,
+    i_tx_byte    : input  logic<8> ,
+    o_rx_write   : output logic    ,
+    o_rx_index   : output logic<6> ,
+    o_rx_byte    : output logic<8> ,
+    o_done       : output logic    ,
+    o_result     : output logic<4> ,
+    o_length     : output logic<7> ,
+    o_toggle     : output logic    ,
+    o_phy_value  : output logic<8> ,
+    i_dir        : input  logic    ,
+    i_nxt        : input  logic    ,
+    i_data       : input  logic<8> ,
+    o_data       : output logic<8> ,
+    o_drive      : output logic    ,
+    o_stp        : output logic    ,
+    o_line       : output logic<2> ,
+) {
+    function crc16 (
+        seed : input logic<16>,
+        value: input logic<8> ,
+    ) -> logic<16> {
+        var c: logic<16>;
+        c = seed;
+        for n in 0..8 {
+            c = if c[0] ^ value[n] ? (c >> 1) ^ 16'ha001 : c >> 1;
+        }
+        return c;
+    }
+    function crc5 (
+        value: input logic<11>,
+    ) -> logic<5> {
+        var c: logic<5>;
+        c = 5'h1f;
+        for n in 0..11 {
+            c = if c[0] ^ value[n] ? (c >> 1) ^ 5'h14 : c >> 1;
+        }
+        return ~c;
+    }
+    enum State: logic<4> {
+        idle,
+        prepare,
+        token_start,
+        token_wait,
+        token_end,
+        data_start,
+        data_wait,
+        response,
+        ack_delay,
+        ack_start,
+        ack_wait,
+        phy_start,
+        phy_wait,
+        finish,
+    }
+    var state        : State    ;
+    var operation    : logic<3> ;
+    var token        : logic<16>;
+    var toggle       : logic    ;
+    var low_speed    : logic    ;
+    var length       : logic<7> ;
+    var phy_address  : logic<6> ;
+    var phy_value    : logic<8> ;
+    var tx_crc       : logic<16>;
+    var prepare_index: logic<7> ;
+    var timer        : logic<17>;
+    var gap          : logic<8> ;
+    var saw_se0      : logic    ;
+    var rx_count     : logic<7> ;
+    var rx_pid       : logic<8> ;
+    var rx_crc       : logic<16>;
+    var rx_bad       : logic    ;
+    var rx_active_d  : logic    ;
+    var link_valid   : logic    ;
+    var link_ready   : logic    ;
+    var link_kind    : logic<2> ;
+    var link_pid     : logic<4> ;
+    var link_length  : logic<7> ;
+    var link_index   : logic<7> ;
+    var link_byte    : logic<8> ;
+    var link_done    : logic    ;
+    var link_error   : logic    ;
+    var rx_valid     : logic    ;
+    var rx_byte      : logic<8> ;
+    var rx_active    : logic    ;
+    var rx_error     : logic    ;
+    var line_valid   : logic    ;
+    let receiving    : logic     = state != State::idle && state != State::finish && operation <: 3;
+    assign o_ready    = state == State::idle;
+    assign o_tx_index = if state == State::prepare ? prepare_index[5:0] : link_index[5:0];
+    assign o_rx_write = receiving && rx_valid && rx_count >= 1 && rx_count <= 64;
+    assign o_rx_index = (rx_count - 1) as 6;
+    assign o_rx_byte  = rx_byte;
+    always_comb {
+        link_valid  = state == State::token_start || state == State::data_start || state == State::ack_start || state
+            == State::phy_start;
+        link_kind   = if state == State::phy_start ? (if operation == 4 ? 2'd2 : 2'd1) : 2'd0;
+        link_pid    = if operation == 0 ? 4'h9 : if operation == 2 ? 4'hd : if operation == 3 ? 4'h5 : 4'h1;
+        link_length = 2;
+        link_byte   = if link_index == 0 ? token[7:0] : token[15:8];
+        if state == State::data_start || state == State::data_wait {
+            link_pid    = if toggle ? 4'hb : 4'h3;
+            link_length = length + 2;
+            link_byte   = if link_index <: length ? i_tx_byte : if link_index == length ? ~tx_crc[7:0] : ~tx_crc[15:8];
+        }
+        if state == State::ack_start || state == State::ack_wait {
+            link_pid    = 4'h2;
+            link_length = 0;
+        }
+    }
+    inst link: UsbUlpiLink (
+        i_clk                    ,
+        i_rst                    ,
+        i_dir                    ,
+        i_nxt                    ,
+        i_data                   ,
+        o_data                   ,
+        o_drive                  ,
+        o_stp                    ,
+        i_valid     : link_valid ,
+        o_ready     : link_ready ,
+        i_kind      : link_kind  ,
+        i_address   : phy_address,
+        i_value     : phy_value  ,
+        i_pid       : link_pid   ,
+        i_length    : link_length,
+        o_index     : link_index ,
+        i_byte      : link_byte  ,
+        o_done      : link_done  ,
+        o_error     : link_error ,
+        o_value     : o_phy_value,
+        o_rx_valid  : rx_valid   ,
+        o_rx_byte   : rx_byte    ,
+        o_rx_active : rx_active  ,
+        o_rx_error  : rx_error   ,
+        o_line                   ,
+        o_line_valid: line_valid ,
+    );
+    always_ff {
+        if_reset {
+            state         = State::idle;
+            operation     = 0;
+            token         = 0;
+            toggle        = 0;
+            low_speed     = 0;
+            length        = 0;
+            phy_address   = 0;
+            phy_value     = 0;
+            tx_crc        = 16'hffff;
+            prepare_index = 0;
+            timer         = 0;
+            gap           = 0;
+            saw_se0       = 0;
+            rx_count      = 0;
+            rx_pid        = 0;
+            rx_crc        = 16'hffff;
+            rx_bad        = 0;
+            rx_active_d   = 0;
+            o_done        = 0;
+            o_result      = 0;
+            o_length      = 0;
+            o_toggle      = 0;
+        } else {
+            o_done      = 0;
+            rx_active_d = rx_active;
+            if receiving && rx_valid {
+                if rx_count == 0 {
+                    rx_pid = rx_byte;
+                } else {
+                    rx_crc = crc16(rx_crc, rx_byte);
+                }
+                if rx_count <: 127 {
+                    rx_count = rx_count + 1;
+                }
+                if rx_count >= 67 {
+                    rx_bad = 1;
+                }
+            }
+            if state != State::idle {
+                timer = timer + 1;
+            }
+            case state {
+                State::idle: {
+                    if i_valid {
+                        operation     = i_operation;
+                        token         = {crc5(i_token), i_token};
+                        toggle        = i_toggle;
+                        low_speed     = i_low_speed;
+                        length        = i_length;
+                        phy_address   = i_phy_address;
+                        phy_value     = i_phy_value;
+                        tx_crc        = 16'hffff;
+                        prepare_index = 0;
+                        timer         = 0;
+                        saw_se0       = 0;
+                        gap           = 0;
+                        rx_count      = 0;
+                        rx_crc        = 16'hffff;
+                        rx_bad        = 0;
+                        o_result      = 0;
+                        o_length      = 0;
+                        o_toggle      = 0;
+                        if i_operation >= 6 || i_length >: 64 {
+                            o_result = 7;
+                            state    = State::finish;
+                        } else if i_operation >= 4 {
+                            state = State::phy_start;
+                        } else if (i_operation == 1 || i_operation == 2) && i_length != 0 {
+                            state = State::prepare;
+                        } else {
+                            state = State::token_start;
+                        }
+                    }
+                }
+                State::prepare: {
+                    tx_crc        = crc16(tx_crc, i_tx_byte);
+                    prepare_index = prepare_index + 1;
+                    if prepare_index == length - 1 {
+                        state = State::token_start;
+                    }
+                }
+                State::token_start: {
+                    if link_ready {
+                        state = State::token_wait;
+                    }
+                }
+                State::token_wait: {
+                    if link_done {
+                        if operation == 0 {
+                            state = State::response;
+                        } else {
+                            state = State::token_end;
+                        }
+                    }
+                }
+                State::token_end: {
+                    // After STP the PHY reports the serial line transitions.
+                    // Wait for EOP SE0, then at least two bit times of idle J.
+                    if line_valid && o_line == 0 {
+                        saw_se0 = 1;
+                        gap     = 0;
+                    } else if saw_se0 && o_line == (if low_speed ? 2'd2 : 2'd1) {
+                        gap = gap + 1;
+                        if gap == (if low_speed ? 8'd79 : 8'd9) {
+                            if operation == 3 {
+                                o_result = 1;
+                                state    = State::finish;
+                            } else {
+                                state = State::data_start;
+                            }
+                        }
+                    } else {
+                        gap = 0;
+                    }
+                }
+                State::data_start: {
+                    if link_ready {
+                        state = State::data_wait;
+                    }
+                }
+                State::data_wait: {
+                    if link_done {
+                        state = State::response;
+                    }
+                }
+                State::response: {
+                    if rx_active_d && !rx_active && rx_count != 0 {
+                        if rx_bad || rx_count >: 67 {
+                            o_result = 7;
+                            state    = State::finish;
+                        } else if rx_error {
+                            o_result = 4;
+                            state    = State::finish;
+                        } else if rx_pid == 8'h5a && rx_count == 1 {
+                            o_result = 2;
+                            state    = State::finish;
+                        } else if rx_pid == 8'h1e && rx_count == 1 {
+                            o_result = 3;
+                            state    = State::finish;
+                        } else if operation != 0 && rx_pid == 8'hd2 && rx_count == 1 {
+                            o_result = 1;
+                            state    = State::finish;
+                        } else if operation == 0 && (rx_pid == 8'hc3 || rx_pid == 8'h4b) && rx_count >= 3 {
+                            if rx_crc == 16'hb001 {
+                                o_length = rx_count - 3;
+                                o_toggle = rx_pid[3];
+                                gap      = 0;
+                                state    = State::ack_delay;
+                            } else {
+                                o_result = 4;
+                                state    = State::finish;
+                            }
+                        } else {
+                            o_result = 6;
+                            state    = State::finish;
+                        }
+                    }
+                }
+                State::ack_delay: {
+                    gap = gap + 1;
+                    if gap == (if low_speed ? 8'd79 : 8'd9) {
+                        state = State::ack_start;
+                    }
+                }
+                State::ack_start: {
+                    if link_ready {
+                        state = State::ack_wait;
+                    }
+                }
+                State::ack_wait: {
+                    if link_done {
+                        o_result = 1;
+                        state    = State::finish;
+                    }
+                }
+                State::phy_start: {
+                    if link_ready {
+                        state = State::phy_wait;
+                    }
+                }
+                State::phy_wait: {
+                    if link_done {
+                        o_result = 1;
+                        state    = State::finish;
+                    }
+                }
+                State::finish: {
+                    o_done = 1;
+                    state  = State::idle;
+                }
+                default: state = State::idle;
+            }
+            if state != State::idle && state != State::finish {
+                if timer == (if operation >= 4 ? 17'd119999 : 17'd11999) {
+                    o_result = 5;
+                    state    = State::finish;
+                }
+                if link_done && link_error {
+                    o_result = 8;
+                    state    = State::finish;
+                }
+            }
+        }
+    }
+}

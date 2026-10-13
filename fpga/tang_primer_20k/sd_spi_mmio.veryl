@@ -1,0 +1,83 @@
+/// Mode-0 byte SPI master for the on-module microSD slot, 27 MHz CPU clock.
+/// Reset: CS high, 210.9375 kHz. Fast: 3.375 MHz. No write command generator.
+module SdSpiMmio (
+    i_clk  : input  clock               ,
+    i_reset: input  reset_async_high    ,
+    i_sel  : input  logic               ,
+    i_addr : input  logic           <8> ,
+    i_wdata: input  logic           <32>,
+    i_wstrb: input  logic           <4> ,
+    o_rdata: output logic           <32>,
+    o_cs_n : output logic               ,
+    o_sclk : output logic               ,
+    o_mosi : output logic               ,
+    i_miso : input  logic               ,
+) {
+    var slow     : logic   ;
+    var busy     : logic   ;
+    var divider  : logic<6>;
+    var bit_count: logic<3>;
+    var tx_shift : logic<8>;
+    var rx_shift : logic<8>;
+    var received : logic<8>;
+    #[sv("async_reg = \"true\"")]
+    var miso_sync: logic<2>;
+    assign o_mosi = tx_shift[7];
+    always_comb {
+        o_rdata = 0;
+        case i_addr[7:2] {
+            6'h00  : o_rdata = 32'h53445031;
+            6'h01  : o_rdata = {30'b0, slow, o_cs_n};
+            6'h02  : o_rdata = {16'b0, received, 7'b0, busy};
+            default: {}
+        }
+    }
+    always_ff {
+        if_reset {
+            slow      = 1;
+            busy      = 0;
+            divider   = 0;
+            bit_count = 0;
+            tx_shift  = 8'hff;
+            rx_shift  = 0;
+            received  = 0;
+            o_cs_n    = 1;
+            o_sclk    = 0;
+            miso_sync = 2'b11;
+        } else {
+            miso_sync = {miso_sync[0], i_miso};
+            if i_sel && i_wstrb[0] && !busy {
+                if i_addr == 8'h04 {
+                    o_cs_n = i_wdata[0];
+                    slow   = i_wdata[1];
+                }
+                if i_addr == 8'h0c {
+                    tx_shift  = i_wdata[7:0];
+                    rx_shift  = 0;
+                    bit_count = 0;
+                    divider   = if slow ? 6'd63 : 6'd3;
+                    busy      = 1;
+                }
+            }
+            if busy {
+                if divider != 0 {
+                    divider = divider - 1;
+                } else {
+                    divider = if slow ? 6'd63 : 6'd3;
+                    o_sclk  = !o_sclk;
+                    if !o_sclk {
+                        rx_shift = {rx_shift[6:0], miso_sync[1]};
+                    } else {
+                        tx_shift = {tx_shift[6:0], 1'b1};
+                        if bit_count == 7 {
+                            busy     = 0;
+                            received = rx_shift;
+                        } else {
+                            bit_count = bit_count + 1;
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

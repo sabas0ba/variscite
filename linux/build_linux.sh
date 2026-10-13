@@ -6,15 +6,21 @@
 #   - riscv-none-elf- bare-metal toolchain in PATH (kernel is freestanding)
 #   - flex/bison on the host
 #
-# Outputs under <repo>/sim/linux/: init, Image, rv32ima_veryl.dtb
+# Outputs under <repo>/sim/linux/: userspace, Image, kernel.config, both DTBs.
 set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 LINUX_SRC="${LINUX_SRC:-$HOME/src/linux}"
 CROSS="${CROSS_COMPILE:-riscv-none-elf-}"
 JOBS="${JOBS:-$(nproc)}"
-out="$root/sim/linux"
+out="${LINUX_OUT:-$root/sim/linux}"
 mkdir -p "$out"
+out="$(cd "$out" && pwd)"
+case "${WITH_LCD:-0}" in 0|1) ;; *) echo 'WITH_LCD must be 0 or 1' >&2; exit 2 ;; esac
+case "${WITH_USB:-0}" in 0|1) ;; *) echo 'WITH_USB must be 0 or 1' >&2; exit 2 ;; esac
+if [[ "${WITH_USB:-0}" == 1 && "${WITH_LCD:-0}" != 1 ]]; then
+    echo 'WITH_USB requires WITH_LCD=1' >&2; exit 2
+fi
 
 # --- 1. userspace (must exist before the kernel builds the initramfs) ----
 # Bare-metal ld has no -pie: link at a non-zero base without relaxation (which
@@ -31,6 +37,8 @@ CFLAGS_USER=(
     -fPIE -mno-relax -msmall-data-limit=0 -Wall -Wextra
     -I"$root/linux/user"
 )
+if [[ "${WITH_LCD:-0}" == 1 ]]; then CFLAGS_USER+=(-DWITH_LCD=1); fi
+if [[ "${WITH_USB:-0}" == 1 ]]; then CFLAGS_USER+=(-DWITH_USB=1); fi
 
 build_user() { # <name> <source...>
     local name="$1"
@@ -66,6 +74,14 @@ file /init $out/init 0755 0 0
 file /bin/donut $out/donut 0755 0 0
 file /bin/mandelbrot $out/mandelbrot 0755 0 0
 EOF
+if [[ "${WITH_LCD:-0}" == 1 ]]; then
+    usb_sources=()
+    if [[ "${WITH_USB:-0}" == 1 ]]; then
+        usb_sources=("$root/linux/user/usb_host.c" "$root/linux/user/usb_hid.c")
+    fi
+    build_user fbui "$root/linux/user/fbui.c" "${usb_sources[@]}"
+    printf 'nod /dev/fb0 0600 0 0 c 29 0\nfile /bin/fbui %s/fbui 0755 0 0\n' "$out" >> "$out/initramfs.desc"
+fi
 
 # --- 2. kernel configuration --------------------------------------------
 cd "$LINUX_SRC"
@@ -93,6 +109,9 @@ scripts/config --file .config \
     --enable  BLK_DEV_INITRD \
     --set-str INITRAMFS_SOURCE "$out/initramfs.desc" \
     --set-str CMDLINE "earlycon console=ttyS0,1000000 panic=-1" \
+    --disable CMDLINE_FORCE \
+    --disable CMDLINE_EXTEND \
+    --enable  CMDLINE_FALLBACK \
     --enable  HZ_100 \
     --disable HZ_250 \
     --disable VIRTIO_MMIO \
@@ -102,13 +121,30 @@ scripts/config --file .config \
     --disable EXT2_FS \
     --disable MMC \
     --disable SERIAL_EARLYCON_SEMIHOST
+if [[ "${WITH_LCD:-0}" == 1 ]]; then
+    scripts/config --file .config \
+        --enable VT --enable VT_CONSOLE --enable FB --enable FB_SIMPLE \
+        --disable DRM_SIMPLEDRM --enable FRAMEBUFFER_CONSOLE \
+        --enable FONT_8x16 --disable FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER
+fi
 make ARCH=riscv CROSS_COMPILE="$CROSS" olddefconfig
+if [[ "${WITH_LCD:-0}" == 1 ]]; then
+    for option in VT VT_CONSOLE FB FB_SIMPLE FRAMEBUFFER_CONSOLE FONT_8x16; do
+        grep -q "^CONFIG_${option}=y$" .config
+    done
+fi
 
 # sanity: must be rv32 nommu M-mode
 grep -q '^CONFIG_ARCH_RV32I=y' .config
 grep -q '^CONFIG_RISCV_M_MODE=y' .config
 ! grep -q '^CONFIG_MMU=y' .config
 grep -q '^CONFIG_BINFMT_ELF_FDPIC=y' .config
+# nommu_virt_defconfig forces its built-in command line. Honor DTB bootargs
+# instead: the simulator uses 1 Mbps, Tang uses 115200 with a 27 MHz UART.
+grep -q '^CONFIG_CMDLINE_FALLBACK=y' .config
+grep -q '^# CONFIG_CMDLINE_FORCE is not set$' .config
+grep -q '^# CONFIG_CMDLINE_EXTEND is not set$' .config
+cp .config "$out/kernel.config"
 
 # --- 3. build ------------------------------------------------------------
 make ARCH=riscv CROSS_COMPILE="$CROSS" -j"$JOBS" Image
@@ -120,6 +156,10 @@ if [[ ! -x scripts/dtc/dtc ]]; then
 fi
 scripts/dtc/dtc -I dts -O dtb -o "$out/rv32ima_veryl.dtb" \
     "$root/linux/rv32ima_veryl.dts"
+scripts/dtc/dtc -I dts -O dtb -o "$out/tang_primer_20k.dtb" \
+    "$root/linux/tang_primer_20k.dts"
+scripts/dtc/dtc -I dts -O dtb -o "$out/tang_primer_20k_lcd.dtb" \
+    "$root/linux/tang_primer_20k_lcd.dts"
 
 echo "artifacts:"
 ls -la "$out"

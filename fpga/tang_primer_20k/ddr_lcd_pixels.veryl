@@ -1,0 +1,119 @@
+/// RGB565 serializer for an 800x480 stream of 128-bit bursts with frame tags.
+/// Pixel timing inputs come from TangLcdTiming. All outputs are delayed one
+/// pixel clock together. Frame data is little-endian (lowest 16 bits first).
+/// After missing data or bad tags, blank the rest of the frame and discard
+/// through the next first tag. Resume only at the first active pixel of a
+/// subsequent raster frame; never shift the remaining picture horizontally.
+module DdrLcdPixels (
+    i_clk       : input  clock     ,
+    i_rst       : input  reset     ,
+    i_enable    : input  logic     ,
+    i_frame     : input  logic     ,
+    i_hs        : input  logic     ,
+    i_vs        : input  logic     ,
+    i_de        : input  logic     ,
+    i_valid     : input  logic     ,
+    o_ready     : output logic     ,
+    i_data      : input  logic<128>,
+    i_first     : input  logic     ,
+    i_last      : input  logic     ,
+    o_hs        : output logic     ,
+    o_vs        : output logic     ,
+    o_de        : output logic     ,
+    o_rgb       : output logic<16> ,
+    o_underflows: output logic<32> ,
+) {
+    enum State: logic<2> {
+        seek,
+        primed,
+        playing,
+    }
+    var state        : State     ;
+    var word         : logic<128>;
+    var left         : logic<3>  ;
+    var pixel        : logic<19> ;
+    var frame_pending: logic     ;
+    let need_word    : logic      = state == State::playing && i_de && left == 0;
+    assign o_ready = i_enable && (state == State::seek || need_word) && !i_frame;
+    let bad_start: logic = i_de && frame_pending && state != State::primed;
+    let bad_word : logic = need_word && (!i_valid || i_first || i_last != (pixel == 19'd383992));
+    always_ff {
+        if_reset {
+            state         = State::seek;
+            word          = 0;
+            left          = 0;
+            pixel         = 0;
+            frame_pending = 0;
+            o_underflows  = 0;
+            o_hs          = 1;
+            o_vs          = 1;
+            o_de          = 0;
+            o_rgb         = 0;
+        } else {
+            o_hs  = i_hs;
+            o_vs  = i_vs;
+            o_de  = i_de;
+            o_rgb = 0;
+            if !i_enable {
+                state         = State::seek;
+                frame_pending = 0;
+            } else if i_frame {
+                frame_pending = 1;
+                if state == State::playing {
+                    state = State::seek;
+                }
+            } else {
+                if (bad_start || bad_word) && o_underflows != 32'hffffffff {
+                    o_underflows = o_underflows + 32'd1;
+                }
+                if i_de && frame_pending {
+                    frame_pending = 0;
+                }
+                case state {
+                    State::seek: {
+                        if i_valid && i_first && !i_last {
+                            word  = i_data;
+                            state = State::primed;
+                        }
+                    }
+                    State::primed: {
+                        if i_de && frame_pending {
+                            o_rgb = word[15:0];
+                            word  = word >> 16;
+                            left  = 7;
+                            pixel = 1;
+                            state = State::playing;
+                        }
+                    }
+                    State::playing: {
+                        if i_de {
+                            if bad_word {
+                                if i_valid && i_first && !i_last {
+                                    word  = i_data;
+                                    state = State::primed;
+                                } else {
+                                    state = State::seek;
+                                }
+                            } else {
+                                if left != 0 {
+                                    o_rgb = word[15:0];
+                                    word  = word >> 16;
+                                    left  = left - 3'd1;
+                                } else {
+                                    o_rgb = i_data[15:0];
+                                    word  = i_data >> 16;
+                                    left  = 7;
+                                }
+                                pixel = pixel + 19'd1;
+                                if pixel == 19'd383999 {
+                                    state = State::seek;
+                                }
+                            }
+                        }
+                    }
+                    default: state = State::seek;
+                }
+            }
+        }
+    }
+}

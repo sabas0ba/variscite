@@ -1,0 +1,155 @@
+/// Continuous DDR RGB565 scanout. Connect its burst port to display client 1
+/// of DdrBurstArbiter. Enable after DDR training and keep enabled until common
+/// reset. The framebuffer is a contiguous 800x480x2-byte DDR-relative region.
+module DdrLcdStream #(
+    param FRAME_BASE: logic<27> = 27'h7c00000,
+) (
+    i_mem_clk     : input  'mem   clock                ,
+    i_pixel_clk   : input  'pixel clock                ,
+    i_reset       : input  'async reset_async_high     ,
+    i_enable      : input  'mem   logic                ,
+    o_req_valid   : output 'mem   logic                ,
+    i_req_ready   : input  'mem   logic                ,
+    o_req_addr    : output 'mem   logic           <27> ,
+    i_rsp_valid   : input  'mem   logic                ,
+    o_rsp_ready   : output 'mem   logic                ,
+    i_rsp_data    : input  'mem   logic           <128>,
+    i_rsp_error   : input  'mem   logic                ,
+    o_urgent      : output 'mem   logic                ,
+    o_level       : output 'mem   logic           <9>  ,
+    o_memory_error: output 'mem   logic                ,
+    o_frame       : output 'pixel logic                ,
+    o_hs          : output 'pixel logic                ,
+    o_vs          : output 'pixel logic                ,
+    o_de          : output 'pixel logic                ,
+    o_rgb         : output 'pixel logic           <16> ,
+    o_underflows  : output 'pixel logic           <32> ,
+) {
+    #[sv("async_reg = \"true\"")]
+    var mem_release: 'mem logic<2>;
+    #[sv("async_reg = \"true\"")]
+    var pixel_release: 'pixel logic<2>;
+    #[sv("async_reg = \"true\"")]
+    var enable_sync: 'pixel logic<2>;
+    let mem_reset  : 'mem   reset    = (!mem_release[1]) as reset;
+    let pixel_reset: 'pixel reset    = (!pixel_release[1]) as reset;
+    unsafe (cdc) {
+        always_ff (i_mem_clk, i_reset) {
+            if_reset {
+                mem_release = 0;
+            } else {
+                mem_release = {mem_release[0], 1'b1};
+            }
+        }
+        always_ff (i_pixel_clk, i_reset) {
+            if_reset {
+                pixel_release = 0;
+                enable_sync   = 0;
+            } else {
+                pixel_release = {pixel_release[0], 1'b1};
+                enable_sync   = {enable_sync[0], i_enable};
+            }
+        }
+    }
+    var busy        : 'mem   logic     ;
+    var frame_error : 'mem   logic     ;
+    var stream_valid: 'mem   logic     ;
+    var stream_ready: 'mem   logic     ;
+    var stream_data : 'mem   logic<128>;
+    var stream_first: 'mem   logic     ;
+    var stream_last : 'mem   logic     ;
+    var pixel_valid : 'pixel logic     ;
+    var pixel_ready : 'pixel logic     ;
+    var pixel_data  : 'pixel logic<130>;
+    var frame_start : 'pixel logic     ;
+    var hs          : 'pixel logic     ;
+    var vs          : 'pixel logic     ;
+    var de          : 'pixel logic     ;
+    // Keep Gray decode / occupancy comparison out of the request arbitration
+    // path. The 224-burst threshold includes ample margin for this one cycle.
+    always_ff (i_mem_clk, mem_reset) {
+        if_reset {
+            o_urgent = 0;
+        } else {
+            o_urgent = i_enable && o_level <: 9'd224;
+        }
+    }
+    assign o_frame = frame_start && !pixel_reset;
+    always_ff (i_mem_clk, mem_reset) {
+        if_reset {
+            o_memory_error = 0;
+        } else if frame_error {
+            o_memory_error = 1;
+        }
+    }
+    inst reader: DdrFrameReader (
+        i_clk      : i_mem_clk        ,
+        i_rst      : mem_reset        ,
+        i_start    : i_enable && !busy,
+        i_base     : FRAME_BASE       ,
+        i_bursts   : 16'd48000        ,
+        o_busy     : busy             ,
+        o_error    : frame_error      ,
+        o_req_valid                   ,
+        i_req_ready                   ,
+        o_req_addr                    ,
+        i_rsp_valid                   ,
+        o_rsp_ready                   ,
+        i_rsp_data                    ,
+        i_rsp_error                   ,
+        o_valid    : stream_valid     ,
+        i_ready    : stream_ready     ,
+        o_data     : stream_data      ,
+        o_first    : stream_first     ,
+        o_last     : stream_last      ,
+    );
+    inst fifo: DdrDisplayFifo #(
+        WIDTH: 130,
+    ) (
+        i_mem_clk                                            ,
+        i_pixel_clk                                          ,
+        i_reset                                              ,
+        i_valid    : stream_valid                            ,
+        o_ready    : stream_ready                            ,
+        i_data     : {stream_last, stream_first, stream_data},
+        o_level                                              ,
+        o_valid    : pixel_valid                             ,
+        i_ready    : pixel_ready                             ,
+        o_data     : pixel_data                              ,
+    );
+    inst timing: TangLcdTiming (
+        i_clk  : i_pixel_clk,
+        i_rst  : pixel_reset,
+        i_bars : 1'b0       ,
+        i_bg   : 16'b0      ,
+        i_fg   : 16'b0      ,
+        i_x0   : 10'b0      ,
+        i_y0   : 9'b0       ,
+        i_x1   : 10'b0      ,
+        i_y1   : 9'b0       ,
+        o_frame: frame_start,
+        o_hs   : hs         ,
+        o_vs   : vs         ,
+        o_de   : de         ,
+        o_rgb  : _          ,
+    );
+    inst pixels: DdrLcdPixels (
+        i_clk       : i_pixel_clk      ,
+        i_rst       : pixel_reset      ,
+        i_enable    : enable_sync[1]   ,
+        i_frame     : frame_start      ,
+        i_hs        : hs               ,
+        i_vs        : vs               ,
+        i_de        : de               ,
+        i_valid     : pixel_valid      ,
+        o_ready     : pixel_ready      ,
+        i_data      : pixel_data[127:0],
+        i_first     : pixel_data[128]  ,
+        i_last      : pixel_data[129]  ,
+        o_hs                           ,
+        o_vs                           ,
+        o_de                           ,
+        o_rgb                          ,
+        o_underflows                   ,
+    );
+}

@@ -11,7 +11,7 @@
 #define SYS_clone   220
 #define SYS_execve  221
 #define SYS_exit     93
-#define SYS_wait4   260
+#define SYS_waitid   95
 
 #define CLONE_VM     0x00000100
 #define CLONE_VFORK  0x00004000
@@ -45,14 +45,18 @@ spawn:
     li   a7, SYS_exit
     ecall
 
-1:  # parent: reap the child
-    mv   a0, a0
-    li   a1, 0
-    li   a2, 0
-    li   a3, 0
-    li   a7, SYS_wait4
+1:  # RV32 without time32 syscalls has waitid, but no wait4.
+    mv   t3, a0                # preserve child pid across an interrupted wait
+3:
+    li   a0, 1                 # P_PID
+    mv   a1, t3
+    li   a2, 0                 # Linux permits a null siginfo pointer
+    li   a3, 4                 # WEXITED
+    li   a4, 0                 # no rusage
+    li   a7, SYS_waitid
     ecall
-    li   a0, 0
+    li   t4, -4                # EINTR
+    beq  a0, t4, 3b
     ret
 
 2:  ret

@@ -1,0 +1,228 @@
+/// SDR ULPI link, clocked by the PHY's 60 MHz CLKOUT.
+/// Commands: 0 = USB packet, 1 = register write, 2 = register read.
+/// o_index requests the next byte to preload, including CRC; output is registered.
+/// DIR always wins bus ownership; both turnaround cycles are excluded.
+module UsbUlpiLink (
+    i_clk       : input  clock   ,
+    i_rst       : input  reset   ,
+    i_dir       : input  logic   ,
+    i_nxt       : input  logic   ,
+    i_data      : input  logic<8>,
+    o_data      : output logic<8>,
+    o_drive     : output logic   ,
+    o_stp       : output logic   ,
+    i_valid     : input  logic   ,
+    o_ready     : output logic   ,
+    i_kind      : input  logic<2>,
+    i_address   : input  logic<6>,
+    i_value     : input  logic<8>,
+    i_pid       : input  logic<4>,
+    i_length    : input  logic<7>,
+    o_index     : output logic<7>,
+    i_byte      : input  logic<8>,
+    o_done      : output logic   ,
+    o_error     : output logic   ,
+    o_value     : output logic<8>,
+    o_rx_valid  : output logic   ,
+    o_rx_byte   : output logic<8>,
+    o_rx_active : output logic   ,
+    o_rx_error  : output logic   ,
+    o_line      : output logic<2>,
+    o_line_valid: output logic   ,
+) {
+    enum State: logic<3> {
+        idle,
+        command,
+        transmit,
+        write_data,
+        read_data,
+        stop,
+        finish,
+    }
+    var state  : State    ;
+    var dir_d  : logic    ;
+    var kind   : logic<2> ;
+    var value  : logic<8> ;
+    var length : logic<7> ;
+    var timeout: logic<16>;
+    let owned  : logic     = !i_dir && !dir_d;
+    let receive: logic     = i_dir && dir_d && state != State::read_data;
+    assign o_ready = state == State::idle && owned && !o_rx_active;
+    assign o_drive = owned;
+    var next_data  : logic<8>;
+    var data_enable: logic   ;
+    let last_byte  : logic    = (state == State::command && kind == 0 && length == 0)
+        || (state == State::transmit && o_index == length) || state == State::write_data;
+    // Keep PHY control signals on the register enable, outside the DATA mux.
+    always_comb {
+        next_data   = 0;
+        data_enable = state == State::finish;
+        case state {
+            State::idle: {
+                data_enable = !i_valid || o_ready;
+                if i_valid {
+                    next_data = if i_kind == 0 ?
+                        {4'h4, i_pid}
+                    : if i_kind == 1 ?
+                        {2'b10, i_address}
+                    :
+                        {2'b11, i_address}
+                    ;
+                }
+            }
+            State::command: {
+                data_enable = owned && i_nxt;
+                next_data   = if kind == 1 ? value : if kind == 0 && length != 0 ? i_byte : 8'd0;
+            }
+            State::transmit: {
+                data_enable = owned && i_nxt;
+                next_data   = if o_index == length ? 8'd0 : i_byte;
+            }
+            State::write_data: data_enable = owned && i_nxt;
+            default          : {}
+        }
+    }
+    always_ff {
+        if_reset {
+            o_data = 0;
+            o_stp  = 0;
+        } else {
+            o_stp = owned && i_nxt && last_byte;
+            if data_enable {
+                o_data = next_data;
+            }
+        }
+    }
+    // USB3317 table 6.1 / figure 6.7: STP reports the byte consumed in the
+    // previous cycle. Pulse it after accepting the final byte with NXT, not
+    // after waiting for another NXT. Like DATA, STP is a registered output.
+    always_ff {
+        if_reset {
+            state        = State::idle;
+            dir_d        = 0;
+            kind         = 0;
+            value        = 0;
+            length       = 0;
+            timeout      = 0;
+            o_index      = 0;
+            o_done       = 0;
+            o_error      = 0;
+            o_value      = 0;
+            o_rx_valid   = 0;
+            o_rx_byte    = 0;
+            o_line_valid = 0;
+            o_rx_active  = 0;
+            o_rx_error   = 0;
+            o_line       = 0;
+        } else {
+            dir_d   = i_dir;
+            o_done  = 0;
+            o_error = 0;
+            // Keep the source-synchronous input path out of the packet CRC
+            // and response decoder. Metadata and bytes advance together.
+            o_rx_valid   = receive && i_nxt;
+            o_rx_byte    = i_data;
+            o_line_valid = receive && !i_nxt;
+            if i_dir && !dir_d && i_nxt && state != State::read_data {
+                o_rx_active = 1;
+                o_rx_error  = 0;
+            }
+            if receive && !i_nxt {
+                o_line = i_data[1:0];
+                // RxEvent=01: active, 10: inactive, 11: active+error.
+                o_rx_active = i_data[4];
+                if i_data[5:4] == 2'b01 && !o_rx_active {
+                    o_rx_error = 0;
+                }
+                if i_data[5:4] == 2'b11 {
+                    o_rx_error = 1;
+                }
+            }
+            if !i_dir && dir_d {
+                o_rx_active = 0;
+            }
+            if state == State::idle {
+                timeout = 0;
+            } else {
+                timeout = timeout + 1;
+            }
+            case state {
+                State::idle: {
+                    if i_valid && o_ready {
+                        kind    = i_kind;
+                        value   = i_value;
+                        length  = i_length;
+                        o_index = 0;
+                        state   = State::command;
+                    }
+                }
+                State::command: {
+                    // Retry an unaccepted command after any PHY status update.
+                    if owned && i_nxt {
+                        state = if kind == 1 ?
+                            State::write_data
+                        : if kind == 2 ?
+                            State::read_data
+                        : if length == 0 ?
+                            State::stop
+                        :
+                            State::transmit
+                        ;
+                        if kind == 0 && length != 0 {
+                            o_index = 1;
+                        }
+                    }
+                }
+                State::transmit: {
+                    if i_dir {
+                        o_error = 1;
+                        o_done  = 1;
+                        state   = State::finish;
+                    } else if owned && i_nxt {
+                        o_index = o_index + 1;
+                        if o_index == length {
+                            state = State::stop;
+                        }
+                    }
+                }
+                State::write_data: {
+                    if i_dir {
+                        o_error = 1;
+                        o_done  = 1;
+                        state   = State::finish;
+                    } else if owned && i_nxt {
+                        state = State::stop;
+                    }
+                }
+                State::read_data: {
+                    if i_dir && dir_d {
+                        o_value = i_data;
+                        o_done  = 1;
+                        state   = State::finish;
+                    }
+                }
+                State::stop: {
+                    if !i_dir {
+                        o_done = 1;
+                        state  = State::finish;
+                    } else if i_dir {
+                        o_done  = 1;
+                        o_error = 1;
+                        state   = State::finish;
+                    }
+                }
+                State::finish: {
+                    if owned {
+                        state = State::idle;
+                    }
+                }
+                default: state = State::idle;
+            }
+            if state != State::idle && timeout == 16'hffff {
+                o_done  = 1;
+                o_error = 1;
+                state   = State::finish;
+            }
+        }
+    }
+}

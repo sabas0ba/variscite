@@ -1,0 +1,87 @@
+/// Read a contiguous frame as a backpressured stream of 16-byte bursts.
+/// Base is a DDR-relative byte address; count is latched on an idle start.
+/// Errors produce a zero burst at the same position and set sticky error.
+/// Busy remains set through consumption of the final stream beat.
+/// Reset cancels the frame and must also reset the memory backend.
+module DdrFrameReader (
+    i_clk      : input  clock     ,
+    i_rst      : input  reset     ,
+    i_start    : input  logic     ,
+    i_base     : input  logic<27> ,
+    i_bursts   : input  logic<16> ,
+    o_busy     : output logic     ,
+    o_error    : output logic     ,
+    o_req_valid: output logic     ,
+    i_req_ready: input  logic     ,
+    o_req_addr : output logic<27> ,
+    i_rsp_valid: input  logic     ,
+    o_rsp_ready: output logic     ,
+    i_rsp_data : input  logic<128>,
+    i_rsp_error: input  logic     ,
+    o_valid    : output logic     ,
+    i_ready    : input  logic     ,
+    o_data     : output logic<128>,
+    o_first    : output logic     ,
+    o_last     : output logic     ,
+) {
+    var remaining    : logic<16>;
+    var pending      : logic    ;
+    var next_first   : logic    ;
+    var pending_first: logic    ;
+    var pending_last : logic    ;
+    let end_address  : logic<28> = {1'b0, i_base} + {8'b0, i_bursts, 4'b0};
+    assign o_req_valid = o_busy && remaining != 0 && !pending && (!o_valid || i_ready);
+    assign o_rsp_ready = pending && (!o_valid || i_ready);
+    always_ff {
+        if_reset {
+            o_busy        = 0;
+            o_error       = 0;
+            o_req_addr    = 0;
+            remaining     = 0;
+            pending       = 0;
+            next_first    = 0;
+            pending_first = 0;
+            pending_last  = 0;
+            o_valid       = 0;
+            o_data        = 0;
+            o_first       = 0;
+            o_last        = 0;
+        } else {
+            if o_valid && i_ready {
+                o_valid = 0;
+                if o_last {
+                    o_busy = 0;
+                }
+            }
+            if i_start && !o_busy {
+                o_error = 0;
+                if i_base[3:0] != 0 || i_bursts == 0 || end_address >: 28'h8000000 {
+                    o_error = 1;
+                } else {
+                    o_busy     = 1;
+                    o_req_addr = i_base;
+                    remaining  = i_bursts;
+                    next_first = 1;
+                }
+            }
+            if o_req_valid && i_req_ready {
+                pending       = 1;
+                pending_first = next_first;
+                pending_last  = remaining == 1;
+                next_first    = 0;
+                remaining     = remaining - 16'd1;
+                o_req_addr    = o_req_addr + 27'd16;
+            }
+            if i_rsp_valid && o_rsp_ready {
+                pending = 0;
+                o_valid = 1;
+                o_data  = if i_rsp_error ? 128'b0 : i_rsp_data;
+                o_first = pending_first;
+                o_last  = pending_last;
+                if i_rsp_error {
+                    o_error = 1;
+                }
+            }
+        }
+    }
+}

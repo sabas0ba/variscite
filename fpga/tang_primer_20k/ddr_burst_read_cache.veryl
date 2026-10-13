@@ -1,0 +1,113 @@
+/// Sixteen direct-mapped 16-byte CPU read lines in the DDR clock domain.
+/// Writes always reach DDR and invalidate their index before issue. The CPU
+/// must be the only writer; the display DMA is read-only. Reset is shared with
+/// both endpoints. Misaligned requests bypass the cache, including errors.
+module DdrBurstReadCache (
+    i_clk          : input  clock     ,
+    i_rst          : input  reset     ,
+    i_req_valid    : input  logic     ,
+    o_req_ready    : output logic     ,
+    i_req_addr     : input  logic<27> ,
+    i_req_data     : input  logic<128>,
+    i_req_strb     : input  logic<16> ,
+    o_rsp_valid    : output logic     ,
+    i_rsp_ready    : input  logic     ,
+    o_rsp_data     : output logic<128>,
+    o_rsp_error    : output logic     ,
+    o_mem_valid    : output logic     ,
+    i_mem_ready    : input  logic     ,
+    o_mem_addr     : output logic<27> ,
+    o_mem_data     : output logic<128>,
+    o_mem_strb     : output logic<16> ,
+    i_mem_rsp_valid: input  logic     ,
+    o_mem_rsp_ready: output logic     ,
+    i_mem_rsp_data : input  logic<128>,
+    i_mem_rsp_error: input  logic     ,
+) {
+    enum State: logic<3> {
+        idle,
+        lookup,
+        issue,
+        wait_response,
+        response,
+    }
+    var state      : State          ;
+    var valid      : logic<16>      ;
+    var tags       : logic<19>  [16];
+    var data       : logic<128> [16];
+    var hit        : logic          ;
+    var cached_data: logic<128>     ;
+    let index      : logic<4>        = o_mem_addr[7:4];
+    let cacheable  : logic           = o_mem_strb == 0 && o_mem_addr[3:0] == 0;
+    assign o_req_ready     = state == State::idle;
+    assign o_mem_valid     = state == State::issue;
+    assign o_mem_rsp_ready = state == State::wait_response;
+    assign o_rsp_valid     = state == State::response;
+    // Unreset arrays permit memory inference. Only valid bits authorize use.
+    always_ff {
+        if state == State::wait_response && i_mem_rsp_valid && !i_mem_rsp_error && cacheable {
+            tags[index] = o_mem_addr[26:8];
+            data[index] = i_mem_rsp_data;
+        }
+    }
+    always_ff {
+        if_reset {
+            state       = State::idle;
+            valid       = 0;
+            hit         = 0;
+            cached_data = 0;
+            o_mem_addr  = 0;
+            o_mem_data  = 0;
+            o_mem_strb  = 0;
+            o_rsp_data  = 0;
+            o_rsp_error = 0;
+        } else {
+            case state {
+                State::idle: {
+                    if i_req_valid {
+                        o_mem_addr  = i_req_addr;
+                        o_mem_data  = i_req_data;
+                        o_mem_strb  = i_req_strb;
+                        hit         = valid[i_req_addr[7:4]] && tags[i_req_addr[7:4]] == i_req_addr[26:8] && i_req_strb
+                            == 0 && i_req_addr[3:0] == 0;
+                        cached_data = data[i_req_addr[7:4]];
+                        if i_req_strb != 0 {
+                            valid[i_req_addr[7:4]] = 0;
+                        }
+                        state = State::lookup;
+                    }
+                }
+                State::lookup: {
+                    if hit {
+                        o_rsp_data  = cached_data;
+                        o_rsp_error = 0;
+                        state       = State::response;
+                    } else {
+                        state = State::issue;
+                    }
+                }
+                State::issue: {
+                    if i_mem_ready {
+                        state = State::wait_response;
+                    }
+                }
+                State::wait_response: {
+                    if i_mem_rsp_valid {
+                        o_rsp_data  = i_mem_rsp_data;
+                        o_rsp_error = i_mem_rsp_error;
+                        if cacheable {
+                            valid[index] = !i_mem_rsp_error;
+                        }
+                        state = State::response;
+                    }
+                }
+                State::response: {
+                    if i_rsp_ready {
+                        state = State::idle;
+                    }
+                }
+                default: state = State::idle;
+            }
+        }
+    }
+}

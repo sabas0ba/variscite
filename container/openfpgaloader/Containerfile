@@ -1,0 +1,10 @@
+# Nix version/digest follows sabas0ba/dotfiles (fc4cdecc02a6).
+FROM docker.io/nixos/nix:2.35.1@sha256:377d4887aca98f0dfa12971c1ea6d6a625a435d8b610d4c95a436843da6fbfd1
+RUN printf 'experimental-features = nix-command flakes\nsandbox = false\nfilter-syscalls = false\n' >> /etc/nix/nix.conf
+COPY container/openfpgaloader /opt/openfpgaloader
+RUN nix flake check path:/opt/openfpgaloader --print-build-logs \
+ && nix build path:/opt/openfpgaloader#page256 path:/opt/openfpgaloader#page128 path:/opt/openfpgaloader#page128-bounds path:/opt/openfpgaloader#page128-bounds-1mhz path:/opt/openfpgaloader#page128-bounds-read128 --out-link /opt/loader \
+ && nix build path:/opt/openfpgaloader#exportTools --out-link /opt/export
+ENV PATH="/opt/export/bin:${PATH}"
+WORKDIR /work
+CMD ["bash", "scripts/build-openfpgaloader.sh"]

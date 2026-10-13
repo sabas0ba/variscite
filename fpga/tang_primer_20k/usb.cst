@@ -1,0 +1,29 @@
+// Pin facts: Sipeed TangPrimer-20K-example USB/usb_serial/src/usb_example.cst.
+IO_LOC "usb_clk" T15;
+// T15 is RPLL1_T_in: reserve the matching right-side PLL for CLKOUT.
+INS_LOC "usb_clock/pll" PLL_R[0];
+IO_LOC "usb_dir" K12;
+IO_LOC "usb_nxt" K13;
+IO_LOC "usb_stp" K11;
+IO_LOC "usb_reset_n" F10;
+IO_LOC "usb_data[0]" G11;
+IO_LOC "usb_data[1]" H12;
+IO_LOC "usb_data[2]" J12;
+IO_LOC "usb_data[3]" H13;
+IO_LOC "usb_data[4]" T14;
+IO_LOC "usb_data[5]" R13;
+IO_LOC "usb_data[6]" P13;
+IO_LOC "usb_data[7]" R12;
+IO_PORT "usb_clk" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "usb_dir" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "usb_nxt" IO_TYPE=LVCMOS33 PULL_MODE=NONE;
+IO_PORT "usb_stp" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_PORT "usb_reset_n" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_PORT "usb_data[0]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_PORT "usb_data[1]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_PORT "usb_data[2]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_PORT "usb_data[3]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_PORT "usb_data[4]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_PORT "usb_data[5]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_PORT "usb_data[6]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;
+IO_PORT "usb_data[7]" IO_TYPE=LVCMOS33 PULL_MODE=NONE DRIVE=8;

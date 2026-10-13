@@ -17,7 +17,8 @@ param(
     [string]$Port,
     [int]$BaudRate = 115200,
     [switch]$Hex,
-    [int]$MaxBytes = 0
+    [int]$MaxBytes = 0,
+    [ValidateRange(0,3600)][int]$MaxSeconds = 0
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
@@ -48,9 +49,10 @@ Write-Host "Connected: $Port @ $BaudRate baud (8N1). Press Esc to exit."
 $keyboardOk = $true
 $rxCount    = 0
 $done       = $false
+$timer      = [System.Diagnostics.Stopwatch]::StartNew()
 
 try {
-    while (-not $done) {
+    while (-not $done -and ($MaxSeconds -eq 0 -or $timer.Elapsed.TotalSeconds -lt $MaxSeconds)) {
         while ($serial.BytesToRead -gt 0 -and -not $done) {
             if ($Hex) {
                 $b = $serial.ReadByte()

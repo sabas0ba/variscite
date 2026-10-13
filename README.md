@@ -7,49 +7,71 @@ Veryl による RV32IMA_Zicsr コア (M/U-mode、PMP、NOMMU) と、その割り
 
 ## 実装ステータス
 
-更新日: 2026-10-06。Linuxはシミュレーション上で起動済み。Tang Primer 20K実機では
-ベアメタルのLCD矩形表示と、独立したDDR3診断まで確認済みであり、Linux実機起動は未達である。
+更新日: 2026-10-12。Tang Primer 20K実機でLinuxの`/init`とUARTシェルへの到達、
+`help`への応答と、別プロセスでのdonut 24 frameの完了を確認した。LCDはベアメタルの矩形表示まで
+動作している。Linux用のDDR表示回路・fbcon・簡易GUIを実装し、GUIの色変更・移動・終了と
+framebufferの内容をシミュレーションで検証した。LCD統合版も実機でLinuxシェルへ到達し、
+fbcon登録、GUIの描画完了・色変更・移動・終了、操作後の表示errorなしをUARTと状態レジスタで確認した。
+パネルの見た目は、この検証では目視確認していない。
 DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致した。
 追加したmixed patternでは校正窓の不足を発見し、3 wordへ拡張した324 MHz版と396 MHz版で
 全容量・両極性の一致を確認した。mixed patternは396 MHzで独立書込み3回、324 MHzで2回、
 修正後の従来patternも396 MHzで1回成功した。CPU診断回路では全容量走査とDDR命令実行も
-成功している。Linux用のCPU/LCD SoCへの統合は次段階である。
+成功している。Linux用SoCへCPU・DDR・UART・LCDを接続済みである。
 
 | 項目 | 状態 | 確認済みの範囲・残る作業 |
 | --- | --- | --- |
 | RV32IMAコア・CLINT/PLIC・PMP | シミュレーション検証済み | 命令試験、Spike照合、例外・割り込み・アクセス制御 |
-| Linux・ユーザランド | シミュレーション動作確認済み | NOMMU / M-mode Linuxとユーザアプリケーションの実行 |
-| Tangの基本SoC・800×480 LCD | 実機動作確認済み | オンチップRAM 32 KiB、ベアメタルの矩形表示。Linuxによる描画は未実装 |
+| Linux・ユーザランド | 実機起動・UARTシェル・ユーザアプリ確認済み | NOMMU / M-mode Linux、`/init`、`help`応答、donut 24 frame。Mandelbrotとpoweroffはシミュレーションで検証 |
+| Tangの基本SoC・800×480 LCD | 実機動作確認済み | オンチップRAM 32 KiB、ベアメタルの矩形表示。Linux構成は別ターゲット |
 | DDR3 PHY・初期化・読出しtraining | 独立診断で実機確認済み | Veryl実装。GOWINによる配置配線とlane別の拍位置校正 |
 | DDR3保持・部分書込み・アドレス | 限定範囲で実機確認済み | 約127 ms保持、16 byte位置のDM選択、23アドレスbitと容量末尾 |
 | DDR全128 MiB走査 | 独立診断で実機確認済み | 3 word校正窓でmixed pattern／反転値が396/99 MHzで3回、324/81 MHzで2回一致。アドレスXOR／反転値も修正後の396/99 MHz版で一致 |
 | DDR burst controller | 単体試験・独立診断で実機確認済み | 要求とrefreshの仲裁、応答保持、timeout/reset。32箇所への書込みと100 ms保持後の読戻し |
 | DDR wordポート・CDC | CPU接続を含め実機確認済み | 27 MHz要求→99 MHz controllerでの読書き。範囲外拒否はCPU例外として実機確認。timeout/reset・応答保持はモデル検証 |
 | CPUからDDR3への接続 | 全容量・部分アクセス・命令実行を実機確認済み | 全128 MiBのmixed/反転値とDDR命令実行。全16 byte位置、非整列、容量末尾、範囲外例外、LR/SC・全AMOの追加診断は独立書込み3回成功 |
-| Linux実機起動・LCD bootlog・GUI | 未実装 | カーネル転送、実機ブート、framebuffer/DMA、fbcon、GUIを順に追加する |
+| Linux用SoC・UARTブートROM | Linux Imageの実機転送・起動を確認済み | CRC付きImage/DTB転送、128 MiB DDR、1 MHzタイマ、UART/PLIC。115200 consoleでユーザ空間へ到達 |
+| DDR→LCD読み出し | 実機統合・状態確認済み | CPU/表示仲裁、read cache、DMA、非同期FIFO、RGB565出力。全画素と欠落復帰はモデル検証。実機でLinux起動・GUI操作後のDDR error／underflowなし |
+| LCD bootlog・GUI | bootlog・GUI表示の実機視認、GUIプロセス操作確認済み | 2026-10-14に利用者が電源再投入後のGUI表示・起動成功を確認。UART操作の色選択・矩形移動・終了／再起動、画像内容のシミュレーション照合も成功 |
+| microSD単独起動 | SPI flashからの回路構成・FAT32実カードからのLinux／GUI起動確認済み | 2026-10-14に電源再投入後、追加のSRAMロードなしで起動を目視確認。flash読戻し検証の不一致は未解決。UART送信なしのSD CRC検証・Linux／GUI起動は別試験で確認。FAT16/exFATはモデル検証 |
+| USBキーボード・マウス | PHY読書き・LinuxからのHID列挙を実機確認 | FS/LS ULPIホスト、ハブ、boot HID。初回GUI自動起動で入力endpoint 1個を列挙、実キー入力は未確認。Linux HCD/evdev・hotplugは未実装 |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
 DDRの測定条件、bitstream SHA256、再現手順は
 [DDRアレイ診断の検証記録](docs/ddr-multi-pattern.md)と
 [CPU/controllerの検証記録](docs/tang-linux-lcd.md#cpu診断プラットフォーム)にまとめる。
+USB統合構成のGUIは、色変更約30秒・矩形移動約10秒と応答が遅く、高速化が残る。
+単独起動とUSB入力の検証範囲・制約は[専用文書](docs/tang-usb-host.md)を参照する。
 
 ## ロードマップ
 
 校正窓の不足を修正し、独立診断で2種類のpatternによる全容量一致と繰返し起動を確認した。
 CPUアクセス例外とfetch待ち中の要求保持を追加し、Coreとwordポートの結合試験も通過した。
 PHYを含む回路のタイミングを満たし、CPUによる全容量走査とDDR上の命令実行も実機で成功した。
-CPU経由の部分書込み・境界アクセス・LR/SC・AMOも実機で確認した。次はLinux実機起動へ進む。
+CPU経由の部分書込み・境界アクセス・LR/SC・AMOも実機で確認した。
+Linux用SoCとCRC付きUARTブートROMを追加し、実機でLinuxの`/init`とUARTシェルが動作した。
+DDRからLCDへの読み出し回路、fbcon、簡易GUIを接続し、結合シミュレーションを通過した。
+実機でもLinuxシェルとGUI操作、LCD上のブートログ文字の視認を確認した。
+描画性能と画面所有の改善、GUI画面の目視確認が残る。
+構成と再現手順は[UARTブート](docs/tang-uart-boot.md)と
+[DDR表示経路](docs/tang-ddr-display.md)を参照する。
 以下は実装順序と完了条件であり、日程の確約ではない。
 
 | 順序 | 次の成果 | 完了条件 |
 | --- | --- | --- |
 | 1（単独検証済み） | DDR controller | 任意の読書き要求とrefreshを仲裁し、応答待ち中のrefresh期限、timeout、resetを検証する |
 | 2（診断回路で検証済み） | CPUとDDR3の接続 | CDC、可変レイテンシ、byte strobe、境界アクセスを接続し、実機で全容量走査と継続アクセスを通す |
-| 3 | Linux実機起動 | UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、`/init`とUARTシェルへ到達する |
-| 4 | LCDブートログ | DDR上のframebuffer、LCD DMA・FIFO、fbconを実装し、連続スクロールでも表示が欠落しないことを確認する |
-| 5 | Linux GUI | Linuxユーザプロセスから`/dev/fb0`へ描画し、UART入力に応答する |
+| 3（実機確認済み） | Linux実機起動 | UARTによるImage/DTB転送とCRC検査、ブートROM、実機DTSを整備し、`/init`とUARTシェルへ到達する |
+| 4（実機のfbcon・状態確認済み） | LCDブートログ | DDR framebufferとDMA・FIFOを接続。起動とGUI操作後までunderflowなし。パネルの表示内容は目視確認が残る |
+| 5（実機操作確認済み） | Linux GUI | Linuxユーザプロセスから`/dev/fb0`へ描画し、UART入力による色変更・移動・終了を確認 |
+| 6（部分更新はモデル検証済み） | 描画性能・画面所有 | 部分更新による移動・消去・色変更を検証。実機の応答時間とfbconとの画面所有を確認する |
+| 7（開発中） | PCなしの起動と入力 | microSD・GUI自動起動とSPI flashからの電源投入起動を実機確認済み。USB実キー入力、flash全量照合と起動再現性、GUI応答高速化は継続課題 |
 
-継続中のPRはDDR controllerとCPU接続を扱う。詳細な設計条件と段階別の検証方針は
+単独起動とUSB入力の構成、制約、検証範囲は
+[Tang単独起動・USB入力](docs/tang-usb-host.md)を参照する。
+
+DDR controllerとCPU接続はPR #6でマージ済み。継続中の変更はLinux用SoC、UARTブート、DDR表示経路を扱う。
+詳細な設計条件と段階別の検証方針は
 [Tang Primer 20KのLinux/LCD計画](docs/tang-linux-lcd.md)を参照する。
 各段階の検証完了時に、このステータス表と関連する検証記録を更新する。
 
@@ -287,6 +309,8 @@ NOMMU / M-mode カーネル (RV32, binfmt_elf_fdpic) を `linux/build_linux.sh` 
 ソースからビルドする。ユーザランドは libc を用いない freestanding 実装で、
 `/init` が簡易シェル、`/bin/donut` と `/bin/mandelbrot` を別プロセスとして
 `clone(CLONE_VM|CLONE_VFORK)` + `execve` で起動する。
+親プロセスは`waitid(P_PID, ..., WEXITED)`で子の終了を待つ。このRV32設定にはtime32版の
+`wait4`がなく、従来の呼出しは`ENOSYS`となって終了待ちを行えていなかった。
 
 ```bash
 LINUX_SRC=$HOME/src/linux make linux-build
@@ -295,6 +319,9 @@ scripts/run_linux.sh     # 端末から対話的に操作
 ```
 
 シェルのコマンド: `donut` `mandel` `help` `poweroff` `reboot`
+
+カーネルはDTBの`chosen.bootargs`を優先する。シミュレータは1 Mbps、Tang実機は115200 baudを
+指定し、Imageは共通で使用する。ビルド済み設定は`sim/linux/kernel.config`へ保存する。
 
 FPU が無いため donut / mandelbrot はいずれも Q16.16 固定小数点で実装している
 (`linux/user/fixed.h`)。sin は象限還元と 5 次テイラー展開、32x32→64 の乗算は
@@ -308,9 +335,10 @@ mul/mulh の明示記述、除算は 32bit に収める形で、libgcc も libm 
 | mandelbrot + donut + poweroff まで | 1.0e9 サイクル / 3.6e8 命令 |
 | 実行速度 | 約 6 Mcycles/s (約 2.3 MIPS) |
 
-`make linux-boot` の総サイクル数は run ごとに数 % ぶれる。バッチ入力が実時間の
-sleep で与えられるため、シェルが次のコマンドを待って回すアイドルループの長さが
-run ごとに変わるためである。
+上表は固定時間で入力していた旧バッチ試験の値であり、入力待ちのアイドル時間を含む。
+現在の`make linux-boot`は`/init`の起動とシェルプロンプトを待ち、Mandelbrot、donutの24 frame、
+SYSCON poweroffを順に検査する。コマンドの出力や完了を確認できない場合は失敗とする。
+ホストの負荷によって起動前にコマンドが送られることを防ぐため、固定sleepは使用しない。
 
 除算を逐次化する前の同じ測定は 8.2e8 サイクル / 3.2e8 命令であった。donut と
 mandelbrot は Q16.16 の除算を含むため、除算 1 命令あたり 33 サイクルという代償が
@@ -499,8 +527,10 @@ yosys `synth_gowin` 後のセル数 (Tang トップ、逐次除算器):
 特権仕様は PMP エントリ数を実装依存とし、未実装エントリは 0 読み出しを要求する。
 `PMP_ENTRIES` は配列の大きさそのものを変え、CSR の読み書きは比較による選択にして
 あるため、存在しないエントリはどのループにも一致せず、読み出しは 0、書き込みは
-捨てられる。シミュレーションと `make all` は既定の 16 で動くので、`tests/pmp_test.S`
-を含む全テストは変わらない。
+捨てられる。設定レジスタはエントリ数を4で割った切上げ数だけ実装し、末尾の未実装
+byteは0を保持する。既定のシミュレーションは16エントリで動き、`tests/pmp_test.S`
+で保護動作を検証する。単独起動構成の2エントリは `make pmp-two-test` で未実装CSR・
+設定byteとアクセス保護を検証する。この試験も `make all` に含む。
 
 上限を超えるエントリを「配列に残したまま書き込みだけ禁止する」実装も試したが、
 定数畳み込みされた 12 エントリが abc9 のマッピングを崩し、LUT が 13724 から 19690 に
@@ -675,9 +705,9 @@ Linux 実機起動、LCD ブートログ、GUI への拡張は [実装範囲・�
 に記録する。固定 nextpnr では DDR3 の DQS 配置が未対応のため、DDR診断には固定した
 GOWIN専用コンテナを使う。Veryl製PHY・初期化・受信trainingと独立診断を実装済みであり、
 [refresh保持、byte mask、アドレスbitと容量末尾](docs/ddr-multi-pattern.md)の試験は
-それぞれ実機3回で成功している。CPUからDDR3への接続とLinuxの実機起動は未完了である。
+それぞれ実機3回で成功している。CPUからDDR3への接続とLinuxのUART起動も実機確認済みである。
 
-- LCD 描画はカラーバーと単一矩形のみ。フレームバッファと文字描画は未実装。
+- 基本LCD SoCの描画はカラーバーと単一矩形。Linux LCD版はDDR framebuffer・fbcon・簡易GUIを別途実装している（検証状況は冒頭参照）。
 - 基本SoCとLCD SoCは外部 DRAM に接続していないため、RAM はオンチップのみ (Tang 32KiB / Arty 64KiB)。
   Linux は載らず、ベアメタル専用である
 - Tang の PMP は 4 エントリである (上記)。ベアメタルのファームウェアは M-mode のみで
