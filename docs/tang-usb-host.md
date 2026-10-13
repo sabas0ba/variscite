@@ -113,9 +113,87 @@ flash転送停止の切り分けではこの実体とログを基準にする。
 成功条件は全書込み・読戻し一致と、flashからの回路再構成後のSD→Linux→GUI起動。
 電源を切ってからの単独起動は、その後に別途確認する。
 
-既存開発コンテナにはWindowsクロスコンパイラとCMakeがない。
-固定ソースから比較用ツールを構築するには、専用コンテナへのビルド依存追加が必要であり、
-利用者へ確認中である。調査中は実機をSRAMロード済みのLinux・GUI動作状態に維持する。
+2026-10-13に利用者の承認を得て、比較専用のNixコンテナを追加した。
+`container/openfpgaloader/flake.nix` と `flake.lock` は既存のdotfilesと同じ
+nixpkgs revisionを使用し、MinGW GCC 15.2.0、libftdi、libusb、zlibを固定する。
+Windows実行ファイルとDLLは `tools/openfpgaloader/` へ出力する。
+
+```powershell
+podman build -t variscite-openfpgaloader:1.1.1 -f container/openfpgaloader/Containerfile .
+podman run --rm --network none -v "${PWD}:/work" variscite-openfpgaloader:1.1.1
+```
+
+出力先が既に存在する場合は上書きせず終了する。再構築の比較には、コマンド末尾へ
+`bash scripts/build-openfpgaloader.sh /work/.build/openfpgaloader-rebuild` のように
+別の出力先を指定する。出力には実行ファイル・DLL・転送処理のソース、
+Nix store path、`SHA256SUMS`を含む。ビルドログは `logs/openfpgaloader/` に保存する。
+
+| 比較版 | 変更内容 | 実機結果 |
+|---|---|---|
+| `page256` | 固定upstreamの256 byte書込み | 9.37%で停止。120秒で終了し、その後JTAGのUSB bulk readも失敗 |
+| `page128` | 書込みループ2箇所のみ128 byte化 | 書込み100%まで完了。読戻し位置387で不一致、34.587秒で失敗 |
+| `page128-bounds` | 128 byte化とGW2A読取りの境界修正 | 書込み完了、読戻し位置48で不一致（20.954秒） |
+| `page128-bounds-1mhz` | 境界修正版の外部flashクロックを1 MHzに固定 | 実効1 MHzを確認。書込み完了、読戻し位置357で不一致（21.408秒） |
+| `page128-bounds-read128` | 境界修正版のverify/dumpの読取り単位を128 byte化 | 書込み完了、読戻し位置24で不一致（28.572秒）。別USBハブで実施 |
+
+前2版の同梱DLLは全てSHA256一致。使用したbitstreamは前回SD起動成功時と同一。
+結果は `logs/board/20261013-234342-SdBoot-result.json`（256 byte）、
+`logs/board/20261013-234228-SdBoot-result.json`（128 byte）に保存した。
+この比較では128 byte化で停止を回避できたが、読戻し検証は通っておらず、
+flash保存や電源投入起動の成功とは扱わない。
+
+比較時の実行ファイルSHA256:
+
+```text
+page256 6892c5d6e6fe01e70a8a6aff9cc05c6d502d1b283cb922a3b3f406b070fbf65c
+page128 eeb41031f604eb04623f15eaad5aab89a7880bf2a0e52bf4ad95bb1ce7da0e8b
+page128-bounds 3f95cf958708037b4eccc9b2ad9920d54548998ed7c098e6546e9cfbff7d3234
+page128-bounds-1mhz f6861e54ba79a28637aea86391a1fbdaceafc87e0568f8098af24118926f55b3
+page128-bounds-read128 6874524821e3c222efeb9a5c1f110647d7bb502535f6334b040a332ce4ebf681
+```
+
+読戻し調査中に、固定upstreamの `Gowin::spi_put` がGW2A受信時に
+配列確保後の `len++` により送受信配列と呼出元バッファの境界を越えることを確認した。
+`gw2a-read-bounds.patch` はデータ長と追加クロック用の転送長を分離し、
+追加送信byteを0で初期化する。照合範囲や不一致の判定は変更しない。
+実ソースから当該メソッドを抽出し、JTAG転送だけをモデル化したASan/UBSan試験で、
+修正前のbuffer-overflowと修正後の成功を確認する。1/2/4/128/256/260 byte、
+送信のみ、受信のみ、コマンド失敗、受信の1 bit位置補正を検証する。
+この試験はコンテナ構築時の `nix flake check` に含む。
+境界修正版と1 MHz版の結果は、それぞれ
+`logs/board/20261013-235441-SdBoot-result.json`、
+`logs/board/20261013-235722-SdBoot-result.json` に保存した。
+境界修正やクロック低下だけで読戻し不一致が解消するとは確認できていない。
+
+2026-10-14の128 byte単位のdumpでは、同じflash先頭4 KiBを2回読んだ結果の
+SHA256が一致しなかった（`logs/board/flash-read128-{a,b}.bin`）。
+このdump経路は通常の書込み経路とflashリセットの有無が異なるため、
+書込み内容の破損と読取り経路の不安定を、この結果だけで区別しない。
+利用者がType-C側の別USBハブへ変更した後も、通常書込み経路の全量照合は失敗した。
+結果は `logs/board/20261014-000411-SdBoot-result.json` に記録した。
+この試行は接続経路も変わっているため、読取り単位だけの比較には使わない。
+flash書込み試験はここで止め、既存OSS CAD SuiteによるSRAMロードで復旧した。
+`logs/board/20261014-000506-SdBoot-result.json` は `sd_verified`、`linux_started`、
+`gui_ready` が全てtrue、UART送信0 byte、errorなし、経過379.864秒。
+USBは初期化エラー5の後に入力endpoint 1個を列挙した。
+この復旧はflashを書き換えない。現在の動作はSRAMロードによるものであり、
+電源断後にflashから起動できることは未確認。
+次の切り分けでは、正常動作が確認された別のJTAGアダプタ、またはメーカーの書込み経路で
+同じbitstreamを全量照合し、書込み不良とSipeed USB/JTAG経路の読取り不良を区別する。
+これらの比較はまだ実施していない。
+
+追加環境の検証は、専用コンテナの構築、`nix flake check`（ASan/UBSan）、
+5比較版のオフライン出力、ShellCheck、shfmt、nixfmt、statix、deadnix、
+PowerShell構文検査を通過した。最終コンテナから出力した`page128-bounds-read128`は
+実機試験で使った実行ファイルとSHA256が一致した。
+
+実機試験は次で実行する。書込み・読戻しが成功した場合だけSD起動へ進む。
+`ProgramSeconds` はプログラマ処理の上限で、UART受信の `CaptureSeconds` とは独立する。
+実行ファイルのSHA256とタイムアウト値も結果JSONへ記録する。
+
+```powershell
+./scripts/test-tang-sd-boot.ps1 -Suite ./tools/openfpgaloader/page128-bounds -Port COM4 -Frequency 1000000 -ProgramSeconds 300 -Flash
+```
 
 ## USB入力
 

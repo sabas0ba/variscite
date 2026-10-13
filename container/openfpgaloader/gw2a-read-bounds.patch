@@ -1,0 +1,28 @@
+--- a/src/gowin.cpp
++++ b/src/gowin.cpp
+@@ -1037,14 +1037,14 @@
+ 	}
+ 
+ 	if (is_gw2a) {
+-		uint8_t jtx[len];
+-		uint8_t jrx[len];
+-		if (rx)
+-			len++;
++		const uint32_t transfer_len = len + (rx ? 1 : 0);
++		uint8_t jtx[transfer_len];
++		uint8_t jrx[transfer_len];
++		memset(jtx, 0, transfer_len);
+ 		if (tx != NULL) {
+ 			for (uint32_t i = 0; i < len; i++)
+ 				jtx[i] = FsParser::reverseByte(tx[i]);
+ 		}
+ 		bool ret = send_command(0x16);
+ 		if (!ret)
+ 			return -1;
+@@ -1052,5 +1052,5 @@
+ 		_jtag->set_state(Jtag::EXIT2_DR);
+-		_jtag->shiftDR(jtx, (rx)? jrx:NULL, 8*len);
++		_jtag->shiftDR(jtx, (rx)? jrx:NULL, 8*transfer_len);
+ 		if (rx) {
+ 			for (uint32_t i=0; i < len; i++) {
+ 				rx[i] = FsParser::reverseByte(jrx[i]>>1) |
