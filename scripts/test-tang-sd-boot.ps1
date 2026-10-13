@@ -29,7 +29,7 @@ $timer=[System.Diagnostics.Stopwatch]::StartNew()
 $previousPath=$env:PATH
 try {
     $env:PATH=(Join-Path $Suite 'bin')+';'+(Join-Path $Suite 'lib')+';'+$env:PATH
-    & (Join-Path $Suite 'bin/openFPGALoader.exe') --detect -b tangprimer20k 2>&1 |
+    & (Join-Path $Suite 'bin/openFPGALoader.exe') --detect -b tangprimer20k --freq $Frequency 2>&1 |
         Tee-Object -FilePath "$prefix-jtag.log"
     if ($LASTEXITCODE -ne 0) { throw 'JTAG detection failed' }
     $detection=Get-Content -Raw "$prefix-jtag.log"

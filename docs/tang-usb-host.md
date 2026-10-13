@@ -73,11 +73,18 @@ PCで安全に取り外してDockへ挿入した後、次の受信専用試験�
 SPI flashへは書き込まないため、この試験単独では電源投入からの起動確認にはならない。
 
 `-Flash`を付けるとSPI flashへ書込み、`openFPGALoader --verify`による読戻し検証後に
-同じSD起動試験を行う。`-Frequency 1000000`でJTAGクロックを1 MHzへ下げられる。
+同じSD起動試験を行う。`-Frequency 1000000`はJTAG検出・初期接続を1 MHzにする。
+固定Windows版openFPGALoaderは外部flash処理へ入ると10 MHzを要求し、
+このプローブでは実際には6 MHzへ変更する。したがって、この指定だけではflash転送は低速化されない。
 2026-10-13の初回flash書込みは17.52%で進捗が止まり、約298秒で処理を停止した。
-その後のJTAG再検出が2回とも`usb bulk read failed`となり、USB・電源の再接続待ちである。
+その後のJTAG再検出が2回とも`usb bulk read failed`となった。
+USB・電源の再接続でJTAG検出は復旧したが、1 MHz指定での再試行もflash転送時は6 MHzとなり、
+書込みが再び停止した。停止時に出力された最終進捗は17.52%、経過時間は146.679秒。
+`logs/board/20261013-230729-SdBoot-result.json`と同prefixの`-program.log`に記録した。
+USB機器のソフトウェア再起動はWindowsの管理者権限不足で失敗し、再度USB・電源の再接続待ちである。
 flashは部分書込みの可能性があり、保存完了・電源投入起動は未確認。
-再接続後はJTAG検出から再開し、検証済み回路の再書込みが必要である。
+再接続後はJTAG検出から再開し、まず成功実績のあるSRAMロードでLinuxへ復旧する。
+同じflash書込み条件の反復は行わず、転送停止の切り分けを別途行う。
 
 ## USB入力
 
