@@ -95,6 +95,28 @@ UART送信0 byte、経過時間356.722秒、errorなし。USB HID endpointは1�
 これはリポジトリのWindowsセットアップ既定値（2026-08-10）とは異なるため、
 flash転送停止の切り分けではこの実体とログを基準にする。ツールの追加・更新は未実施。
 
+### flash転送停止の調査
+
+実行ファイルの自己申告は`openFPGALoader v1.1.1`。
+公式tagのコミットは`85be4fa02b2dd6a83716d7dfac3d25bbd260ff7b`である。
+既存バイナリがこのコミットと同一ソースかは、自己申告だけでは断定しない。
+
+[upstream issue #573](https://github.com/trabucayre/openFPGALoader/issues/573)には、
+同じTang Primer 20Kでflash書込み中にFTDI通信が停止する報告がある。
+報告者は256 byteの書込み単位を128 byteへ変更して改善したと述べている。
+今回の停止原因が同一であることや、この変更で解消することはまだ実機検証していない。
+
+[v1.1.1のSPIFlash実装](https://github.com/trabucayre/openFPGALoader/blob/85be4fa02b2dd6a83716d7dfac3d25bbd260ff7b/src/spiFlash.cpp)では、
+書込みループの単位は256 byte固定である。CLIの周波数変更とは独立した条件として、
+128 byte版との比較が次の検証候補となる。比較時は同じbitstream、同じUSB接続、
+同じ読戻し検証を使用し、書込み単位以外の差を記録する。
+成功条件は全書込み・読戻し一致と、flashからの回路再構成後のSD→Linux→GUI起動。
+電源を切ってからの単独起動は、その後に別途確認する。
+
+既存開発コンテナにはWindowsクロスコンパイラとCMakeがない。
+固定ソースから比較用ツールを構築するには、専用コンテナへのビルド依存追加が必要であり、
+利用者へ確認中である。調査中は実機をSRAMロード済みのLinux・GUI動作状態に維持する。
+
 ## USB入力
 
 対象はDockのユーザー用USB-C J8に接続したFS/LS機器。
