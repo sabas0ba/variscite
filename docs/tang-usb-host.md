@@ -2,7 +2,7 @@
 
 ## 実装と検証の範囲
 
-2026-10-13時点。`linux_standalone_top.veryl` は既存のLinux/LCD構成に、
+2026-10-14時点。`linux_standalone_top.veryl` は既存のLinux/LCD構成に、
 VerylによるSD SPIとUSB ULPIホストを追加する。CPUは27 MHz、DDRは396/99 MHz、
 LCDは33 MHz、USBはPHYの60 MHz入力を専用PLLに通して使用する。
 USB PLLはT15のクロック入力に対応する `PLL_R[0]` に配置する。
@@ -33,7 +33,10 @@ USB列挙、UARTでの色変更・移動・終了・再起動を実機確認し�
 SRAM書込み開始を含む経過時間は377.404秒。USB初期化はエラー5の後、
 2回目の試行で回復し、HID入力endpoint 1個を列挙した。
 結果は`logs/board/20261013-224636-SdBoot-result.json`に保存した。
-USBキーボードの実キー入力と、電源投入からの単独起動は未確認である。
+2026-10-14には利用者による電源再接続後、追加のSRAMロードなしでGUI表示・起動成功の
+報告を得た。SPI flashからの回路構成とmicroSDからのLinux起動を実機で確認した。
+flashの読戻し検証は不一致のままであり、全量照合成功とは区別する。
+USBキーボードの実キー入力は未確認である。
 
 最終確認のSHA256は、bitstreamが
 `5ffb6b60240c3e4929693bf2341dfc616a154fb4b65a853951a9327219bb07ed`、
@@ -82,18 +85,18 @@ USB・電源の再接続でJTAG検出は復旧したが、1 MHz指定での再�
 書込みが再び停止した。停止時に出力された最終進捗は17.52%、経過時間は146.679秒。
 `logs/board/20261013-230729-SdBoot-result.json`と同prefixの`-program.log`に記録した。
 USB機器のソフトウェア再起動はWindowsの管理者権限不足で失敗し、再度USB・電源を再接続した。
-flashは部分書込みの可能性があり、保存完了・電源投入起動は未確認。
+この時点ではflashは部分書込みの可能性があり、保存完了・電源投入起動は未確認だった。
 再接続後、JTAG 1 MHzで検証済み回路をSRAMへロードし、SDからLinux・fbcon・GUIまで復旧した。
 `logs/board/20261013-231123-SdBoot-result.json`はすべての起動判定が成功、
 UART送信0 byte、経過時間356.722秒、errorなし。USB HID endpointは1個で、初期化エラー出力なし。
-この復旧ではflashへ書き込んでいない。電源を切ると、次回は再びSRAMロードが必要である。
+この復旧ではflashへ書き込んでいない。この時点では、次回もSRAMロードでの復旧を予定した。
 同じflash書込み条件の反復は行わず、転送停止の切り分けを別途行う。
 
 実機操作に使用した既存WindowsツールはOSS CAD Suite `20260720`。
 `openFPGALoader.exe`のSHA256は
 `1200def4c208f85a68df2017bb51a94ef354a66eff85aeb839daf7123f10ab11`。
 これはリポジトリのWindowsセットアップ既定値（2026-08-10）とは異なるため、
-flash転送停止の切り分けではこの実体とログを基準にする。ツールの追加・更新は未実施。
+flash転送停止の切り分けではこの実体とログを基準にした。以下に比較ツールの追加と結果を示す。
 
 ### flash転送停止の調査
 
@@ -104,14 +107,12 @@ flash転送停止の切り分けではこの実体とログを基準にする。
 [upstream issue #573](https://github.com/trabucayre/openFPGALoader/issues/573)には、
 同じTang Primer 20Kでflash書込み中にFTDI通信が停止する報告がある。
 報告者は256 byteの書込み単位を128 byteへ変更して改善したと述べている。
-今回の停止原因が同一であることや、この変更で解消することはまだ実機検証していない。
+今回の停止原因が同一とは断定しない。128 byte化の実機比較結果は以下に記載する。
 
 [v1.1.1のSPIFlash実装](https://github.com/trabucayre/openFPGALoader/blob/85be4fa02b2dd6a83716d7dfac3d25bbd260ff7b/src/spiFlash.cpp)では、
 書込みループの単位は256 byte固定である。CLIの周波数変更とは独立した条件として、
-128 byte版との比較が次の検証候補となる。比較時は同じbitstream、同じUSB接続、
-同じ読戻し検証を使用し、書込み単位以外の差を記録する。
-成功条件は全書込み・読戻し一致と、flashからの回路再構成後のSD→Linux→GUI起動。
-電源を切ってからの単独起動は、その後に別途確認する。
+128 byte版と比較した。同じbitstreamを使い、USB接続など書込み単位以外の差も記録した。
+全書込み・読戻し一致と、電源再投入後のflash→SD→Linux→GUI起動は別々に評価する。
 
 2026-10-13に利用者の承認を得て、比較専用のNixコンテナを追加した。
 `container/openfpgaloader/flake.nix` と `flake.lock` は既存のdotfilesと同じ
@@ -140,7 +141,7 @@ Nix store path、`SHA256SUMS`を含む。ビルドログは `logs/openfpgaloader
 結果は `logs/board/20261013-234342-SdBoot-result.json`（256 byte）、
 `logs/board/20261013-234228-SdBoot-result.json`（128 byte）に保存した。
 この比較では128 byte化で停止を回避できたが、読戻し検証は通っておらず、
-flash保存や電源投入起動の成功とは扱わない。
+この書込み結果だけではflash保存や電源投入起動の成功とは扱わない。
 
 比較時の実行ファイルSHA256:
 
@@ -176,8 +177,7 @@ flash書込み試験はここで止め、既存OSS CAD SuiteによるSRAMロー�
 `logs/board/20261014-000506-SdBoot-result.json` は `sd_verified`、`linux_started`、
 `gui_ready` が全てtrue、UART送信0 byte、errorなし、経過379.864秒。
 USBは初期化エラー5の後に入力endpoint 1個を列挙した。
-この復旧はflashを書き換えない。現在の動作はSRAMロードによるものであり、
-電源断後にflashから起動できることは未確認。
+この復旧はflashを書き換えない。この時点の動作はSRAMロードによるものだった。
 次の切り分けでは、正常動作が確認された別のJTAGアダプタ、またはメーカーの書込み経路で
 同じbitstreamを全量照合し、書込み不良とSipeed USB/JTAG経路の読取り不良を区別する。
 これらの比較はまだ実施していない。
@@ -194,6 +194,24 @@ PowerShell構文検査を通過した。最終コンテナから出力した`pag
 ```powershell
 ./scripts/test-tang-sd-boot.ps1 -Suite ./tools/openfpgaloader/page128-bounds -Port COM4 -Frequency 1000000 -ProgramSeconds 300 -Flash
 ```
+
+### 電源再投入からの起動確認（2026-10-14）
+
+上記のSRAM復旧後、利用者がmicroSDを挿したまま電源を再接続した。
+再接続後はFPGAへの書込み・リセット・UART送信を行っていない。
+初めはLCDが黒画面だったが、その後GUIが表示され、利用者から起動成功の報告を得た。
+最後のflash書込みは`page128-bounds-read128`による試行であり、
+SPI flashからの回路構成とmicroSD上のLinux・GUI起動を確認した結果として記録する。
+
+途中でCOM4を115200 baud・8N1で30秒間受信したが、受信は0 byteだった。
+ログは`logs/board/20261014-002608-ColdBoot-uart.bin`（空ファイル、git管理外）。
+受信開始は再接続後で、起動直後からの連続ログは取得していない。
+今回の起動成功は利用者の目視報告に基づき、所要時間と入力操作の確認は含まない。
+既存のSRAMロード試験ではLinux・GUIまで約6分を要しており、黒画面や短時間のUART無出力
+だけで起動失敗とは判断しない。
+
+電源再投入後の起動成功によって、読戻し位置24の不一致が解消したとは扱わない。
+全量照合、複数回の電源投入での再現性、別JTAG／メーカー書込み経路との比較は残課題である。
 
 ## USB入力
 

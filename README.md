@@ -32,8 +32,8 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | CPUからDDR3への接続 | 全容量・部分アクセス・命令実行を実機確認済み | 全128 MiBのmixed/反転値とDDR命令実行。全16 byte位置、非整列、容量末尾、範囲外例外、LR/SC・全AMOの追加診断は独立書込み3回成功 |
 | Linux用SoC・UARTブートROM | Linux Imageの実機転送・起動を確認済み | CRC付きImage/DTB転送、128 MiB DDR、1 MHzタイマ、UART/PLIC。115200 consoleでユーザ空間へ到達 |
 | DDR→LCD読み出し | 実機統合・状態確認済み | CPU/表示仲裁、read cache、DMA、非同期FIFO、RGB565出力。全画素と欠落復帰はモデル検証。実機でLinux起動・GUI操作後のDDR error／underflowなし |
-| LCD bootlog・GUI | bootlog文字の実機視認・GUIプロセス操作確認済み | 2026-10-13に利用者がLCD上のbootlog文字を確認。UART操作の色選択・矩形移動・終了／再起動、画像内容のシミュレーション照合も成功。GUI画面の実機目視は未確認 |
-| microSD単独起動 | FAT32実カードからLinux・GUI起動確認済み | UART転送なしでTANGBOOT.VBL読取り、CRC検証、Linux・GUI自動起動。FAT16/exFATはモデル検証。電源投入からの起動は未確認 |
+| LCD bootlog・GUI | bootlog・GUI表示の実機視認、GUIプロセス操作確認済み | 2026-10-14に利用者が電源再投入後のGUI表示・起動成功を確認。UART操作の色選択・矩形移動・終了／再起動、画像内容のシミュレーション照合も成功 |
+| microSD単独起動 | SPI flashからの回路構成・FAT32実カードからのLinux／GUI起動確認済み | 2026-10-14に電源再投入後、追加のSRAMロードなしで起動を目視確認。flash読戻し検証の不一致は未解決。UART送信なしのSD CRC検証・Linux／GUI起動は別試験で確認。FAT16/exFATはモデル検証 |
 | USBキーボード・マウス | PHY読書き・LinuxからのHID列挙を実機確認 | FS/LS ULPIホスト、ハブ、boot HID。初回GUI自動起動で入力endpoint 1個を列挙、実キー入力は未確認。Linux HCD/evdev・hotplugは未実装 |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
@@ -65,7 +65,7 @@ DDRからLCDへの読み出し回路、fbcon、簡易GUIを接続し、結合シ
 | 4（実機のfbcon・状態確認済み） | LCDブートログ | DDR framebufferとDMA・FIFOを接続。起動とGUI操作後までunderflowなし。パネルの表示内容は目視確認が残る |
 | 5（実機操作確認済み） | Linux GUI | Linuxユーザプロセスから`/dev/fb0`へ描画し、UART入力による色変更・移動・終了を確認 |
 | 6（部分更新はモデル検証済み） | 描画性能・画面所有 | 部分更新による移動・消去・色変更を検証。実機の応答時間とfbconとの画面所有を確認する |
-| 7（開発中） | PCなしの起動と入力 | microSD起動、GUI自動起動、USBキーボード操作、SPI flashからの電源投入起動を実機で確認する |
+| 7（開発中） | PCなしの起動と入力 | microSD・GUI自動起動とSPI flashからの電源投入起動を実機確認済み。USB実キー入力、flash全量照合と起動再現性、GUI応答高速化は継続課題 |
 
 単独起動とUSB入力の構成、制約、検証範囲は
 [Tang単独起動・USB入力](docs/tang-usb-host.md)を参照する。
