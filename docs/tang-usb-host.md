@@ -2,7 +2,7 @@
 
 ## 実装と検証の範囲
 
-2026-10-12時点。`linux_standalone_top.veryl` は既存のLinux/LCD構成に、
+2026-10-13時点。`linux_standalone_top.veryl` は既存のLinux/LCD構成に、
 VerylによるSD SPIとUSB ULPIホストを追加する。CPUは27 MHz、DDRは396/99 MHz、
 LCDは33 MHz、USBはPHYの60 MHz入力を専用PLLに通して使用する。
 USB PLLはT15のクロック入力に対応する `PLL_R[0]` に配置する。
@@ -28,8 +28,12 @@ USB/SD統合構成でもUART転送からLinux、fbcon、GUI自動起動まで到
 USB列挙、UARTでの色変更・移動・終了・再起動を実機確認した。
 操作後もLCD状態は正常だった。再試行処理を追加した最終イメージでは、初回のGUI自動起動で
 入力endpoint 1個を列挙した（この試行では再試行エラーなし）。
-USBキーボードの実キー入力、実カードからのLinux起動、
-電源投入からの単独起動は未確認である。
+2026-10-13には約32GBのFAT32・MBRカードから、UART送信0 byteで
+`SD verified`、Linux、fbcon、`fbui: ready`まで到達した。
+SRAM書込み開始を含む経過時間は377.404秒。USB初期化はエラー5の後、
+2回目の試行で回復し、HID入力endpoint 1個を列挙した。
+結果は`logs/board/20261013-224636-SdBoot-result.json`に保存した。
+USBキーボードの実キー入力と、電源投入からの単独起動は未確認である。
 
 最終確認のSHA256は、bitstreamが
 `5ffb6b60240c3e4929693bf2341dfc616a154fb4b65a853951a9327219bb07ed`、
@@ -56,7 +60,24 @@ ROMは最初の250 msにUART入力があればUART転送を選択する。それ
 Image/DTB全体のCRCとDTB magicを検証してから実行する。
 単独起動ROMでは、LCDのDDR読出しをImage/DTB検証後に開始する。
 UART/SDからのロード中はframebufferを初期化するだけで、表示用DMAとの競合を避ける。
-カードの準備と実機起動の手順は、実カード検証完了後に確定する。
+カードのルートへ`TANGBOOT.VBL`をコピーし、コピー元と読戻しのSHA256一致を確認する。
+PCで安全に取り外してDockへ挿入した後、次の受信専用試験でSD起動を検証する。
+
+```powershell
+./scripts/test-tang-sd-boot.ps1 -Suite <Windows OSS CAD Suite> -Port COM4
+```
+
+この試験はstandalone回路をSRAMへロードし、UARTへは1 byteも送信しない。
+`SD verified`、`Linux version`、`fbui: ready`をすべて受信した場合に合格とする。
+結果、bitstreamのSHA256、UARTログは`logs/board/*-SdBoot-*`へ保存する。
+SPI flashへは書き込まないため、この試験単独では電源投入からの起動確認にはならない。
+
+`-Flash`を付けるとSPI flashへ書込み、`openFPGALoader --verify`による読戻し検証後に
+同じSD起動試験を行う。`-Frequency 1000000`でJTAGクロックを1 MHzへ下げられる。
+2026-10-13の初回flash書込みは17.52%で進捗が止まり、約298秒で処理を停止した。
+その後のJTAG再検出が2回とも`usb bulk read failed`となり、USB・電源の再接続待ちである。
+flashは部分書込みの可能性があり、保存完了・電源投入起動は未確認。
+再接続後はJTAG検出から再開し、検証済み回路の再書込みが必要である。
 
 ## USB入力
 

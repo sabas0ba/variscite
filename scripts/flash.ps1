@@ -26,6 +26,7 @@ param(
     [string]$Suite,
     [string]$Bitstream,
     [string]$BusDev,
+    [ValidateRange(100000,6000000)][int]$Frequency = 6000000,
     [int]$CableIndex = -1
 )
 Set-StrictMode -Version Latest
@@ -50,6 +51,7 @@ one under tools\.
 $env:PATH = (Join-Path $Suite 'bin') + ';' + (Join-Path $Suite 'lib') + ';' + $env:PATH
 
 $probe = @()
+$probe += @('--freq', "$Frequency")
 if ($BusDev) { $probe += @('--busdev-num', $BusDev) }
 if ($CableIndex -ge 0) { $probe += @('--cable-index', "$CableIndex") }
 
@@ -65,7 +67,7 @@ if (-not (Test-Path $Bitstream)) {
 }
 
 if ($Flash) {
-    openFPGALoader -b tangprimer20k @probe -f $Bitstream
+    openFPGALoader -b tangprimer20k @probe -f --verify $Bitstream
 } else {
     openFPGALoader -b tangprimer20k @probe $Bitstream
 }

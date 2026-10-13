@@ -33,7 +33,7 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | Linux用SoC・UARTブートROM | Linux Imageの実機転送・起動を確認済み | CRC付きImage/DTB転送、128 MiB DDR、1 MHzタイマ、UART/PLIC。115200 consoleでユーザ空間へ到達 |
 | DDR→LCD読み出し | 実機統合・状態確認済み | CPU/表示仲裁、read cache、DMA、非同期FIFO、RGB565出力。全画素と欠落復帰はモデル検証。実機でLinux起動・GUI操作後のDDR error／underflowなし |
 | LCD bootlog・GUI | bootlog文字の実機視認・GUIプロセス操作確認済み | 2026-10-13に利用者がLCD上のbootlog文字を確認。UART操作の色選択・矩形移動・終了／再起動、画像内容のシミュレーション照合も成功。GUI画面の実機目視は未確認 |
-| microSD単独起動 | 実装・CPU込みモデル検証済み | FAT16/FAT32/exFATからTANGBOOT.VBLを読取り、CRC検証後に起動。実カード・電源投入からの起動は未確認 |
+| microSD単独起動 | FAT32実カードからLinux・GUI起動確認済み | UART転送なしでTANGBOOT.VBL読取り、CRC検証、Linux・GUI自動起動。FAT16/exFATはモデル検証。電源投入からの起動は未確認 |
 | USBキーボード・マウス | PHY読書き・LinuxからのHID列挙を実機確認 | FS/LS ULPIホスト、ハブ、boot HID。初回GUI自動起動で入力endpoint 1個を列挙、実キー入力は未確認。Linux HCD/evdev・hotplugは未実装 |
 
 「実機確認済み」は記載した基板・条件・試験範囲での結果を表す。
@@ -51,7 +51,8 @@ PHYを含む回路のタイミングを満たし、CPUによる全容量走査�
 CPU経由の部分書込み・境界アクセス・LR/SC・AMOも実機で確認した。
 Linux用SoCとCRC付きUARTブートROMを追加し、実機でLinuxの`/init`とUARTシェルが動作した。
 DDRからLCDへの読み出し回路、fbcon、簡易GUIを接続し、結合シミュレーションを通過した。
-実機でもLinuxシェルとGUI操作を確認した。描画性能と画面所有の改善、パネルの目視確認が残る。
+実機でもLinuxシェルとGUI操作、LCD上のブートログ文字の視認を確認した。
+描画性能と画面所有の改善、GUI画面の目視確認が残る。
 構成と再現手順は[UARTブート](docs/tang-uart-boot.md)と
 [DDR表示経路](docs/tang-ddr-display.md)を参照する。
 以下は実装順序と完了条件であり、日程の確約ではない。
