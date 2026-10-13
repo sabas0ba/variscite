@@ -74,17 +74,26 @@ SPI flashへは書き込まないため、この試験単独では電源投入�
 
 `-Flash`を付けるとSPI flashへ書込み、`openFPGALoader --verify`による読戻し検証後に
 同じSD起動試験を行う。`-Frequency 1000000`はJTAG検出・初期接続を1 MHzにする。
-固定Windows版openFPGALoaderは外部flash処理へ入ると10 MHzを要求し、
+今回使用したWindows版openFPGALoaderは外部flash処理へ入ると10 MHzを要求し、
 このプローブでは実際には6 MHzへ変更する。したがって、この指定だけではflash転送は低速化されない。
 2026-10-13の初回flash書込みは17.52%で進捗が止まり、約298秒で処理を停止した。
 その後のJTAG再検出が2回とも`usb bulk read failed`となった。
 USB・電源の再接続でJTAG検出は復旧したが、1 MHz指定での再試行もflash転送時は6 MHzとなり、
 書込みが再び停止した。停止時に出力された最終進捗は17.52%、経過時間は146.679秒。
 `logs/board/20261013-230729-SdBoot-result.json`と同prefixの`-program.log`に記録した。
-USB機器のソフトウェア再起動はWindowsの管理者権限不足で失敗し、再度USB・電源の再接続待ちである。
+USB機器のソフトウェア再起動はWindowsの管理者権限不足で失敗し、再度USB・電源を再接続した。
 flashは部分書込みの可能性があり、保存完了・電源投入起動は未確認。
-再接続後はJTAG検出から再開し、まず成功実績のあるSRAMロードでLinuxへ復旧する。
+再接続後、JTAG 1 MHzで検証済み回路をSRAMへロードし、SDからLinux・fbcon・GUIまで復旧した。
+`logs/board/20261013-231123-SdBoot-result.json`はすべての起動判定が成功、
+UART送信0 byte、経過時間356.722秒、errorなし。USB HID endpointは1個で、初期化エラー出力なし。
+この復旧ではflashへ書き込んでいない。電源を切ると、次回は再びSRAMロードが必要である。
 同じflash書込み条件の反復は行わず、転送停止の切り分けを別途行う。
+
+実機操作に使用した既存WindowsツールはOSS CAD Suite `20260720`。
+`openFPGALoader.exe`のSHA256は
+`1200def4c208f85a68df2017bb51a94ef354a66eff85aeb839daf7123f10ab11`。
+これはリポジトリのWindowsセットアップ既定値（2026-08-10）とは異なるため、
+flash転送停止の切り分けではこの実体とログを基準にする。ツールの追加・更新は未実施。
 
 ## USB入力
 
