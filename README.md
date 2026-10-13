@@ -32,7 +32,7 @@ DDRの全128 MiB走査は、396 MHzでアドレスXOR／反転patternが一致�
 | CPUからDDR3への接続 | 全容量・部分アクセス・命令実行を実機確認済み | 全128 MiBのmixed/反転値とDDR命令実行。全16 byte位置、非整列、容量末尾、範囲外例外、LR/SC・全AMOの追加診断は独立書込み3回成功 |
 | Linux用SoC・UARTブートROM | Linux Imageの実機転送・起動を確認済み | CRC付きImage/DTB転送、128 MiB DDR、1 MHzタイマ、UART/PLIC。115200 consoleでユーザ空間へ到達 |
 | DDR→LCD読み出し | 実機統合・状態確認済み | CPU/表示仲裁、read cache、DMA、非同期FIFO、RGB565出力。全画素と欠落復帰はモデル検証。実機でLinux起動・GUI操作後のDDR error／underflowなし |
-| LCD bootlog・GUI | 実機プロセス・操作確認済み | framebuffer予約、simplefb/fbcon登録、UART操作の色選択・矩形移動・終了／再起動。画像内容はシミュレーション照合、パネル目視は未確認 |
+| LCD bootlog・GUI | bootlog文字の実機視認・GUIプロセス操作確認済み | 2026-10-13に利用者がLCD上のbootlog文字を確認。UART操作の色選択・矩形移動・終了／再起動、画像内容のシミュレーション照合も成功。GUI画面の実機目視は未確認 |
 | microSD単独起動 | 実装・CPU込みモデル検証済み | FAT16/FAT32/exFATからTANGBOOT.VBLを読取り、CRC検証後に起動。実カード・電源投入からの起動は未確認 |
 | USBキーボード・マウス | PHY読書き・LinuxからのHID列挙を実機確認 | FS/LS ULPIホスト、ハブ、boot HID。初回GUI自動起動で入力endpoint 1個を列挙、実キー入力は未確認。Linux HCD/evdev・hotplugは未実装 |
 

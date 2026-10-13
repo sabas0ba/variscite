@@ -202,7 +202,7 @@ jobs:
         run: LINUX_SRC="$SRCDIR/linux" make linux-lcd-build
 
       - name: Boot framebuffer Linux and exercise GUI
-        run: make linux-lcd-boot
+        run: LINUX_SRC="$SRCDIR/linux" make linux-lcd-boot
 
       - name: Upload console log
         if: always()

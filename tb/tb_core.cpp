@@ -31,7 +31,7 @@
 //   +trace=<path>     VCD waveform output (optional)
 //   +covfile=<path>   coverage output (default: coverage.dat)
 //   +progress=<n>     print progress to stderr every n cycles (0: off)
-//   +fb_capture=<prefix>  save Tang RGB565 RAM after fbui ready/updated markers
+//   +fb_capture=<prefix>  save boot console at /init and fbui ready/updated frames
 
 #include <cstdint>
 #include <cstdio>
@@ -262,13 +262,15 @@ int main(int argc, char** argv) {
                     if (conlog) std::fputc(static_cast<char>(v), conlog);
                     if (!fb_capture.empty()) {
                         if (v == '\n') {
-                            if (uart_line == "fbui: ready" || uart_line == "fbui: updated") {
+                            const bool boot_console = uart_line.find("=== rv32ima_veryl: userspace is alive") == 0;
+                            if (boot_console || uart_line == "fbui: ready" || uart_line == "fbui: updated") {
                                 std::vector<uint8_t> frame(800 * 480 * 2);
                                 for (size_t i = 0; i < frame.size(); ++i) {
                                     uint32_t address = 0x07c00000u + i;
                                     frame[i] = mem[address / 4] >> ((address % 4) * 8);
                                 }
-                                std::string path = fb_capture + "-" + std::to_string(fb_sequence++) + ".rgb565";
+                                std::string suffix = boot_console ? "bootlog" : std::to_string(fb_sequence++);
+                                std::string path = fb_capture + "-" + suffix + ".rgb565";
                                 std::FILE *output = std::fopen(path.c_str(), "wb");
                                 if (!output) { exit_code = 2; done = true; }
                                 else {

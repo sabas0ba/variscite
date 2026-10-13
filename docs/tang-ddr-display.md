@@ -190,6 +190,12 @@ Verilatorのメモリモデルから各描画完了時のRGB565データを取�
 移動前の領域の消去を独立に照合する。PNGはシミュレーション上のframebufferの可視化であり、
 実機LCDの撮影画像ではない。
 
+2026-10-13に利用者が実機LCD上のブートログ文字を視認した。GUI画面の実機目視は未確認である。
+`make linux-lcd-boot`はGUI開始前のframebufferも`logs/linux/fbui-bootlog.rgb565`へ保存し、
+固定Linuxソースの8×16フォントと照合して`simplefb registered!`と`Run /init as init process`を
+画素から検出する。UART文字列とは独立した検証であり、同日の結合試験は成功した。
+復号した文字列と可視化は同名の`.txt`と`.png`へ保存する。
+
 ### 再現手順
 
 固定開発コンテナで実行する（依存追加なし）。既存UART版のImageを上書きせず別directoryへ出す。

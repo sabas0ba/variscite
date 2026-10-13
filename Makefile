@@ -1,6 +1,7 @@
 SHELL := /bin/bash
 
 RISCV_PREFIX ?= riscv-none-elf-
+LINUX_SRC    ?= /opt/src/linux
 TESTS_DIR    := third_party/riscv-tests/isa
 SIM          := sim/tb_core
 TESTS        := $(shell scripts/list_tests.sh)
@@ -687,12 +688,14 @@ linux-lcd-build:
 
 linux-lcd-boot: tb-fast linux-console-test
 	mkdir -p logs/linux
-	rm -f $(foreach n,0 1 2,logs/linux/fbui-$(n).rgb565 logs/linux/fbui-$(n).png)
+	rm -f $(foreach n,bootlog 0 1 2,logs/linux/fbui-$(n).rgb565 logs/linux/fbui-$(n).png) logs/linux/fbui-bootlog.txt
 	python3 scripts/linux_console_test.py --lcd-gui sim/tb_core_fast \
 	    +kernel=sim/linux-lcd-gui/Image +dtb=sim/linux-lcd-gui/tang_primer_20k_lcd.dtb \
 	    +ramsize_mb=128 +mtimediv=64 +timeout=8000000000 \
 	    +conlog=logs/linux/lcd-gui-console.log +fb_capture=logs/linux/fbui
 	python3 scripts/check_fbui_capture.py logs/linux/fbui
+	python3 scripts/check_bootlog_capture.py logs/linux/fbui-bootlog.rgb565 \
+	    "$(LINUX_SRC)/lib/fonts/font_8x16.c"
 
 .PHONY: linux-console-test
 linux-console-test:
